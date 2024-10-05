@@ -32,7 +32,6 @@ type consumer struct {
 
 func NewConsumer(options ...Option) (Consumer, error) {
 	consumer := &consumer{}
-
 	for _, opt := range options {
 		opt(consumer)
 	}
@@ -66,6 +65,7 @@ func (c *consumer) Consume(ctx context.Context) error {
 
 	go func() {
 		for message := range messages {
+
 			c.dispatcher(ctx, message, c.handler)
 		}
 	}()
@@ -124,6 +124,12 @@ func (c *consumer) sendDLQ(ch *amqp.Channel, delivery amqp.Delivery) error {
 		return err
 	}
 	return nil
+}
+
+func WithName(name string) Option {
+	return func(consumer *consumer) {
+		consumer.name = name
+	}
 }
 
 func WithConnection(conn *amqp.Connection) Option {
