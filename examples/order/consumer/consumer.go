@@ -2,7 +2,6 @@ package consumer
 
 import (
 	"context"
-	"errors"
 	"log"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging/rabbitmq"
@@ -54,11 +53,13 @@ func (s *consumer) Run() {
 		rabbitmq.WithConnection(connection),
 		rabbitmq.WithChannel(channel),
 		rabbitmq.WithQueue(OrderQueue),
-		rabbitmq.WithHandler(handlerMessage),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	consumer.RegisterHandler(OrderCreated, OrderCreatedHandler)
+	consumer.RegisterHandler(OrderUpdated, OrderUpdatedHandler)
 
 	if err := consumer.Consume(context.Background()); err != nil {
 		log.Fatal(err)
@@ -68,7 +69,12 @@ func (s *consumer) Run() {
 	<-forever
 }
 
-func handlerMessage(ctx context.Context, body []byte) error {
-	log.Println("Received message:", string(body))
-	return errors.New("deu ruim")
+func OrderCreatedHandler(ctx context.Context, body []byte) error {
+	log.Println("Received message:OrderCreatedHandler", string(body))
+	return nil
+}
+
+func OrderUpdatedHandler(ctx context.Context, body []byte) error {
+	log.Println("Received message:OrderUpdatedHandler", string(body))
+	return nil
 }

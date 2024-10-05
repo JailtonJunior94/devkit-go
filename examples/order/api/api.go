@@ -90,6 +90,16 @@ func (s *apiServer) Run() {
 		responses.JSON(w, http.StatusCreated, nil)
 	})
 
+	router.Put("/orders", func(w http.ResponseWriter, r *http.Request) {
+		if err := channel.PublishWithContext(context.Background(), OrdersExchange, OrderUpdated, false, false, amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"id": "1", "status": "updated"}`),
+		}); err != nil {
+			responses.Error(w, http.StatusInternalServerError, err.Error())
+		}
+		responses.JSON(w, http.StatusOK, nil)
+	})
+
 	/* Graceful shutdown */
 	server := http.Server{
 		ReadTimeout:       time.Duration(10) * time.Second,

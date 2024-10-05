@@ -9,17 +9,20 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type Consumer interface {
-	Consume(ctx context.Context) error
-}
+type (
+	Option         func(consumer *consumer)
+	ConsumeHandler func(ctx context.Context, body []byte) error
 
-type Option func(consumer *consumer)
-type ConsumeHandler func(ctx context.Context, body []byte) error
+	Consumer interface {
+		Consume(ctx context.Context) error
+		RegisterHandler(eventType string, handler ConsumeHandler)
+	}
+)
 
 type consumer struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
-	handler    ConsumeHandler
+	handler    map[string]ConsumeHandler
 	queue      string
 	name       string
 	prefetch   int
@@ -31,7 +34,10 @@ type consumer struct {
 }
 
 func NewConsumer(options ...Option) (Consumer, error) {
-	consumer := &consumer{}
+	consumer := &consumer{
+		handler: make(map[string]ConsumeHandler),
+	}
+
 	for _, opt := range options {
 		opt(consumer)
 	}
@@ -65,12 +71,20 @@ func (c *consumer) Consume(ctx context.Context) error {
 
 	go func() {
 		for message := range messages {
-
-			c.dispatcher(ctx, message, c.handler)
+			handler, exists := c.handler[message.RoutingKey]
+			if !exists {
+				log.Println("handler not implement")
+				continue
+			}
+			c.dispatcher(ctx, message, handler)
 		}
 	}()
 
 	return nil
+}
+
+func (c *consumer) RegisterHandler(eventType string, handler ConsumeHandler) {
+	c.handler[eventType] = handler
 }
 
 func (c *consumer) dispatcher(ctx context.Context, delivery amqp.Delivery, handler ConsumeHandler) {
@@ -153,12 +167,6 @@ func WithQueue(name string) Option {
 func WithPrefetch(qty int) Option {
 	return func(consumer *consumer) {
 		consumer.prefetch = qty
-	}
-}
-
-func WithHandler(handler ConsumeHandler) Option {
-	return func(consumer *consumer) {
-		consumer.handler = handler
 	}
 }
 
