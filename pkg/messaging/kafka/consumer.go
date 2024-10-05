@@ -149,7 +149,9 @@ func (c *consumer) retry(ctx context.Context, message kafka.Message, err error) 
 	go func() {
 		for msg := range c.retryChan {
 			if c.retries >= c.maxRetries {
-				c.moveToDLQ(ctx, msg, err)
+				if err := c.moveToDLQ(ctx, msg, err); err != nil {
+					log.Fatal("failed to move to DLQ:", err)
+				}
 				break
 			}
 
