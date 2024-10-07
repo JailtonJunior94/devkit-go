@@ -23,9 +23,8 @@ func main() {
 	}
 
 	server := httpserver.New(
-		httpserver.WithPort("8080"),
+		httpserver.WithPort("8002"),
 		httpserver.WithRoutes(routes...),
-		httpserver.WithMiddlewares(),
 	)
 
 	shutdown := server.Run()

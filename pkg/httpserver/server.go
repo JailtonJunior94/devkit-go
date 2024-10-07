@@ -49,9 +49,9 @@ func New(options ...Option) Server {
 		router:           chi.NewRouter(),
 		shutdownListener: make(chan error, 1),
 		routes:           settings.routes,
-		errorHandler:     settings.errorHandler,
 	}
 
+	srv.Server.Handler = Middlewares(srv.router, settings.globalMiddlewares...)
 	srv.buildRoutes()
 	return srv
 }
