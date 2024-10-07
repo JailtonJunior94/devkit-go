@@ -47,8 +47,9 @@ func New(options ...Option) Server {
 			Addr: fmt.Sprintf(":%s", settings.port),
 		},
 		router:           chi.NewRouter(),
-		shutdownListener: make(chan error, 1),
 		routes:           settings.routes,
+		shutdownListener: make(chan error, 1),
+		errorHandler:     settings.errorHandler,
 	}
 
 	srv.Server.Handler = Middlewares(srv.router, settings.globalMiddlewares...)
@@ -104,6 +105,7 @@ func (s *server) buildRoutes() {
 
 func defaultHandleError(ctx context.Context, w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(err.Error()))
 }
 
 func newErrorHandler(errorHandler ErrorHandler, handler Handler) http.Handler {

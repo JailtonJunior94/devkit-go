@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -14,8 +15,10 @@ import (
 func main() {
 	routes := []httpserver.Route{
 		httpserver.NewRoute(http.MethodGet, "/helloaaa", func(w http.ResponseWriter, r *http.Request) error {
-			w.Write([]byte("Hello World"))
-			return nil
+			requestID := r.Context().Value(httpserver.ContextKeyRequestID).(string)
+			w.Write([]byte(requestID))
+
+			return errors.New("error")
 		}),
 		httpserver.NewRoute(http.MethodPost, "/hello", func(w http.ResponseWriter, r *http.Request) error {
 			return nil
@@ -25,6 +28,9 @@ func main() {
 	server := httpserver.New(
 		httpserver.WithPort("8002"),
 		httpserver.WithRoutes(routes...),
+		httpserver.WithMiddlewares(
+			httpserver.RequestID,
+		),
 	)
 
 	shutdown := server.Run()
