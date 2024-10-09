@@ -3,7 +3,7 @@ package entity
 import (
 	"time"
 
-	"github.com/jailtonjunior94/financial/pkg/vos"
+	"github.com/JailtonJunior94/devkit-go/pkg/vos"
 )
 
 type Base struct {
