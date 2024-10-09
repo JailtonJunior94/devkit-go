@@ -105,7 +105,6 @@ func (s *server) buildRoutes() {
 
 func defaultHandleError(ctx context.Context, w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
-	w.Write([]byte(err.Error()))
 }
 
 func newErrorHandler(errorHandler ErrorHandler, handler Handler) http.Handler {

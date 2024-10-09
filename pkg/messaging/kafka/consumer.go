@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/segmentio/kafka-go"
 )
@@ -30,7 +31,7 @@ type (
 		handler    map[string]ConsumeHandler
 		enableDLQ  bool
 		dlqTopic   string
-		broker     KafkaClient
+		broker     messaging.Publish
 	}
 )
 
@@ -181,9 +182,8 @@ func (c *consumer) moveToDLQ(ctx context.Context, message kafka.Message, err err
 		"event_type": c.extractHeader(message)["event_type"],
 	}
 
-	return c.broker.Produce(ctx, c.dlqTopic, headers, &Message{
-		Key:   message.Key,
-		Value: message.Value,
+	return c.broker.Produce(ctx, c.dlqTopic, string(message.Key), headers, &messaging.Message{
+		Body: message.Value,
 	})
 }
 

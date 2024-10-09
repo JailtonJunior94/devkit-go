@@ -2,20 +2,18 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/httpserver"
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging/rabbitmq"
-	"github.com/JailtonJunior94/devkit-go/pkg/responses"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -39,6 +37,12 @@ var (
 	}
 )
 
+type order struct {
+	ID     int     `json:"id"`
+	Status string  `json:"status"`
+	Value  float64 `json:"value"`
+}
+
 type apiServer struct {
 }
 
@@ -47,14 +51,6 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
-	router := chi.NewRouter()
-	router.Use(
-		middleware.RealIP,
-		middleware.RequestID,
-		middleware.SetHeader("Content-Type", "application/json"),
-		middleware.AllowContentType("application/json", "application/x-www-form-urlencoded"),
-	)
-
 	connection, err := amqp.Dial("amqp://guest:pass@rabbitmq@localhost:5672")
 	if err != nil {
 		log.Fatal(err)
@@ -79,57 +75,55 @@ func (s *apiServer) Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	producer := rabbitmq.NewRabbitMQ(channel)
 
-	router.Post("/orders", func(w http.ResponseWriter, r *http.Request) {
-		if err := channel.PublishWithContext(context.Background(), OrdersExchange, OrderCreated, false, false, amqp.Publishing{
-			ContentType: "application/json",
-			Body:        []byte(`{"id": "1", "status": "created"}`),
-		}); err != nil {
-			responses.Error(w, http.StatusInternalServerError, err.Error())
-		}
-		responses.JSON(w, http.StatusCreated, nil)
-	})
+	routes := []httpserver.Route{
+		httpserver.NewRoute(http.MethodPost, "/message", func(w http.ResponseWriter, r *http.Request) error {
+			requestID := r.Context().Value(httpserver.ContextKeyRequestID).(string)
+			params := map[string]string{
+				"content_type": "application/json",
+				"event_type":   OrderCreated,
+				"request_id":   requestID,
+			}
 
-	router.Put("/orders", func(w http.ResponseWriter, r *http.Request) {
-		if err := channel.PublishWithContext(context.Background(), OrdersExchange, OrderUpdated, false, false, amqp.Publishing{
-			ContentType: "application/json",
-			Body:        []byte(`{"id": "1", "status": "updated"}`),
-		}); err != nil {
-			responses.Error(w, http.StatusInternalServerError, err.Error())
-		}
-		responses.JSON(w, http.StatusOK, nil)
-	})
+			order := &order{ID: 1, Status: "created", Value: 100.0}
+			json, err := json.Marshal(order)
+			if err != nil {
+				return err
+			}
 
-	/* Graceful shutdown */
-	server := http.Server{
-		ReadTimeout:       time.Duration(10) * time.Second,
-		ReadHeaderTimeout: time.Duration(10) * time.Second,
-		Handler:           router,
+			err = producer.Produce(r.Context(), OrderQueue, OrderCreated, params, &messaging.Message{
+				Body: json,
+			})
+
+			if err != nil {
+				return err
+			}
+			return nil
+		}),
 	}
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", "8001"))
-	if err != nil {
-		log.Fatal(err)
-	}
+	server := httpserver.New(
+		httpserver.WithPort("8001"),
+		httpserver.WithRoutes(routes...),
+		httpserver.WithMiddlewares(
+			httpserver.RequestID,
+		),
+	)
+
+	shutdown := server.Run()
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+		if err := <-server.ShutdownListener(); err != nil && err != http.ErrServerClosed {
+			interrupt <- syscall.SIGTERM
 		}
 	}()
 
-	s.gracefulShutdown(&server)
-}
-
-func (s *apiServer) gracefulShutdown(server *http.Server) {
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	ctxShutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(ctxShutdown); err != nil {
+	<-interrupt
+	if err := shutdown(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 }

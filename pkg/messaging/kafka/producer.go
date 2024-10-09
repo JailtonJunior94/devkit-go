@@ -3,25 +3,18 @@ package kafka
 import (
 	"context"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
+
 	"github.com/segmentio/kafka-go"
 )
 
 type (
-	KafkaClient interface {
-		Produce(ctx context.Context, topic string, headers map[string]string, message *Message) error
-	}
-
 	kafkaClient struct {
 		client *kafka.Writer
 	}
-
-	Message struct {
-		Key   []byte
-		Value []byte
-	}
 )
 
-func NewKafkaClient(broker string) KafkaClient {
+func NewKafkaClient(broker string) messaging.Publish {
 	client := &kafka.Writer{
 		Addr:     kafka.TCP(broker),
 		Balancer: &kafka.LeastBytes{},
@@ -29,11 +22,11 @@ func NewKafkaClient(broker string) KafkaClient {
 	return &kafkaClient{client: client}
 }
 
-func (k *kafkaClient) Produce(ctx context.Context, topic string, headers map[string]string, message *Message) error {
+func (k *kafkaClient) Produce(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
 	messageKafka := kafka.Message{
-		Topic: topic,
-		Key:   message.Key,
-		Value: message.Value,
+		Topic: topicOrQueue,
+		Key:   []byte(key),
+		Value: message.Body,
 	}
 
 	for key, value := range headers {
