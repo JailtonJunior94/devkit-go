@@ -5,37 +5,32 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 	"github.com/JailtonJunior94/devkit-go/pkg/vos"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type (
-	Option         func(consumer *consumer)
-	ConsumeHandler func(ctx context.Context, body []byte) error
+	Option func(consumer *consumer)
 
-	Consumer interface {
-		Consume(ctx context.Context) error
-		RegisterHandler(eventType string, handler ConsumeHandler)
+	consumer struct {
+		connection *amqp.Connection
+		channel    *amqp.Channel
+		handler    map[string]messaging.ConsumeHandler
+		queue      string
+		name       string
+		prefetch   int
+		autoAck    bool
+		exclusive  bool
+		noLocal    bool
+		noWait     bool
+		args       amqp.Table
 	}
 )
 
-type consumer struct {
-	connection *amqp.Connection
-	channel    *amqp.Channel
-	handler    map[string]ConsumeHandler
-	queue      string
-	name       string
-	prefetch   int
-	autoAck    bool
-	exclusive  bool
-	noLocal    bool
-	noWait     bool
-	args       amqp.Table
-}
-
-func NewConsumer(options ...Option) (Consumer, error) {
+func NewConsumer(options ...Option) (messaging.Consumer, error) {
 	consumer := &consumer{
-		handler: make(map[string]ConsumeHandler),
+		handler: make(map[string]messaging.ConsumeHandler),
 	}
 
 	for _, opt := range options {
@@ -83,12 +78,12 @@ func (c *consumer) Consume(ctx context.Context) error {
 	return nil
 }
 
-func (c *consumer) RegisterHandler(eventType string, handler ConsumeHandler) {
+func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
 	c.handler[eventType] = handler
 }
 
-func (c *consumer) dispatcher(ctx context.Context, delivery amqp.Delivery, handler ConsumeHandler) {
-	err := handler(ctx, delivery.Body)
+func (c *consumer) dispatcher(ctx context.Context, delivery amqp.Delivery, handler messaging.ConsumeHandler) {
+	err := handler(ctx, c.extractHeader(delivery), delivery.Body)
 	if err != nil {
 		if err := c.handleRetry(c.channel, delivery); err != nil {
 			log.Println(err)
@@ -138,6 +133,14 @@ func (c *consumer) sendDLQ(ch *amqp.Channel, delivery amqp.Delivery) error {
 		return err
 	}
 	return nil
+}
+
+func (c *consumer) extractHeader(delivery amqp.Delivery) map[string]string {
+	headers := make(map[string]string)
+	for key, value := range delivery.Headers {
+		headers[key] = fmt.Sprintf("%v", value)
+	}
+	return headers
 }
 
 func WithName(name string) Option {

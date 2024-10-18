@@ -69,12 +69,14 @@ func (s *consumer) Run() {
 	<-forever
 }
 
-func OrderCreatedHandler(ctx context.Context, body []byte) error {
+func OrderCreatedHandler(ctx context.Context, params map[string]string, body []byte) error {
+	log.Println("Received header:OrderCreatedHandler", params)
 	log.Println("Received message:OrderCreatedHandler", string(body))
 	return nil
 }
 
-func OrderUpdatedHandler(ctx context.Context, body []byte) error {
+func OrderUpdatedHandler(ctx context.Context, params map[string]string, body []byte) error {
+	log.Println("Received header:OrderUpdatedHandler", params)
 	log.Println("Received message:OrderUpdatedHandler", string(body))
 	return nil
 }

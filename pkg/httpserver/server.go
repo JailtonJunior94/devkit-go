@@ -11,6 +11,7 @@ import (
 type (
 	Server interface {
 		Run() Shutdown
+		RegisterRoute(route Route)
 		ShutdownListener() chan error
 		ServeHTTP(http.ResponseWriter, *http.Request)
 	}
@@ -88,6 +89,10 @@ func Middlewares(main http.Handler, middlewares ...Middleware) http.Handler {
 		handler = middlewares[len(middlewares)-1-i](handler)
 	}
 	return handler
+}
+
+func (s *server) RegisterRoute(route Route) {
+	s.routes = append(s.routes, route)
 }
 
 func (s *server) buildRoutes() {

@@ -9,20 +9,20 @@ import (
 )
 
 type (
-	kafkaClient struct {
+	kafkaPublisher struct {
 		client *kafka.Writer
 	}
 )
 
-func NewKafkaClient(broker string) messaging.Publish {
+func NewKafkaPublisher(broker string) messaging.Publisher {
 	client := &kafka.Writer{
 		Addr:     kafka.TCP(broker),
 		Balancer: &kafka.LeastBytes{},
 	}
-	return &kafkaClient{client: client}
+	return &kafkaPublisher{client: client}
 }
 
-func (k *kafkaClient) Produce(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
+func (k *kafkaPublisher) Publish(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
 	messageKafka := kafka.Message{
 		Topic: topicOrQueue,
 		Key:   []byte(key),

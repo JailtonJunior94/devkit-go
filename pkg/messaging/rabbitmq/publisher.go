@@ -14,11 +14,11 @@ type (
 	}
 )
 
-func NewRabbitMQ(channel *amqp.Channel) messaging.Publish {
+func NewRabbitMQ(channel *amqp.Channel) messaging.Publisher {
 	return &rabbitMQ{channel: channel}
 }
 
-func (r *rabbitMQ) Produce(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
+func (r *rabbitMQ) Publish(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
 	msg := amqp.Publishing{
 		Body:        message.Body,
 		ContentType: headers["content_type"],

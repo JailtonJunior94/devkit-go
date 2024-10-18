@@ -92,7 +92,7 @@ func (s *apiServer) Run() {
 				return err
 			}
 
-			err = producer.Produce(r.Context(), OrderQueue, OrderCreated, params, &messaging.Message{
+			err = producer.Publish(r.Context(), OrderQueue, OrderCreated, params, &messaging.Message{
 				Body: json,
 			})
 

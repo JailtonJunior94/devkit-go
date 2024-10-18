@@ -11,13 +11,7 @@ import (
 )
 
 type (
-	ConsumerOptions func(consumer *consumer)
-	ConsumeHandler  func(ctx context.Context, params map[string]string, body []byte) error
-
-	Consumer interface {
-		Consume(ctx context.Context) error
-		RegisterHandler(eventType string, handler ConsumeHandler)
-	}
+	Option func(consumer *consumer)
 
 	consumer struct {
 		retries    int
@@ -28,50 +22,50 @@ type (
 		reader     *kafka.Reader
 		backoff    backoff.BackOff
 		retryChan  chan kafka.Message
-		handler    map[string]ConsumeHandler
+		handler    map[string]messaging.ConsumeHandler
 		enableDLQ  bool
 		dlqTopic   string
-		broker     messaging.Publish
+		publisher  messaging.Publisher
 	}
 )
 
-func WithTopic(name string) ConsumerOptions {
+func WithTopic(name string) Option {
 	return func(consumer *consumer) {
 		consumer.topic = name
 	}
 }
 
-func WithBrokers(brokers []string) ConsumerOptions {
+func WithBrokers(brokers []string) Option {
 	return func(consumer *consumer) {
 		consumer.brokers = brokers
 	}
 }
 
-func WithGroupID(groupID string) ConsumerOptions {
+func WithGroupID(groupID string) Option {
 	return func(consumer *consumer) {
 		consumer.groupID = groupID
 	}
 }
 
-func WithMaxRetries(maxRetries int) ConsumerOptions {
+func WithMaxRetries(maxRetries int) Option {
 	return func(consumer *consumer) {
 		consumer.maxRetries = maxRetries
 	}
 }
 
-func WithRetryChan(sizeChan int) ConsumerOptions {
+func WithRetryChan(sizeChan int) Option {
 	return func(consumer *consumer) {
 		consumer.retryChan = make(chan kafka.Message, sizeChan)
 	}
 }
 
-func WithBackoff(backoff backoff.BackOff) ConsumerOptions {
+func WithBackoff(backoff backoff.BackOff) Option {
 	return func(consumer *consumer) {
 		consumer.backoff = backoff
 	}
 }
 
-func WithReader() ConsumerOptions {
+func WithReader() Option {
 	return func(consumer *consumer) {
 		reader := kafka.NewReader(kafka.ReaderConfig{
 			Brokers:        consumer.brokers,
@@ -86,17 +80,17 @@ func WithReader() ConsumerOptions {
 	}
 }
 
-func WithDQL(dlqTopic string) ConsumerOptions {
+func WithDQL(dlqTopic string) Option {
 	return func(consumer *consumer) {
 		consumer.enableDLQ = true
 		consumer.dlqTopic = dlqTopic
-		consumer.broker = NewKafkaClient(consumer.brokers[0])
+		consumer.publisher = NewKafkaPublisher(consumer.brokers[0])
 	}
 }
 
-func NewConsumer(options ...ConsumerOptions) Consumer {
+func NewConsumer(options ...Option) messaging.Consumer {
 	consumer := &consumer{
-		handler: make(map[string]ConsumeHandler),
+		handler: make(map[string]messaging.ConsumeHandler),
 	}
 	for _, opt := range options {
 		opt(consumer)
@@ -104,7 +98,7 @@ func NewConsumer(options ...ConsumerOptions) Consumer {
 	return consumer
 }
 
-func (c *consumer) RegisterHandler(eventType string, handler ConsumeHandler) {
+func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
 	c.handler[eventType] = handler
 }
 
@@ -132,7 +126,7 @@ func (c *consumer) Consume(ctx context.Context) error {
 	return nil
 }
 
-func (c *consumer) dispatcher(ctx context.Context, message kafka.Message, handler ConsumeHandler) error {
+func (c *consumer) dispatcher(ctx context.Context, message kafka.Message, handler messaging.ConsumeHandler) error {
 	err := handler(ctx, c.extractHeader(message), message.Value)
 	if err != nil {
 		c.retries++
@@ -182,7 +176,7 @@ func (c *consumer) moveToDLQ(ctx context.Context, message kafka.Message, err err
 		"event_type": c.extractHeader(message)["event_type"],
 	}
 
-	return c.broker.Produce(ctx, c.dlqTopic, string(message.Key), headers, &messaging.Message{
+	return c.publisher.Publish(ctx, c.dlqTopic, string(message.Key), headers, &messaging.Message{
 		Body: message.Value,
 	})
 }
