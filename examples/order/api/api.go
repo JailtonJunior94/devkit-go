@@ -75,7 +75,7 @@ func (s *apiServer) Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	producer := rabbitmq.NewRabbitMQ(channel)
+	producer := rabbitmq.NewRabbitMQPublisher(channel)
 
 	routes := []httpserver.Route{
 		httpserver.NewRoute(http.MethodPost, "/message", func(w http.ResponseWriter, r *http.Request) error {

@@ -14,7 +14,7 @@ type (
 	}
 )
 
-func NewRabbitMQ(channel *amqp.Channel) messaging.Publisher {
+func NewRabbitMQPublisher(channel *amqp.Channel) messaging.Publisher {
 	return &rabbitMQ{channel: channel}
 }
 

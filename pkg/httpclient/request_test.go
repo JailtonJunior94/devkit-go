@@ -53,9 +53,9 @@ func (s *MakeRequestSuite) TestMakeRequest() {
 		name: "should return an error when the request fails",
 		args: args{zipCode: "06503015"},
 		expected: func(address *Address, err error) {
-			s.NoError(err)
+			s.Require().NoError(err)
 			s.NotNil(address)
-			s.Equal(address.Cep, "06503-015")
+			s.Equal("06503-015", address.Cep)
 		},
 	}}
 
