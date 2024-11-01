@@ -4,10 +4,10 @@ import (
 	"net/http"
 )
 
-type HttpClient interface {
+type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-func NewHttpClient() HttpClient {
+func NewHTTPClient() HTTPClient {
 	return &http.Client{}
 }

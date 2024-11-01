@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func MakeRequest[TSuccess any, TError any](ctx context.Context, client HttpClient, method, url string, headers map[string]string, payload io.Reader) (*TSuccess, *TError, error) {
+func MakeRequest[TSuccess any, TError any](ctx context.Context, client HTTPClient, method, url string, headers map[string]string, payload io.Reader) (*TSuccess, *TError, error) {
 	request, err := http.NewRequestWithContext(ctx, method, url, payload)
 	if err != nil {
 		return nil, nil, err

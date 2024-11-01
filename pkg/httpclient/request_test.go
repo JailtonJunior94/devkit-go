@@ -61,8 +61,17 @@ func (s *MakeRequestSuite) TestMakeRequest() {
 
 	for _, scenario := range scenarios {
 		s.T().Run(scenario.name, func(t *testing.T) {
-			client := NewHttpClient()
-			address, _, err := MakeRequest[Address, any](s.ctx, client, "GET", fmt.Sprintf("https://viacep.com.br/ws/%s/json/", scenario.args.zipCode), nil, nil)
+			client := NewHTTPClient()
+			address, _, err := MakeRequest[Address, any](
+				s.ctx,
+				client,
+				"GET",
+				fmt.Sprintf("https://viacep.com.br/ws/%s/json/",
+					scenario.args.zipCode,
+				),
+				nil,
+				nil,
+			)
 			scenario.expected(address, err)
 		})
 	}

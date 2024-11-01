@@ -27,7 +27,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-type Code uint
+type Code uint32
 
 const (
 	Unset Code = 0

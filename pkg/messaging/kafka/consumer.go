@@ -84,7 +84,7 @@ func WithDQL(dlqTopic string) Option {
 	return func(consumer *consumer) {
 		consumer.enableDLQ = true
 		consumer.dlqTopic = dlqTopic
-		consumer.publisher = NewKafkaPublisher(consumer.brokers[0])
+		// consumer.publisher = NewKafkaPublisher(consumer.brokers[0])
 	}
 }
 
@@ -132,11 +132,7 @@ func (c *consumer) dispatcher(ctx context.Context, message kafka.Message, handle
 		c.retries++
 		return c.retry(ctx, message, err)
 	}
-
-	if err := c.reader.CommitMessages(ctx, message); err != nil {
-		return err
-	}
-	return nil
+	return c.reader.CommitMessages(ctx, message)
 }
 
 func (c *consumer) retry(ctx context.Context, message kafka.Message, err error) error {
