@@ -1,41 +1,61 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Http Server",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": "${workspaceFolder}/examples/httpserver/main.go"
-        },
-        {
-            "name": "Order API",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": "${workspaceFolder}/examples/order/main.go",
-            "args": [
-                "api"
-            ]
-        },
-        {
-            "name": "Order Consumer",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": "${workspaceFolder}/examples/order/main.go",
-            "args": [
-                "consumers"
-            ]
-        },
-    ],
-    "compounds": [
-        {
-            "name": "Order API + Order Consumer",
-            "configurations": [
-                "Order API",
-                "Order Consumer"
-            ]
-        }
-    ]
+	"version":"0.2.0",
+	"configurations":[
+		{
+			"name":"Http Server",
+			"type":"go",
+			"request":"launch",
+			"mode":"auto",
+			"program":"${workspaceFolder}/examples/httpserver/main.go"
+		},
+		{
+			"name":"Order API",
+			"type":"go",
+			"request":"launch",
+			"mode":"auto",
+			"program":"${workspaceFolder}/examples/order/main.go",
+			"args":[
+				"api"
+			]
+		},
+		{
+			"name":"Order Consumer",
+			"type":"go",
+			"request":"launch",
+			"mode":"auto",
+			"program":"${workspaceFolder}/examples/order/main.go",
+			"args":[
+				"consumers"
+			]
+		},
+		{
+			"name":"[Kafka] Order API",
+			"type":"go",
+			"request":"launch",
+			"mode":"auto",
+			"program":"${workspaceFolder}/examples/order-kafka/main.go",
+			"args":[
+				"api"
+			]
+		},
+		{
+			"name":"[Kafka] Order Consumer",
+			"type":"go",
+			"request":"launch",
+			"mode":"auto",
+			"program":"${workspaceFolder}/examples/order-kafka/main.go",
+			"args":[
+				"consumers"
+			]
+		}
+	],
+	"compounds":[
+		{
+			"name":"Order API + Order Consumer",
+			"configurations":[
+				"Order API",
+				"Order Consumer"
+			]
+		}
+	]
 }

@@ -15,23 +15,17 @@ type (
 	Option func(consumer *consumer)
 
 	consumer struct {
-		retries    int
-		maxRetries int
-		enableDLQ  bool
-		topicDLQ   string
-		topic      string
-		groupID    string
-
-		backoff         backoff.BackOff
-		consumerHandler *consumerHandler
-		publisher       messaging.Publisher
-		consumerGroup   sarama.ConsumerGroup
-		retryChan       chan *sarama.ConsumerMessage
-		handlers        map[string][]messaging.ConsumeHandler
-	}
-
-	consumerHandler struct {
-		consumer
+		retries       int
+		maxRetries    int
+		enableDLQ     bool
+		topicDLQ      string
+		topic         string
+		groupID       string
+		backoff       backoff.BackOff
+		publisher     messaging.Publisher
+		consumerGroup sarama.ConsumerGroup
+		retryChan     chan *sarama.ConsumerMessage
+		handlers      map[string][]messaging.ConsumeHandler
 	}
 )
 
@@ -96,17 +90,9 @@ func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHa
 func (c *consumer) Consume(ctx context.Context) error {
 	go func() {
 		for {
-			err := c.consumerGroup.Consume(ctx, []string{c.topic}, c.consumerHandler)
+			err := c.consumerGroup.Consume(ctx, []string{c.topic}, c)
 			if err != nil {
 				log.Fatal("failed to consume message:", err)
-			}
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			if err := c.consumerGroup.Close(); err != nil {
-				log.Fatal("failed to close consumer group:", err)
 			}
 		}
 	}()
@@ -171,11 +157,11 @@ func (c *consumer) extractHeader(message *sarama.ConsumerMessage) map[string]str
 	return headers
 }
 
-func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		if handlers, ok := h.handlers[h.extractHeader(message)["event_type"]]; ok {
+		if handlers, ok := c.handlers[c.extractHeader(message)["event_type"]]; ok {
 			for _, handler := range handlers {
-				if err := h.dispatcher(context.Background(), session, message, handler); err != nil {
+				if err := c.dispatcher(context.Background(), session, message, handler); err != nil {
 					log.Fatal("failed to dispatch message:", err)
 					continue
 				}
@@ -185,10 +171,10 @@ func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 	return nil
 }
 
-func (h *consumerHandler) Setup(sarama.ConsumerGroupSession) error {
+func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-func (h *consumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
+func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }

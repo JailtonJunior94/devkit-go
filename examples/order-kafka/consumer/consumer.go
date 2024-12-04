@@ -3,29 +3,10 @@ package consumer
 import (
 	"context"
 	"log"
+	"time"
 
-	"github.com/JailtonJunior94/devkit-go/pkg/messaging/rabbitmq"
-	amqp "github.com/rabbitmq/amqp091-go"
-)
-
-const (
-	OrdersExchange = "order"
-	OrderCreated   = "order_created"
-	OrderUpdated   = "order_updated"
-	OrderQueue     = "order"
-	FinanceQueue   = "finance_order"
-)
-
-var (
-	Exchanges = []*rabbitmq.Exchange{
-		rabbitmq.NewExchange(OrdersExchange, "direct"),
-	}
-
-	Bindings = []*rabbitmq.Binding{
-		rabbitmq.NewBindingRouting(OrderQueue, OrdersExchange, OrderCreated),
-		rabbitmq.NewBindingRouting(OrderQueue, OrdersExchange, OrderUpdated),
-		rabbitmq.NewBindingRouting(FinanceQueue, OrdersExchange, OrderCreated),
-	}
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging/kafka"
+	"github.com/cenkalti/backoff/v4"
 )
 
 type consumer struct {
@@ -36,30 +17,26 @@ func NewConsumer() *consumer {
 }
 
 func (s *consumer) Run() {
-	connection, err := amqp.Dial("amqp://guest:pass@rabbitmq@localhost:5672")
+	client, err := kafka.NewClient([]string{"localhost:9092"})
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer connection.Close()
 
-	channel, err := connection.Channel()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer channel.Close()
+	backoff := backoff.NewExponentialBackOff()
+	backoff.MaxElapsedTime = time.Second * 1
 
-	consumer, err := rabbitmq.NewConsumer(
-		rabbitmq.WithName("order"),
-		rabbitmq.WithConnection(connection),
-		rabbitmq.WithChannel(channel),
-		rabbitmq.WithQueue(OrderQueue),
+	consumer := kafka.NewConsumer(
+		kafka.WithTopic("orders"),
+		kafka.WithGroupID("order-consumer"),
+		kafka.WithBackoff(backoff),
+		kafka.WithMaxRetries(3),
+		kafka.WithRetryChan(100),
+		kafka.WithDLQ("orders_dlq"),
+		kafka.WithClient(client),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	consumer.RegisterHandler(OrderCreated, OrderCreatedHandler)
-	consumer.RegisterHandler(OrderUpdated, OrderUpdatedHandler)
+	consumer.RegisterHandler("order_created", OrderCreatedHandler)
+	consumer.RegisterHandler("order_updated", OrderUpdatedHandler)
 
 	if err := consumer.Consume(context.Background()); err != nil {
 		log.Fatal(err)

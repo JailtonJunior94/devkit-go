@@ -11,6 +11,7 @@ import (
 
 	"github.com/JailtonJunior94/devkit-go/pkg/httpserver"
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging/kafka"
 )
 
 type order struct {
@@ -27,13 +28,31 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
+	client, err := kafka.NewClient([]string{"localhost:9092"})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	admin, err := kafka.NewKafkaBuilder(client)
+	if err != nil {
+		log.Fatal(err)
+	}
+	admin.DeclareTopics(
+		kafka.NewTopicConfig("orders", 1, 1),
+		kafka.NewTopicConfig("orders_dlq", 1, 1),
+	).Build()
+
+	producer, err := kafka.NewPublisher(client)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	routes := []httpserver.Route{
 		httpserver.NewRoute(http.MethodPost, "/message", func(w http.ResponseWriter, r *http.Request) error {
 			requestID := r.Context().Value(httpserver.ContextKeyRequestID).(string)
 			params := map[string]string{
 				"content_type": "application/json",
-				"event_type":   OrderCreated,
+				"event_type":   "order_created",
 				"request_id":   requestID,
 			}
 
@@ -43,7 +62,7 @@ func (s *apiServer) Run() {
 				return err
 			}
 
-			err = producer.Publish(r.Context(), OrderQueue, OrderCreated, params, &messaging.Message{
+			err = producer.Publish(r.Context(), "orders", "order_created", params, &messaging.Message{
 				Body: json,
 			})
 

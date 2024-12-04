@@ -16,7 +16,7 @@ func NewClient(brokers []string) (*Client, error) {
 	config.Producer.RequiredAcks = sarama.WaitForLocal
 
 	/* Config Consumer */
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest
+	config.Consumer.Offsets.Initial = sarama.OffsetNewest
 	config.Consumer.Offsets.AutoCommit.Enable = false
 
 	client, err := sarama.NewClient(brokers, config)

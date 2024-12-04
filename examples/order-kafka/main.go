@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/JailtonJunior94/devkit-go/examples/order/api"
-	"github.com/JailtonJunior94/devkit-go/examples/order/consumer"
+	"github.com/JailtonJunior94/devkit-go/examples/order-kafka/api"
+	"github.com/JailtonJunior94/devkit-go/examples/order-kafka/consumer"
 
 	"github.com/spf13/cobra"
 )
