@@ -6,11 +6,17 @@ import (
 	"github.com/IBM/sarama"
 )
 
-type Client struct {
-	client sarama.Client
-}
+type (
+	Client struct {
+		client sarama.Client
+	}
+	AuthConfig struct {
+		Username string
+		Password string
+	}
+)
 
-func NewClient(brokers []string) (*Client, error) {
+func NewClient(brokers []string, authConfig *AuthConfig) (*Client, error) {
 	config := sarama.NewConfig()
 	config.Version = sarama.V3_6_0_0
 
@@ -36,6 +42,13 @@ func NewClient(brokers []string) (*Client, error) {
 	config.Consumer.Fetch.Default = 10 * 1024 * 1024 // 10MB
 	config.Consumer.MaxWaitTime = 250 * time.Millisecond
 	config.Consumer.Retry.Backoff = 2 * time.Second
+
+	// Configure authentication if authConfig is provided
+	if authConfig != nil {
+		config.Net.SASL.Enable = true
+		config.Net.SASL.User = authConfig.Username
+		config.Net.SASL.Password = authConfig.Password
+	}
 
 	client, err := sarama.NewClient(brokers, config)
 	if err != nil {

@@ -30,7 +30,7 @@ func (s *ConfigSuite) TearDownTest() {
 }
 
 func (s *ConfigSuite) TestCreateTopics() {
-	client, err := NewClient(s.brokers)
+	client, err := NewClient(s.brokers, nil)
 	s.Require().NoError(err)
 
 	buider, err := NewKafkaBuilder(client)

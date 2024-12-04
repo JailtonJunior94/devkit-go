@@ -17,7 +17,7 @@ func NewConsumer() *consumer {
 }
 
 func (s *consumer) Run() {
-	client, err := kafka.NewClient([]string{"localhost:9092"})
+	client, err := kafka.NewClient([]string{"localhost:9092"}, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -27,7 +27,7 @@ func (s *PublisherSuite) SetupTest() {
 	s.ctx = context.Background()
 	s.kafkaContainer = SetupKafka(s.T())
 	s.brokers = s.kafkaContainer.Brokers
-	client, err := NewClient(s.brokers)
+	client, err := NewClient(s.brokers, nil)
 	s.Require().NoError(err)
 
 	buider, err := NewKafkaBuilder(client)
