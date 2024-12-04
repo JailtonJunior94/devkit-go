@@ -12,5 +12,8 @@ bench:
 start_rabbitmq:
 	docker compose up --build -d rabbitmq 
 
+start_kafka:
+	docker compose up --build -d zookeeper broker kafka_ui 
+
 stop_docker:
 	docker compose down

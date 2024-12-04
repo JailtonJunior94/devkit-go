@@ -13,8 +13,8 @@ import (
 type PublisherSuite struct {
 	suite.Suite
 
-	ctx            context.Context
 	brokers        []string
+	ctx            context.Context
 	kafkaContainer *KafkaContainer
 	publisher      messaging.Publisher
 }
@@ -27,16 +27,16 @@ func (s *PublisherSuite) SetupTest() {
 	s.ctx = context.Background()
 	s.kafkaContainer = SetupKafka(s.T())
 	s.brokers = s.kafkaContainer.Brokers
-
-	buider, err := NewKafkaBuilder(s.brokers)
+	client, err := NewClient(s.brokers)
 	s.Require().NoError(err)
 
-	err = buider.DeclareTopics(
-		NewTopicConfig("orders", 1, 1),
-	).Build()
+	buider, err := NewKafkaBuilder(client)
 	s.Require().NoError(err)
 
-	s.publisher, err = NewKafkaPublisher(s.brokers)
+	err = buider.DeclareTopics(NewTopicConfig("orders", 1, 1)).Build()
+	s.Require().NoError(err)
+
+	s.publisher, err = NewPublisher(client)
 	s.Require().NoError(err)
 }
 

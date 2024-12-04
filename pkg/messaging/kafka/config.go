@@ -6,15 +6,15 @@ import (
 
 type (
 	KafkaBuilder interface {
-		DeclareTopics(topics ...*TopicConfig) KafkaBuilder
 		Build() error
-		Topic(name string) (string, error)
 		Close() error
+		Topic(name string) (string, error)
+		DeclareTopics(topics ...*TopicConfig) KafkaBuilder
 	}
 
 	kafkaBuilder struct {
-		conn   sarama.ClusterAdmin
-		topics []*TopicConfig
+		topics          []*TopicConfig
+		adminConnection sarama.ClusterAdmin
 	}
 
 	TopicConfig struct {
@@ -24,16 +24,12 @@ type (
 	}
 )
 
-func NewKafkaBuilder(brokers []string) (KafkaBuilder, error) {
-	config := sarama.NewConfig()
-	config.Producer.Return.Errors = true
-	config.Version = sarama.V3_6_0_0
-
-	admin, err := sarama.NewClusterAdmin(brokers, config)
+func NewKafkaBuilder(client *Client) (KafkaBuilder, error) {
+	admin, err := sarama.NewClusterAdminFromClient(client.client)
 	if err != nil {
 		return nil, err
 	}
-	return &kafkaBuilder{conn: admin}, nil
+	return &kafkaBuilder{adminConnection: admin}, nil
 }
 
 func NewTopicConfig(topic string, numPartitions int32, replicationFactor int16) *TopicConfig {
@@ -52,7 +48,7 @@ func (k *kafkaBuilder) DeclareTopics(topics ...*TopicConfig) KafkaBuilder {
 func (k *kafkaBuilder) Build() error {
 	if len(k.topics) > 0 {
 		for _, topic := range k.topics {
-			err := k.conn.CreateTopic(
+			err := k.adminConnection.CreateTopic(
 				topic.Topic,
 				&sarama.TopicDetail{
 					NumPartitions:     int32(topic.NumPartitions),
@@ -69,7 +65,7 @@ func (k *kafkaBuilder) Build() error {
 }
 
 func (k *kafkaBuilder) Topic(name string) (string, error) {
-	metadata, err := k.conn.DescribeTopics([]string{name})
+	metadata, err := k.adminConnection.DescribeTopics([]string{name})
 	if err != nil {
 		return "", err
 	}
@@ -81,5 +77,5 @@ func (k *kafkaBuilder) Topic(name string) (string, error) {
 }
 
 func (k *kafkaBuilder) Close() error {
-	return k.conn.Close()
+	return k.adminConnection.Close()
 }

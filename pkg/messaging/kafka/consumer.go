@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
+
+	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/segmentio/kafka-go"
 )
 
 type (
@@ -16,28 +17,27 @@ type (
 	consumer struct {
 		retries    int
 		maxRetries int
+		enableDLQ  bool
+		topicDLQ   string
 		topic      string
 		groupID    string
-		brokers    []string
-		reader     *kafka.Reader
-		backoff    backoff.BackOff
-		retryChan  chan kafka.Message
-		handler    map[string]messaging.ConsumeHandler
-		enableDLQ  bool
-		dlqTopic   string
-		publisher  messaging.Publisher
+
+		backoff         backoff.BackOff
+		consumerHandler *consumerHandler
+		publisher       messaging.Publisher
+		consumerGroup   sarama.ConsumerGroup
+		retryChan       chan *sarama.ConsumerMessage
+		handlers        map[string][]messaging.ConsumeHandler
+	}
+
+	consumerHandler struct {
+		consumer
 	}
 )
 
 func WithTopic(name string) Option {
 	return func(consumer *consumer) {
 		consumer.topic = name
-	}
-}
-
-func WithBrokers(brokers []string) Option {
-	return func(consumer *consumer) {
-		consumer.brokers = brokers
 	}
 }
 
@@ -55,7 +55,7 @@ func WithMaxRetries(maxRetries int) Option {
 
 func WithRetryChan(sizeChan int) Option {
 	return func(consumer *consumer) {
-		consumer.retryChan = make(chan kafka.Message, sizeChan)
+		consumer.retryChan = make(chan *sarama.ConsumerMessage, sizeChan)
 	}
 }
 
@@ -65,32 +65,23 @@ func WithBackoff(backoff backoff.BackOff) Option {
 	}
 }
 
-func WithReader() Option {
+func WithDLQ(topicDLQ string) Option {
 	return func(consumer *consumer) {
-		reader := kafka.NewReader(kafka.ReaderConfig{
-			Brokers:        consumer.brokers,
-			GroupID:        consumer.groupID,
-			Topic:          consumer.topic,
-			StartOffset:    kafka.LastOffset,
-			MinBytes:       10e3,
-			MaxBytes:       10e6,
-			CommitInterval: 0,
-		})
-		consumer.reader = reader
+		consumer.enableDLQ = true
+		consumer.topicDLQ = topicDLQ
 	}
 }
 
-func WithDQL(dlqTopic string) Option {
+func WithClient(client *Client) Option {
 	return func(consumer *consumer) {
-		consumer.enableDLQ = true
-		consumer.dlqTopic = dlqTopic
-		// consumer.publisher = NewKafkaPublisher(consumer.brokers[0])
+		consumer.publisher, _ = NewPublisher(client)
+		consumer.consumerGroup, _ = sarama.NewConsumerGroupFromClient(consumer.groupID, client.client)
 	}
 }
 
 func NewConsumer(options ...Option) messaging.Consumer {
 	consumer := &consumer{
-		handler: make(map[string]messaging.ConsumeHandler),
+		handlers: make(map[string][]messaging.ConsumeHandler),
 	}
 	for _, opt := range options {
 		opt(consumer)
@@ -99,70 +90,65 @@ func NewConsumer(options ...Option) messaging.Consumer {
 }
 
 func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
-	c.handler[eventType] = handler
+	c.handlers[eventType] = append(c.handlers[eventType], handler)
 }
 
 func (c *consumer) Consume(ctx context.Context) error {
 	go func() {
 		for {
-			message, err := c.reader.ReadMessage(ctx)
+			err := c.consumerGroup.Consume(ctx, []string{c.topic}, c.consumerHandler)
 			if err != nil {
-				log.Fatal("failed to read message:", err)
-				continue
+				log.Fatal("failed to consume message:", err)
 			}
 
-			handler, exists := c.handler[c.extractHeader(message)["event_type"]]
-			if !exists {
-				log.Fatal("handler not implement")
-				continue
+			if ctx.Err() != nil {
+				return
 			}
 
-			if err := c.dispatcher(ctx, message, handler); err != nil {
-				log.Fatal("failed to dispatch message:", err)
-				continue
+			if err := c.consumerGroup.Close(); err != nil {
+				log.Fatal("failed to close consumer group:", err)
 			}
 		}
 	}()
 	return nil
 }
 
-func (c *consumer) dispatcher(ctx context.Context, message kafka.Message, handler messaging.ConsumeHandler) error {
+func (c *consumer) dispatcher(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage, handler messaging.ConsumeHandler) error {
 	err := handler(ctx, c.extractHeader(message), message.Value)
 	if err != nil {
 		c.retries++
-		return c.retry(ctx, message, err)
+		return c.retry(ctx, session, message, err)
 	}
-	return c.reader.CommitMessages(ctx, message)
+	session.MarkMessage(message, "")
+	session.Commit()
+	return nil
 }
 
-func (c *consumer) retry(ctx context.Context, message kafka.Message, err error) error {
+func (c *consumer) retry(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage, err error) error {
 	c.retryChan <- message
 	go func() {
 		for msg := range c.retryChan {
 			if c.retries >= c.maxRetries {
 				if err := c.moveToDLQ(ctx, msg, err); err != nil {
-					log.Fatal("failed to move to DLQ:", err)
+					log.Fatal("failed to move message to DLQ:", err)
 				}
 				break
 			}
 
-			handler, exists := c.handler[c.extractHeader(msg)["event_type"]]
-			if !exists {
-				log.Fatal("handler not implement")
-				continue
+			if handlers, ok := c.handlers[c.extractHeader(msg)["event_type"]]; ok {
+				for _, handler := range handlers {
+					if err := c.dispatcher(ctx, session, msg, handler); err != nil {
+						time.Sleep(c.backoff.NextBackOff())
+						continue
+					}
+				}
 			}
-
-			if err := c.dispatcher(ctx, msg, handler); err != nil {
-				time.Sleep(c.backoff.NextBackOff())
-				continue
-			}
-			break
 		}
 	}()
 	return nil
 }
 
-func (c *consumer) moveToDLQ(ctx context.Context, message kafka.Message, err error) error {
+func (c *consumer) moveToDLQ(ctx context.Context, message *sarama.ConsumerMessage, err error) error {
 	if !c.enableDLQ {
 		return nil
 	}
@@ -172,15 +158,37 @@ func (c *consumer) moveToDLQ(ctx context.Context, message kafka.Message, err err
 		"event_type": c.extractHeader(message)["event_type"],
 	}
 
-	return c.publisher.Publish(ctx, c.dlqTopic, string(message.Key), headers, &messaging.Message{
+	return c.publisher.Publish(ctx, c.topicDLQ, string(message.Key), headers, &messaging.Message{
 		Body: message.Value,
 	})
 }
 
-func (c *consumer) extractHeader(msg kafka.Message) map[string]string {
+func (c *consumer) extractHeader(message *sarama.ConsumerMessage) map[string]string {
 	headers := make(map[string]string)
-	for _, header := range msg.Headers {
-		headers[header.Key] = string(header.Value)
+	for _, header := range message.Headers {
+		headers[string(header.Key)] = string(header.Value)
 	}
 	return headers
+}
+
+func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for message := range claim.Messages() {
+		if handlers, ok := h.handlers[h.extractHeader(message)["event_type"]]; ok {
+			for _, handler := range handlers {
+				if err := h.dispatcher(context.Background(), session, message, handler); err != nil {
+					log.Fatal("failed to dispatch message:", err)
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (h *consumerHandler) Setup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (h *consumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
+	return nil
 }
