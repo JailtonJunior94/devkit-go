@@ -21,6 +21,7 @@ type (
 		topicDLQ      string
 		topic         string
 		groupID       string
+		ready         chan bool
 		backoff       backoff.BackOff
 		publisher     messaging.Publisher
 		consumerGroup sarama.ConsumerGroup
@@ -94,6 +95,11 @@ func (c *consumer) Consume(ctx context.Context) error {
 			if err != nil {
 				log.Fatal("failed to consume message:", err)
 			}
+
+			if ctx.Err() != nil {
+				return
+			}
+			c.ready = make(chan bool)
 		}
 	}()
 	return nil
@@ -172,6 +178,7 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
+	close(c.ready)
 	return nil
 }
 
