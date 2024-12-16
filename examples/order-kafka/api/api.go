@@ -28,7 +28,10 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
-	client, err := kafka.NewClient([]string{"localhost:9092"}, nil)
+	client, err := kafka.NewClient([]string{"138.197.230.168:9094"}, &kafka.AuthConfig{
+		Username: "admin",
+		Password: "sGVvn2UHUHRxLbxo58M9qWVgdrXCxC24",
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -10,10 +10,10 @@ bench:
     go test -bench=. ./...
 
 start_rabbitmq:
-	docker compose up --build -d rabbitmq 
+	docker compose up --build -d --remove-orphans rabbitmq 
 
 start_kafka:
-	docker compose up --build -d zookeeper broker kafka_ui 
+	docker compose up --build -d --remove-orphans zookeeper broker kafka_ui 
 
 stop_docker:
 	docker compose down
