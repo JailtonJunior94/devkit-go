@@ -28,9 +28,9 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
-	client, err := kafka.NewClient([]string{"138.197.230.168:9094"}, &kafka.AuthConfig{
-		Username: "admin",
-		Password: "sGVvn2UHUHRxLbxo58M9qWVgdrXCxC24",
+	client, err := kafka.NewClient([]string{"146.190.184.61:9094"}, &kafka.AuthConfig{
+		Username: "worker-user",
+		Password: "gil0GoIMyhpSWPEt0lDYCU3iiSXaJ3nH",
 	})
 	if err != nil {
 		log.Fatal(err)
