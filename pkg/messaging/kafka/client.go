@@ -49,11 +49,13 @@ func NewClient(brokers []string, authConfig *AuthConfig) (*Client, error) {
 	// Configure authentication if authConfig is provided
 	if authConfig != nil {
 		config.Net.SASL.Enable = true
-		config.Net.SASL.Handshake = true
+		config.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
 		config.Net.SASL.User = authConfig.Username
 		config.Net.SASL.Password = authConfig.Password
-		config.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
-		config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient { return &XDGSCRAMClient{HashGeneratorFcn: SHA512} }
+		config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
+			return &XDGSCRAMClient{HashGeneratorFcn: SHA512}
+		}
+		config.Net.TLS.Enable = false
 	}
 
 	client, err := sarama.NewClient(brokers, config)

@@ -178,7 +178,6 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
-	close(c.ready)
 	return nil
 }
 

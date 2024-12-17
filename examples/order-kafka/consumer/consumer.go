@@ -17,7 +17,10 @@ func NewConsumer() *consumer {
 }
 
 func (s *consumer) Run() {
-	client, err := kafka.NewClient([]string{"localhost:9092"}, nil)
+	client, err := kafka.NewClient([]string{"45.55.105.69:9094"}, &kafka.AuthConfig{
+		Username: "admin",
+		Password: "nnG66BuJfqZhEs5Tk8Jz8nEAiOeVyyf0",
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -27,7 +30,7 @@ func (s *consumer) Run() {
 
 	consumer := kafka.NewConsumer(
 		kafka.WithTopic("orders"),
-		kafka.WithGroupID("order-consumer"),
+		kafka.WithGroupID("order-consumer-group"),
 		kafka.WithBackoff(backoff),
 		kafka.WithMaxRetries(3),
 		kafka.WithRetryChan(100),

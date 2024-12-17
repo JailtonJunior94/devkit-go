@@ -56,6 +56,13 @@
 				"Order API",
 				"Order Consumer"
 			]
+		},
+		{
+			"name":"[Start All] Order API + Order Consumer",
+			"configurations":[
+				"[Kafka] Order API",
+				"[Kafka] Order Consumer"
+			]
 		}
 	]
 }

@@ -28,9 +28,9 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
-	client, err := kafka.NewClient([]string{"146.190.184.61:9094"}, &kafka.AuthConfig{
-		Username: "worker-user",
-		Password: "gil0GoIMyhpSWPEt0lDYCU3iiSXaJ3nH",
+	client, err := kafka.NewClient([]string{"45.55.105.69:9094"}, &kafka.AuthConfig{
+		Username: "admin",
+		Password: "nnG66BuJfqZhEs5Tk8Jz8nEAiOeVyyf0",
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -59,7 +59,7 @@ func (s *apiServer) Run() {
 				"request_id":   requestID,
 			}
 
-			order := &order{ID: 1, Status: "created", Value: 100.0}
+			order := "mensagem via golang"
 			json, err := json.Marshal(order)
 			if err != nil {
 				return err

@@ -19,7 +19,7 @@ variable "node_name" {
 }
 
 variable "node_size" {
-  default = "s-4vcpu-8gb"
+  default = "s-8vcpu-16gb"
 }
 
 variable "node_count" {
