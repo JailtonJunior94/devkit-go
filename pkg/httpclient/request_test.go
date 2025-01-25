@@ -49,15 +49,17 @@ func (s *MakeRequestSuite) TestMakeRequest() {
 		name     string
 		args     args
 		expected func(address *Address, err error)
-	}{{
-		name: "should return an error when the request fails",
-		args: args{zipCode: "06503015"},
-		expected: func(address *Address, err error) {
-			s.Require().NoError(err)
-			s.NotNil(address)
-			s.Equal("06503-015", address.Cep)
+	}{
+		{
+			name: "should return an error when the request fails",
+			args: args{zipCode: "06503015"},
+			expected: func(address *Address, err error) {
+				s.Require().NoError(err)
+				s.NotNil(address)
+				s.Equal("06503-015", address.Cep)
+			},
 		},
-	}}
+	}
 
 	for _, scenario := range scenarios {
 		s.T().Run(scenario.name, func(t *testing.T) {
