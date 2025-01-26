@@ -3,8 +3,12 @@ package httpclient
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -77,4 +81,36 @@ func (s *MakeRequestSuite) TestMakeRequest() {
 			scenario.expected(address, err)
 		})
 	}
+}
+
+func TestRetryableTransport(t *testing.T) {
+	attempts := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			http.Error(w, "Temporary error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+	defer server.Close()
+
+	retryPolicy := func(err error, resp *http.Response) bool {
+		return resp != nil && resp.StatusCode >= 500
+	}
+
+	client := NewHTTPClientRetryable(
+		WithMaxRetries(3),
+		WithRetryPolicy(retryPolicy),
+		WithBackoff(100*time.Millisecond),
+	)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	assert.NoError(t, err)
+
+	resp, err := client.Do(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
