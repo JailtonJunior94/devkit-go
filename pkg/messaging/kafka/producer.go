@@ -22,6 +22,7 @@ func (b *broker) NewProducerFromBroker() (messaging.Publisher, error) {
 
 func (k *producer) Publish(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
 	kafkaMessage := kafka.Message{
+		Topic: topicOrQueue,
 		Key:   []byte(key),
 		Value: message.Body,
 	}
@@ -30,8 +31,5 @@ func (k *producer) Publish(ctx context.Context, topicOrQueue, key string, header
 		kafkaMessage.Headers = append(kafkaMessage.Headers, kafka.Header{Key: key, Value: []byte(value)})
 	}
 
-	if err := k.producer.WriteMessages(ctx, kafkaMessage); err != nil {
-		return err
-	}
-	return nil
+	return k.producer.WriteMessages(ctx, kafkaMessage)
 }

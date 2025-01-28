@@ -2,10 +2,13 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging/kafka"
+	"github.com/JailtonJunior94/devkit-go/pkg/vos"
+
 	"github.com/cenkalti/backoff/v4"
 )
 
@@ -17,31 +20,34 @@ func NewConsumer() *consumer {
 }
 
 func (s *consumer) Run() {
-	client, err := kafka.NewClient([]string{"45.55.105.69:9094"}, &kafka.AuthConfig{
-		Username: "admin",
-		Password: "nnG66BuJfqZhEs5Tk8Jz8nEAiOeVyyf0",
-	})
+	ctx := context.Background()
+
+	broker, err := kafka.NewBroker(ctx, []string{"localhost:9092"}, vos.PlainText, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer broker.Close()
+
+	backoff := backoff.NewExponentialBackOff()
+	backoff.MaxElapsedTime = time.Second * 3
+
+	consumer, err := broker.NewConsumerFromBroker(
+		kafka.WithRetry(100),
+		kafka.WithMaxRetries(3),
+		kafka.WithBackoff(backoff),
+		kafka.WithTopicName("orders"),
+		kafka.WithOffset(kafka.FirstOffset),
+		kafka.WithTopicNameDLT("orders-dlt"),
+		kafka.WithConsumerGroupID("order-consumer-group"),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	backoff := backoff.NewExponentialBackOff()
-	backoff.MaxElapsedTime = time.Second * 1
-
-	consumer := kafka.NewConsumer(
-		kafka.WithTopic("orders"),
-		kafka.WithGroupID("order-consumer-group"),
-		kafka.WithBackoff(backoff),
-		kafka.WithMaxRetries(3),
-		kafka.WithRetryChan(100),
-		kafka.WithDLQ("orders_dlq"),
-		kafka.WithClient(client),
-	)
-
 	consumer.RegisterHandler("order_created", OrderCreatedHandler)
 	consumer.RegisterHandler("order_updated", OrderUpdatedHandler)
 
-	if err := consumer.Consume(context.Background()); err != nil {
+	if err := consumer.Consume(ctx); err != nil {
 		log.Fatal(err)
 	}
 
@@ -50,9 +56,12 @@ func (s *consumer) Run() {
 }
 
 func OrderCreatedHandler(ctx context.Context, params map[string]string, body []byte) error {
-	log.Println("Received header:OrderCreatedHandler", params)
-	log.Println("Received message:OrderCreatedHandler", string(body))
-	return nil
+
+	return errors.New("retornando erro para enviar para dlt")
+
+	// log.Println("Received header:OrderCreatedHandler", params)
+	// log.Println("Received message:OrderCreatedHandler", string(body))
+	// return nil
 }
 
 func OrderUpdatedHandler(ctx context.Context, params map[string]string, body []byte) error {

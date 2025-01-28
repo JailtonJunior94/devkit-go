@@ -42,11 +42,11 @@ func WithGroupID(groupID string) Option {
 	}
 }
 
-func WithMaxRetries(maxRetries int) Option {
-	return func(consumer *consumer) {
-		consumer.maxRetries = maxRetries
-	}
-}
+// func WithMaxRetries(maxRetries int) Option {
+// 	return func(consumer *consumer) {
+// 		consumer.maxRetries = maxRetries
+// 	}
+// }
 
 func WithRetryChan(sizeChan int) Option {
 	return func(consumer *consumer) {
@@ -54,11 +54,11 @@ func WithRetryChan(sizeChan int) Option {
 	}
 }
 
-func WithBackoff(backoff backoff.BackOff) Option {
-	return func(consumer *consumer) {
-		consumer.backoff = backoff
-	}
-}
+// func WithBackoff(backoff backoff.BackOff) Option {
+// 	return func(consumer *consumer) {
+// 		consumer.backoff = backoff
+// 	}
+// }
 
 func WithDLQ(topicDLQ string) Option {
 	return func(consumer *consumer) {

@@ -13,7 +13,7 @@ import (
 type Broker interface {
 	Close() error
 	NewProducerFromBroker() (messaging.Publisher, error)
-	NewConsumerFromBroker() (messaging.Consumer, error)
+	NewConsumerFromBroker(options ...Options) (messaging.Consumer, error)
 }
 
 type broker struct {
@@ -23,18 +23,22 @@ type broker struct {
 }
 
 func NewBroker(ctx context.Context, brokers []string, mechanism vos.Mechanism, authConfig *AuthConfig) (Broker, error) {
-	auth := map[vos.Mechanism]ClientStrategy{
+	authMechanism := map[vos.Mechanism]BrokerStrategy{
 		vos.Plain:     &Plain{},
 		vos.Scram:     &SCRAM{},
 		vos.PlainText: &PlainText{},
 	}
 
-	config, exists := auth[mechanism]
+	config, exists := authMechanism[mechanism]
 	if !exists {
 		return nil, errors.New("mechanism not supported")
 	}
 
-	dialer := config.Configure(authConfig)
+	dialer, err := config.Configure(authConfig)
+	if err != nil {
+		return nil, err
+	}
+
 	conn, err := dialer.DialContext(ctx, "tcp", brokers[0])
 	if err != nil {
 		return nil, err

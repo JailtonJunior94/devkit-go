@@ -12,13 +12,8 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/httpserver"
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging/kafka"
+	"github.com/JailtonJunior94/devkit-go/pkg/vos"
 )
-
-type order struct {
-	ID     int     `json:"id"`
-	Status string  `json:"status"`
-	Value  float64 `json:"value"`
-}
 
 type apiServer struct {
 }
@@ -28,24 +23,15 @@ func NewApiServer() *apiServer {
 }
 
 func (s *apiServer) Run() {
-	client, err := kafka.NewClient([]string{"45.55.105.69:9094"}, &kafka.AuthConfig{
-		Username: "admin",
-		Password: "nnG66BuJfqZhEs5Tk8Jz8nEAiOeVyyf0",
-	})
+	ctx := context.Background()
+
+	broker, err := kafka.NewBroker(ctx, []string{"localhost:9092"}, vos.PlainText, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer broker.Close()
 
-	admin, err := kafka.NewKafkaBuilder(client)
-	if err != nil {
-		log.Fatal(err)
-	}
-	admin.DeclareTopics(
-		kafka.NewTopicConfig("orders", 1, 1),
-		kafka.NewTopicConfig("orders_dlq", 1, 1),
-	).Build()
-
-	producer, err := kafka.NewPublisher(client)
+	producer, err := broker.NewProducerFromBroker()
 	if err != nil {
 		log.Fatal(err)
 	}
