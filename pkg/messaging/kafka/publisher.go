@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
@@ -39,4 +40,12 @@ func (k *publisher) Publish(ctx context.Context, topicOrQueue, key string, heade
 
 	log.Printf("Message sent to partition %d at offset %d\n", partition, offset)
 	return nil
+}
+
+func (k *publisher) PublishBatch(ctx context.Context, topic, key string, headers map[string]string, messages []*messaging.Message) error {
+	return errors.New("not implemented")
+}
+
+func (k *publisher) Close() error {
+	return k.producer.Close()
 }

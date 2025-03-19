@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -76,6 +77,14 @@ func (c *consumer) Consume(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (c *consumer) ConsumeBatch(ctx context.Context) error {
+	return errors.New("not implemented")
+}
+
+func (c *consumer) Close() error {
+	return c.channel.Close()
 }
 
 func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {

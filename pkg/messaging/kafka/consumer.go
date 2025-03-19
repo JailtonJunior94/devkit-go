@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -103,6 +104,14 @@ func (c *consumer) Consume(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func (c *consumer) ConsumeBatch(ctx context.Context) error {
+	return errors.New("not implemented")
+}
+
+func (c *consumer) Close() error {
+	return c.consumerGroup.Close()
 }
 
 func (c *consumer) dispatcher(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage, handler messaging.ConsumeHandler) error {

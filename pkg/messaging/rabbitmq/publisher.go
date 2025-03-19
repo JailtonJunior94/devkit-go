@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 
@@ -29,4 +30,12 @@ func (r *rabbitMQ) Publish(ctx context.Context, topicOrQueue, key string, header
 		msg.Headers[key] = value
 	}
 	return r.channel.PublishWithContext(ctx, topicOrQueue, key, false, false, msg)
+}
+
+func (k *rabbitMQ) PublishBatch(ctx context.Context, topic, key string, headers map[string]string, messages []*messaging.Message) error {
+	return errors.New("not implemented")
+}
+
+func (r *rabbitMQ) Close() error {
+	return r.channel.Close()
 }

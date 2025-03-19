@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"io"
 	"log"
 	"time"
 
@@ -79,6 +80,35 @@ func (k *reader) Consume(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func (k *reader) ConsumeBatch(ctx context.Context) error {
+	go func() {
+		for {
+			message, err := k.kafkaReader.FetchMessage(ctx)
+			if err != nil {
+				if err == io.EOF {
+					continue
+				}
+				log.Fatalf("failed to fetch messages: %v", err)
+				continue
+			}
+
+			if handlers, ok := k.handlers[k.extractHeader(message)["event_type"]]; ok {
+				for _, handler := range handlers {
+					if err := k.dispatcher(ctx, message, handler); err != nil {
+						log.Fatalf("failed to dispatch message: %v", err)
+						continue
+					}
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+func (k *reader) Close() error {
+	return k.kafkaReader.Close()
 }
 
 func (k *reader) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
