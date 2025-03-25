@@ -42,16 +42,68 @@ func (s *apiServer) Run() {
 	}
 	defer producer.Close()
 
-	params, err := os.ReadFile("parametros.json")
-	if err != nil {
-		log.Fatal(err)
+	files := []string{"parametros_0.json", "parametros_2.json"}
+	for _, file := range files {
+		params, err := os.ReadFile(file)
+		if err != nil {
+			log.Printf("Error reading file %s: %v", file, err)
+			continue
+		}
+
+		if err := producer.Publish(ctx, "selecao_corte_hml", "", nil, &messaging.Message{Body: params}); err != nil {
+			log.Printf("Error publishing message from file %s: %v", file, err)
+			continue
+		}
 	}
 
-	if err := producer.Publish(ctx, "selecao_corte", "", nil, &messaging.Message{Body: params}); err != nil {
-		log.Fatal(err)
-	}
-
-	// lotes := []int{12, 13, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45}
+	// lotes := []int{
+	// 	12,
+	// 	13,
+	// 	16,
+	// 	17,
+	// 	18,
+	// 	20,
+	// 	21,
+	// 	22,
+	// 	23,
+	// 	24,
+	// 	25,
+	// 	26,
+	// 	27,
+	// 	28,
+	// 	29,
+	// 	30,
+	// 	31,
+	// 	32,
+	// 	33,
+	// 	34,
+	// 	35,
+	// 	36,
+	// 	37,
+	// 	38,
+	// 	39,
+	// 	40,
+	// 	41,
+	// 	42,
+	// 	43,
+	// 	44,
+	// 	45,
+	// 	46,
+	// 	47,
+	// 	48,
+	// 	49,
+	// 	50,
+	// 	51,
+	// 	52,
+	// 	53,
+	// 	54,
+	// 	55,
+	// 	56,
+	// 	57,
+	// 	58,
+	// 	59,
+	// 	60,
+	// }
 	// status := []string{"Sucesso", "ComErro", "SemMovimento", "JaCortadoAnteriormente"}
 
 	// for lote := range lotes {
