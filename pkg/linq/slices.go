@@ -1,5 +1,7 @@
 package linq
 
+import "slices"
+
 type FilterFunc[T any] func(T) bool
 
 func Filter[T any](items []T, fn FilterFunc[T]) []T {
@@ -30,7 +32,7 @@ func Remove[T any](items []T, fn RemoveFunc[T]) []T {
 	newSlice := make([]T, len(items))
 	for index, item := range items {
 		if fn(item) {
-			newSlice = append(items[:index], items[index+1:]...)
+			newSlice = slices.Delete(items, index, index+1)
 		}
 	}
 	return newSlice
