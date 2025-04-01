@@ -2,7 +2,9 @@ package vos
 
 import (
 	"errors"
-	"fmt"
+
+	"golang.org/x/text/currency"
+	"golang.org/x/text/message"
 )
 
 type Money struct {
@@ -33,7 +35,8 @@ func (m Money) Div(divisor float64) (Money, error) {
 }
 
 func (m Money) String() string {
-	return fmt.Sprintf("R$%.2f", m.value)
+	p := message.NewPrinter(message.MatchLanguage("pt-BR"))
+	return p.Sprintf("%s%.2f", currency.Symbol(currency.BRL), m.value)
 }
 
 func (m Money) Equals(other Money) bool {
