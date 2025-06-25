@@ -35,20 +35,24 @@ func (s *consumer) Run() {
 		kafka.WithRetry(100),
 		kafka.WithMaxRetries(3),
 		kafka.WithBackoff(backoff),
-		kafka.WithTopicName("orders"),
+		kafka.WithTopicName("conclusao_corte_local"),
 		kafka.WithOffset(kafka.FirstOffset),
-		kafka.WithTopicNameDLT("orders-dlt"),
+		kafka.WithTopicNameDLT("conclusao_corte_local_dlq"),
 		kafka.WithConsumerGroupID("order-consumer-group"),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	consumer.RegisterHandler("order_created", OrderCreatedHandler)
-	consumer.RegisterHandler("order_updated", OrderUpdatedHandler)
+	// Registrar handlers
+	consumer.RegisterHandler("", func(ctx context.Context, headers map[string]string, body []byte) error {
+		log.Printf("Processing event_type_1: %s", string(body))
+		return nil
+	})
 
-	if err := consumer.Consume(ctx); err != nil {
-		log.Fatal(err)
+	// Consumir mensagens com worker pool
+	if err := consumer.ConsumeWithWorkerPool(ctx, 50); err != nil {
+		log.Fatalf("failed to consume messages: %v", err)
 	}
 
 	forever := make(chan bool)

@@ -47,6 +47,10 @@ func NewConsumer(options ...Option) (messaging.Consumer, error) {
 	return consumer, nil
 }
 
+func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
+	return nil
+}
+
 func (c *consumer) Consume(ctx context.Context) error {
 	if err := c.channel.Qos(c.prefetch, 0, false); err != nil {
 		return err

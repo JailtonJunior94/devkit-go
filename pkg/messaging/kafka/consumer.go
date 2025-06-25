@@ -125,6 +125,10 @@ func (c *consumer) dispatcher(ctx context.Context, session sarama.ConsumerGroupS
 	return nil
 }
 
+func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
+	return nil
+}
+
 func (c *consumer) retry(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage, err error) error {
 	c.retryChan <- message
 	go func() {

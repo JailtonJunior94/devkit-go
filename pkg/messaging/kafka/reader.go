@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
@@ -107,8 +108,49 @@ func (k *reader) ConsumeBatch(ctx context.Context) error {
 	return nil
 }
 
+func (k *reader) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
+	messageChan := make(chan kafka.Message, workerCount)
+
+	for range workerCount {
+		go k.worker(ctx, messageChan)
+	}
+
+	go func() {
+		for {
+			msg, err := k.kafkaReader.ReadMessage(ctx)
+			if err != nil {
+				log.Printf("failed to read message: %v", err)
+				if err == io.EOF {
+					continue
+				}
+				break
+			}
+			messageChan <- msg
+		}
+		close(messageChan)
+	}()
+
+	return nil
+}
+
 func (k *reader) Close() error {
 	return k.kafkaReader.Close()
+}
+
+func (k *reader) worker(ctx context.Context, messageChan <-chan kafka.Message) {
+	for message := range messageChan {
+		eventType := k.extractHeader(message)["event_type"]
+		if handlers, ok := k.handlers[eventType]; ok {
+			for _, handler := range handlers {
+				if err := k.dispatcher(ctx, message, handler); err != nil {
+					log.Printf("failed to dispatch message: %v", err)
+					continue
+				}
+			}
+		} else {
+			log.Printf("no handler found for event type: %s", eventType)
+		}
+	}
 }
 
 func (k *reader) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
@@ -167,7 +209,7 @@ func (k *reader) moveToDLT(ctx context.Context, message kafka.Message, err error
 
 	headers := map[string]string{
 		"error":      err.Error(),
-		"attempts":   string(k.retries),
+		"attempts":   strconv.Itoa(k.retries),
 		"event_type": k.extractHeader(message)["event_type"],
 	}
 
