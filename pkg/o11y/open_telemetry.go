@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
@@ -216,16 +216,12 @@ func WithTracerProvider(ctx context.Context, endpoint string) Option {
 
 func WithLoggerProvider(ctx context.Context, endpoint string) Option {
 	return func(observability *observability) {
-		loggerExporter, err := otlploggrpc.New(
-			ctx,
-			otlploggrpc.WithInsecure(),
-			otlploggrpc.WithEndpoint(endpoint),
-		)
+		loggerExporter, err := otlploghttp.New(ctx, otlploghttp.WithEndpoint(endpoint))
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		loggerProcessor := sdkLogger.NewSimpleProcessor(loggerExporter)
+		loggerProcessor := sdkLogger.NewBatchProcessor(loggerExporter)
 		loggerProvider := sdkLogger.NewLoggerProvider(
 			sdkLogger.WithProcessor(loggerProcessor),
 			sdkLogger.WithResource(observability.resource),
