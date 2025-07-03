@@ -1,34 +1,61 @@
-name: Continuos Integration
+name: Pipeline CI/CD
+run-name: Pipeline CI/CD executada por ${{github.actor}} em ${{github.event_name}} para ${{github.repository}}
+
 on:
+  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main, develop]
   pull_request:
     types: [opened, synchronize, reopened]
+
+env:
+  GO_VERSION: "1.24"
 
 jobs:
   lint:
     name: Lint
-    runs-on: self-hosted
+    runs-on: [ubuntu-latest, windows-latest]
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{env.GO_VERSION}}
           cache: false
-      - uses: actions/checkout@v4
-      - name: Lint
+
+      - name: Linter
         run: make lint
 
   test:
     name: Test
-    runs-on: self-hosted
+    runs-on: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{env.GO_VERSION}}
           cache: false
+
       - name: Test
         run: make test
+
+  vulncheck:
+    name: Vulncheck
+    runs-on: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{env.GO_VERSION}}
+          cache: false
+
+      - name: Vulncheck
+        run: make vulncheck
