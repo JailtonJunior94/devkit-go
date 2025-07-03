@@ -18,10 +18,17 @@ vulncheck:
 	govulncheck ./...
 
 start_rabbitmq:
-	docker compose up --build -d --remove-orphans rabbitmq 
+	@echo "Starting RabbitMQ..."
+	docker compose up --build -d --remove-orphans rabbitmq
 
 start_kafka:
-	docker compose up --build -d --remove-orphans zookeeper broker kafka_ui 
+	@echo "Starting Kafka..."
+	docker compose up --build -d --remove-orphans kafka kafka-init redpandadata
+
+start_o11y:
+	@echo "Starting O11y..."
+	docker compose up --build -d --remove-orphans otel_collector prometheus jaeger grafana loki
 
 stop_docker:
+	@echo "Stopping Docker containers..."
 	docker compose down
