@@ -14,7 +14,11 @@ import (
 
 func WithMeterProvider(ctx context.Context, endpoint string) Option {
 	return func(observability *observability) {
-		metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpoint(endpoint))
+		metricExporter, err := otlpmetricgrpc.New(
+			ctx,
+			otlpmetricgrpc.WithInsecure(),
+			otlpmetricgrpc.WithEndpoint(endpoint),
+		)
 		if err != nil {
 			log.Fatalf("failed to initialize metric exporter grpc: %v", err)
 		}

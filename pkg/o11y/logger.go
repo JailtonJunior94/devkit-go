@@ -13,7 +13,11 @@ import (
 
 func WithLoggerProvider(ctx context.Context, endpoint string) Option {
 	return func(observability *observability) {
-		loggerExporter, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(endpoint))
+		loggerExporter, err := otlploggrpc.New(
+			ctx,
+			otlploggrpc.WithInsecure(),
+			otlploggrpc.WithEndpoint(endpoint),
+		)
 		if err != nil {
 			log.Fatalf("failed to initialize logger exporter: %v", err)
 		}

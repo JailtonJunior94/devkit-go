@@ -14,7 +14,11 @@ import (
 
 func WithTracerProvider(ctx context.Context, endpoint string) Option {
 	return func(observability *observability) {
-		traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(endpoint))
+		traceExporter, err := otlptracegrpc.New(
+			ctx,
+			otlptracegrpc.WithInsecure(),
+			otlptracegrpc.WithEndpoint(endpoint),
+		)
 		if err != nil {
 			log.Fatalf("failed to initialize trace exporter: %v", err)
 		}
