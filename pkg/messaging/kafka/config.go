@@ -70,7 +70,7 @@ func (k *kafkaBuilder) Topic(name string) (string, error) {
 		return "", err
 	}
 
-	if len(metadata) <= 0 || metadata[0].Err != sarama.ErrNoError {
+	if len(metadata) == 0 || metadata[0].Err != sarama.ErrNoError {
 		return "", metadata[0].Err
 	}
 	return metadata[0].Name, nil

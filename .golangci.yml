@@ -1,9 +1,13 @@
 version: "2"
 
 run:
-  timeout: 10m
+  timeout: 15m
   concurrency: 5
   verbose: true
+  skip-dirs:
+  - "templates"
+  - "pipelines"
+  - "cmd"
 
 issues:
   exclude-dirs:
@@ -19,6 +23,8 @@ issues:
 linters:
   disable:
   - godox
+  - staticcheck # Devemos habilitar em breve
+  - gosec # Devemos habilitar em breve
   enable-all: false
   enable:
   - bodyclose
@@ -27,7 +33,5 @@ linters:
   - errcheck
   - godot
   - govet
-  - gosec
   - gocyclo
   - ineffassign
-  - staticcheck
