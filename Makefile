@@ -1,3 +1,7 @@
+dotenv:
+	@echo "Creating .env file..."
+	cp .env.example .env
+
 lint:
 	@echo "Running linter..."
 	@echo "Installing golangci-lint..."
