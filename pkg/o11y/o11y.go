@@ -6,13 +6,13 @@ import (
 	"log/slog"
 	"os"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	meter "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
-
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,6 +27,7 @@ const (
 type (
 	Observability interface {
 		Tracer() trace.Tracer
+		Meter() meter.Meter
 		LoggerProvider() *slog.Logger
 		MeterProvider() *metric.MeterProvider
 		TracerProvider() *sdktrace.TracerProvider
@@ -94,6 +95,10 @@ func (o *observability) TracerProvider() *sdktrace.TracerProvider {
 
 func (o *observability) LoggerProvider() *slog.Logger {
 	return o.logger
+}
+
+func (o *observability) Meter() meter.Meter {
+	return o.meterProvider.Meter(o.serviceName)
 }
 
 func (o *observability) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, Span) {
