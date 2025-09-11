@@ -10,3 +10,10 @@ type NullableTime struct {
 func NewNullableTime(t time.Time) NullableTime {
 	return NullableTime{Time: &t, Valid: true}
 }
+
+func (n NullableTime) Value() time.Time {
+	if n.Valid && n.Time != nil {
+		return *n.Time
+	}
+	return time.Time{}
+}
