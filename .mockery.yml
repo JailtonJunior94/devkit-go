@@ -1,0 +1,13 @@
+structname: '{{ .InterfaceName }}'
+filename: "{{ .InterfaceName | snakecase }}.go"
+template: testify
+template-data:
+  unroll-variadic: true
+packages:
+  github.com/JailtonJunior94/devkit-go/pkg/o11y:
+    config:
+      dir: ./pkg/mocks
+      pkgname: mocks
+    interfaces:
+      Observability: {}
+      Span: {}

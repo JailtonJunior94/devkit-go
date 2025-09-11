@@ -8,6 +8,12 @@ lint:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.2.1
 	GOGC=20 golangci-lint run --config .golangci.yml ./...
 
+.PHONY: mockery
+mocks:
+	@echo "Generating mocks..."
+	go install github.com/vektra/mockery/v3@v3.5.0
+	mockery
+
 test:
 	@echo "Running tests..."
 	go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
