@@ -67,7 +67,7 @@ func WithMeterProviderStdout() Option {
 			metric.WithResource(observability.resource),
 			metric.WithReader(metric.NewPeriodicReader(
 				exporter,
-				metric.WithInterval(2*time.Second)),
+				metric.WithInterval(1*time.Second)),
 			),
 		)
 

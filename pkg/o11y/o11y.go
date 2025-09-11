@@ -81,6 +81,16 @@ func NewDevelopmentObservability(serviceName, serviceVersion string) Observabili
 	)
 }
 
+func NewTestObservability(serviceName, serviceVersion string) Observability {
+	return NewObservability(
+		WithServiceName(serviceName),
+		WithServiceVersion(serviceVersion),
+		WithResource(),
+		WithMeterProviderStdout(),
+		WithTracerProviderMemory(),
+	)
+}
+
 func (o *observability) Tracer() trace.Tracer {
 	return o.tracer
 }

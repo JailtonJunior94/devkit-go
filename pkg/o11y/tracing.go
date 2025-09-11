@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func WithTracerProvider(ctx context.Context, endpoint string) Option {
@@ -66,6 +67,18 @@ func WithTracerProviderStdout() Option {
 		tracerProvider := sdktrace.NewTracerProvider(
 			sdktrace.WithSampler(sdktrace.AlwaysSample()),
 			sdktrace.WithSyncer(exporter),
+		)
+
+		observability.tracer = tracerProvider.Tracer(observability.serviceName)
+		observability.tracerProvider = tracerProvider
+	}
+}
+
+func WithTracerProviderMemory() Option {
+	return func(observability *observability) {
+		tracerProvider := sdktrace.NewTracerProvider(
+			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+			sdktrace.WithSyncer(tracetest.NewInMemoryExporter()),
 		)
 
 		observability.tracer = tracerProvider.Tracer(observability.serviceName)
