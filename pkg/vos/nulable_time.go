@@ -12,7 +12,7 @@ func NewNullableTime(t time.Time) NullableTime {
 }
 
 func (n NullableTime) Value() time.Time {
-	if n.Valid && n.Time != nil {
+	if n.Time != nil {
 		return *n.Time
 	}
 	return time.Time{}
