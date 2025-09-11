@@ -77,7 +77,7 @@ func WithTracerProviderStdout() Option {
 func WithTracerProviderMemory() Option {
 	return func(observability *observability) {
 		tracerProvider := sdktrace.NewTracerProvider(
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+			sdktrace.WithSampler(sdktrace.NeverSample()),
 			sdktrace.WithSyncer(tracetest.NewInMemoryExporter()),
 		)
 
