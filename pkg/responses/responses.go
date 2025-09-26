@@ -13,10 +13,20 @@ func JSON(w http.ResponseWriter, statusCode int, data any) {
 	}
 }
 
-func Error(w http.ResponseWriter, statusCode int, errorMessage string) {
+func Error(w http.ResponseWriter, statusCode int, message string) {
 	JSON(w, statusCode, struct {
-		ErrorMessage string `json:"errorMessage"`
+		Message string `json:"message"`
 	}{
-		ErrorMessage: errorMessage,
+		Message: message,
+	})
+}
+
+func ErrorWithDetails(w http.ResponseWriter, statusCode int, message string, details any) {
+	JSON(w, statusCode, struct {
+		Message string `json:"message"`
+		Details any    `json:"details,omitempty"`
+	}{
+		Message: message,
+		Details: details,
 	})
 }
