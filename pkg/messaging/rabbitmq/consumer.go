@@ -118,7 +118,7 @@ func (c *consumer) handleRetry(ch *amqp.Channel, delivery amqp.Delivery) error {
 }
 
 func (c *consumer) retry(delivery amqp.Delivery) bool {
-	deaths, ok := delivery.Headers["x-death"].([]interface{})
+	deaths, ok := delivery.Headers["x-death"].([]any)
 	if !ok || len(deaths) == 0 {
 		return true
 	}
