@@ -40,20 +40,16 @@ func NewConsumer(options ...Option) (messaging.Consumer, error) {
 
 	id, err := vos.NewUUID()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("consumer: %v", err)
 	}
 
 	consumer.name = fmt.Sprintf("%s:%s:%s", consumer.name, consumer.queue, id.String())
 	return consumer, nil
 }
 
-func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
-	return nil
-}
-
 func (c *consumer) Consume(ctx context.Context) error {
 	if err := c.channel.Qos(c.prefetch, 0, false); err != nil {
-		return err
+		return fmt.Errorf("consume: %v", err)
 	}
 
 	messages, err := c.channel.Consume(
@@ -66,7 +62,7 @@ func (c *consumer) Consume(ctx context.Context) error {
 		c.args,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("consume: %v", err)
 	}
 
 	go func() {
@@ -83,10 +79,6 @@ func (c *consumer) Consume(ctx context.Context) error {
 	return nil
 }
 
-func (c *consumer) ConsumeBatch(ctx context.Context) error {
-	return errors.New("not implemented")
-}
-
 func (c *consumer) Close() error {
 	return c.channel.Close()
 }
@@ -98,23 +90,23 @@ func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHa
 func (c *consumer) dispatcher(ctx context.Context, delivery amqp.Delivery, handler messaging.ConsumeHandler) {
 	err := handler(ctx, c.extractHeader(delivery), delivery.Body)
 	if err != nil {
-		if err := c.handleRetry(c.channel, delivery); err != nil {
-			log.Println(err)
+		if err := c.handleRetry(ctx, c.channel, delivery); err != nil {
+			log.Fatalf("dispatcher: %v", err)
 		}
 	}
 
 	if err := delivery.Ack(true); err != nil {
-		log.Println(err)
+		log.Fatalf("dispatcher: %v", err)
 	}
 }
 
-func (c *consumer) handleRetry(ch *amqp.Channel, delivery amqp.Delivery) error {
+func (c *consumer) handleRetry(ctx context.Context, ch *amqp.Channel, delivery amqp.Delivery) error {
 	if c.retry(delivery) {
 		if err := delivery.Nack(false, false); err != nil {
-			return err
+			return fmt.Errorf("handle_retry: %v", err)
 		}
 	}
-	return c.sendDLQ(ch, delivery)
+	return c.sendDLQ(ctx, ch, delivery)
 }
 
 func (c *consumer) retry(delivery amqp.Delivery) bool {
@@ -135,15 +127,15 @@ func (c *consumer) retry(delivery amqp.Delivery) bool {
 	return false
 }
 
-func (c *consumer) sendDLQ(ch *amqp.Channel, delivery amqp.Delivery) error {
+func (c *consumer) sendDLQ(ctx context.Context, ch *amqp.Channel, delivery amqp.Delivery) error {
 	delete(delivery.Headers, "x-death")
-	err := ch.PublishWithContext(context.Background(), "", fmt.Sprintf("%s.dlq", delivery.RoutingKey), false, false, amqp.Publishing{
+	err := ch.PublishWithContext(ctx, "", fmt.Sprintf("%s.dlq", delivery.RoutingKey), false, false, amqp.Publishing{
 		ContentType: delivery.ContentType,
 		Body:        delivery.Body,
 	})
 
 	if err != nil {
-		return err
+		return fmt.Errorf("send_dlq: %v", err)
 	}
 	return nil
 }
@@ -154,6 +146,14 @@ func (c *consumer) extractHeader(delivery amqp.Delivery) map[string]string {
 		headers[key] = fmt.Sprintf("%v", value)
 	}
 	return headers
+}
+
+func (c *consumer) ConsumeBatch(ctx context.Context) error {
+	return errors.New("not implemented")
+}
+
+func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
+	return errors.New("not implemented")
 }
 
 func WithName(name string) Option {

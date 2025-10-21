@@ -1,4 +1,4 @@
-package rabbitmq
+package rabbitmq_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
+	"github.com/JailtonJunior94/devkit-go/pkg/messaging/rabbitmq"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/suite"
@@ -20,11 +21,11 @@ type PublisherSuite struct {
 	orderQueue        string
 	orderCreated      string
 	orderUpdated      string
-	ctx               context.Context
-	rabbitMQContainer *RabbitMQContainer
-	publisher         messaging.Publisher
-	connection        *amqp.Connection
 	channel           *amqp.Channel
+	ctx               context.Context
+	connection        *amqp.Connection
+	publisher         messaging.Publisher
+	rabbitMQContainer *rabbitmq.RabbitMQContainer
 }
 
 func TestPublisherSuite(t *testing.T) {
@@ -33,27 +34,27 @@ func TestPublisherSuite(t *testing.T) {
 
 func (s *PublisherSuite) SetupTest() {
 	s.ctx = context.Background()
-	s.rabbitMQContainer = SetupRabbitMQ(s.T())
+	s.rabbitMQContainer = rabbitmq.SetupRabbitMQ(s.T())
 	s.orderExchange = "order"
 	s.orderQueue = "order"
 	s.orderCreated = "order_created"
 	s.orderUpdated = "order_updated"
 
 	var (
-		Exchanges = []*Exchange{
-			NewExchange(s.orderExchange, "direct"),
+		Exchanges = []*rabbitmq.Exchange{
+			rabbitmq.NewExchange(s.orderExchange, "direct"),
 		}
 
-		Bindings = []*Binding{
-			NewBindingRouting(s.orderQueue, s.orderExchange, s.orderCreated),
-			NewBindingRouting(s.orderQueue, s.orderExchange, s.orderUpdated),
+		Bindings = []*rabbitmq.Binding{
+			rabbitmq.NewBindingRouting(s.orderQueue, s.orderExchange, s.orderCreated),
+			rabbitmq.NewBindingRouting(s.orderQueue, s.orderExchange, s.orderUpdated),
 		}
 	)
 
 	s.connection, _ = amqp.Dial(s.rabbitMQContainer.URL)
 	s.channel, _ = s.connection.Channel()
 
-	_, err := NewAmqpBuilder(s.channel).
+	_, err := rabbitmq.NewAmqpBuilder(s.channel).
 		DeclareExchanges(Exchanges...).
 		DeclareBindings(Bindings...).
 		DeclarePrefetchCount(5).
@@ -66,7 +67,7 @@ func (s *PublisherSuite) SetupTest() {
 		log.Fatal(err)
 	}
 
-	s.publisher = NewRabbitMQPublisher(s.channel)
+	s.publisher = rabbitmq.NewRabbitMQPublisher(s.channel)
 }
 
 func (s *PublisherSuite) TearDownTest() {

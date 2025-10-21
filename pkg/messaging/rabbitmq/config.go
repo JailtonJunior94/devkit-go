@@ -64,13 +64,13 @@ func (a *AmqpBuilder) WithRetry() *AmqpBuilder {
 
 func (a *AmqpBuilder) Apply() (*AmqpBuilder, error) {
 	if err := a.channel.Qos(a.prefetchCount, 0, false); err != nil {
-		return a, err
+		return a, fmt.Errorf("amqp_builder: qos: %v", err)
 	}
 
 	if len(a.exchanges) > 0 {
 		for _, exchange := range a.exchanges {
 			if err := a.channel.ExchangeDeclare(exchange.Exchange, exchange.Kind, true, false, false, false, nil); err != nil {
-				return a, err
+				return a, fmt.Errorf("amqp_builder: exchange_declare: %v", err)
 			}
 		}
 	}
@@ -79,25 +79,25 @@ func (a *AmqpBuilder) Apply() (*AmqpBuilder, error) {
 		for _, binding := range a.bindings {
 			_, err := a.channel.QueueDeclare(binding.Queue, true, false, false, false, a.queueArgs(binding.Queue))
 			if err != nil {
-				return a, err
+				return a, fmt.Errorf("amqp_builder: queue_declare: %v", err)
 			}
 
 			if err := a.declareDLQ(binding.Queue); err != nil {
-				return a, err
+				return a, fmt.Errorf("amqp_builder: queue_declare_dlq: %v", err)
 			}
 
 			if err := a.declareRetry(binding.Queue); err != nil {
-				return a, err
+				return a, fmt.Errorf("amqp_builder: queue_declare_retry: %v", err)
 			}
 
 			if binding.Routing != nil {
 				if err := a.channel.QueueBind(binding.Queue, *binding.Routing, binding.Exchange, false, nil); err != nil {
-					return a, err
+					return a, fmt.Errorf("amqp_builder: queue_bind: %v", err)
 				}
 			}
 
 			if err := a.channel.QueueBind(binding.Queue, "", binding.Exchange, false, nil); err != nil {
-				return a, err
+				return a, fmt.Errorf("amqp_builder: queue_bind: %v", err)
 			}
 		}
 	}
@@ -113,7 +113,7 @@ func (a *AmqpBuilder) declareDLQ(queue string) error {
 	dlqQueue := fmt.Sprintf("%s.%s", queue, DeadLetterSuffix)
 	_, err := a.channel.QueueDeclare(dlqQueue, true, false, false, false, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("queue_declare: %s", err)
 	}
 	return nil
 }
@@ -130,7 +130,7 @@ func (a *AmqpBuilder) declareRetry(queue string) error {
 		"x-message-ttl":             a.ttl.Milliseconds(),
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("queue_declare: %s", err)
 	}
 	return nil
 }
