@@ -50,7 +50,6 @@ func (s *consumer) Run() {
 
 	consumer, err := rabbitmq.NewConsumer(
 		rabbitmq.WithName("order"),
-		rabbitmq.WithConnection(connection),
 		rabbitmq.WithChannel(channel),
 		rabbitmq.WithQueue(OrderQueue),
 	)

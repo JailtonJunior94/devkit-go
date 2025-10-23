@@ -32,15 +32,16 @@ var (
 
 func Run() {
 	app := fx.New(
+		rabbitmq.ConfigModule,
 		fx.Provide(
-			rabbitmq.ProvideRabbitMQConnection,
+			rabbitmq.ProvideConnectionPool,
 			NewConsumerManager,
 		),
 		fx.Invoke(RegisterLifecycleHooks),
 	)
 
 	if err := app.Start(context.Background()); err != nil {
-		log.Fatalf("Failed to start application: %v", err)
+		log.Fatalf("failed to start application: %v", err)
 	}
 
 	<-app.Done()
@@ -69,7 +70,13 @@ func RegisterLifecycleHooks(lc fx.Lifecycle, consumerManager *ConsumerManager) {
 }
 
 func (c *ConsumerManager) Start(ctx context.Context) error {
-	_, err := rabbitmq.NewAmqpBuilder(c.connection.Channel).
+	ch, err := c.pool.GetChannel()
+	if err != nil {
+		return fmt.Errorf("failed to get channel from pool: %v", err)
+	}
+	defer c.pool.ReturnChannel(ch)
+
+	_, err = rabbitmq.NewAmqpBuilder(ch).
 		DeclareExchanges(Exchanges...).
 		DeclareBindings(Bindings...).
 		WithDLQ().
@@ -78,19 +85,18 @@ func (c *ConsumerManager) Start(ctx context.Context) error {
 		DeclarePrefetchCount(10).
 		Apply()
 	if err != nil {
-		return fmt.Errorf("failed to setup AMQP topology: %w", err)
+		return fmt.Errorf("failed to setup AMQP topology: %v", err)
 	}
 
 	consumer, err := rabbitmq.NewConsumer(
+		rabbitmq.WithChannel(ch),
 		rabbitmq.WithName("order-processor"),
-		rabbitmq.WithConnection(c.connection.Connection),
-		rabbitmq.WithChannel(c.connection.Channel),
 		rabbitmq.WithQueue(OrderQueue),
 		rabbitmq.WithPrefetch(5),
 		rabbitmq.WithAutoAck(false),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create consumer: %v", err)
 	}
 
 	consumer.RegisterHandler(OrderCreated, CustomerUpdatedHandler)
@@ -112,12 +118,12 @@ func (c *ConsumerManager) Stop(ctx context.Context) error {
 }
 
 type ConsumerManager struct {
-	consumer   messaging.Consumer
-	connection *rabbitmq.RabbitMQConnection
+	consumer messaging.Consumer
+	pool     *rabbitmq.ConnectionPool
 }
 
-func NewConsumerManager(connection *rabbitmq.RabbitMQConnection) *ConsumerManager {
-	return &ConsumerManager{connection: connection}
+func NewConsumerManager(pool *rabbitmq.ConnectionPool) *ConsumerManager {
+	return &ConsumerManager{pool: pool}
 }
 
 func CustomerUpdatedHandler(ctx context.Context, params map[string]string, body []byte) error {

@@ -1,7 +1,7 @@
 services:
   rabbitmq:
     container_name: messaging-rabbitmq
-    image: rabbitmq:4.0.2-management-alpine
+    image: rabbitmq:4.1.4-management-alpine
     environment:
       RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}

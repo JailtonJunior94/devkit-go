@@ -15,17 +15,16 @@ type (
 	Option func(consumer *consumer)
 
 	consumer struct {
-		connection *amqp.Connection
-		channel    *amqp.Channel
-		handler    map[string]messaging.ConsumeHandler
-		queue      string
-		name       string
-		prefetch   int
-		autoAck    bool
-		exclusive  bool
-		noLocal    bool
-		noWait     bool
-		args       amqp.Table
+		channel   *amqp.Channel
+		handler   map[string]messaging.ConsumeHandler
+		queue     string
+		name      string
+		prefetch  int
+		autoAck   bool
+		exclusive bool
+		noLocal   bool
+		noWait    bool
+		args      amqp.Table
 	}
 )
 
@@ -159,12 +158,6 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 func WithName(name string) Option {
 	return func(consumer *consumer) {
 		consumer.name = name
-	}
-}
-
-func WithConnection(conn *amqp.Connection) Option {
-	return func(consumer *consumer) {
-		consumer.connection = conn
 	}
 }
 

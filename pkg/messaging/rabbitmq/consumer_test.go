@@ -100,7 +100,6 @@ func (s *ConsumerSuite) TestConsumer() {
 		s.T().Run(scenario.name, func(t *testing.T) {
 			consumer, err := rabbitmq.NewConsumer(
 				rabbitmq.WithName("order"),
-				rabbitmq.WithConnection(s.connection),
 				rabbitmq.WithChannel(s.channel),
 				rabbitmq.WithQueue(s.orderQueue),
 			)
