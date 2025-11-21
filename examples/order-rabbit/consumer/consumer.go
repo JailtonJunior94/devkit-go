@@ -127,7 +127,7 @@ func NewConsumerManager(pool *rabbitmq.ConnectionPool) *ConsumerManager {
 }
 
 func CustomerUpdatedHandler(ctx context.Context, params map[string]string, body []byte) error {
-	log.Println("received header:CustomerUpdatedHandler", params)
-	log.Println("received message:CustomerUpdatedHandler", string(body))
+	log.Println("received header:CustomerUpdatedHandler: ", params)
+	log.Println("received message:CustomerUpdatedHandler: ", string(body))
 	return nil
 }
