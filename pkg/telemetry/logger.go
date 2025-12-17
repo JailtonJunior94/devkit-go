@@ -14,6 +14,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Pre-compiled regex patterns for error sanitization.
+// These are compiled once at init time to avoid runtime compilation overhead.
+var (
+	// Connection strings with credentials
+	reConnectionString = regexp.MustCompile(`://[^:]+:[^@]+@`)
+	// Bearer tokens (JWT format)
+	reBearerToken = regexp.MustCompile(`[Bb]earer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+`)
+	// API keys (common patterns)
+	reAPIKey = regexp.MustCompile(`[Aa]pi[_-]?[Kk]ey[=:]\s*["']?[A-Za-z0-9\-_]{20,}["']?`)
+	// Passwords in URLs or strings
+	rePassword = regexp.MustCompile(`[Pp]assword[=:]\s*["']?[^"'\s]+["']?`)
+)
+
 // Field represents a key-value pair for structured logging.
 type Field struct {
 	Key   string
@@ -164,25 +177,11 @@ func sanitizeError(err error) string {
 
 	msg := err.Error()
 
-	// Redact common sensitive patterns
-	patterns := []struct {
-		pattern string
-		replace string
-	}{
-		// Connection strings with credentials
-		{`://[^:]+:[^@]+@`, "://[REDACTED]@"},
-		// Bearer tokens
-		{`[Bb]earer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+`, "Bearer [REDACTED]"},
-		// API keys (common patterns)
-		{`[Aa]pi[_-]?[Kk]ey[=:]\s*["']?[A-Za-z0-9\-_]{20,}["']?`, "api_key=[REDACTED]"},
-		// Passwords in URLs or strings
-		{`[Pp]assword[=:]\s*["']?[^"'\s]+["']?`, "password=[REDACTED]"},
-	}
-
-	for _, p := range patterns {
-		re := regexp.MustCompile(p.pattern)
-		msg = re.ReplaceAllString(msg, p.replace)
-	}
+	// Use pre-compiled regex patterns for better performance
+	msg = reConnectionString.ReplaceAllString(msg, "://[REDACTED]@")
+	msg = reBearerToken.ReplaceAllString(msg, "Bearer [REDACTED]")
+	msg = reAPIKey.ReplaceAllString(msg, "api_key=[REDACTED]")
+	msg = rePassword.ReplaceAllString(msg, "password=[REDACTED]")
 
 	return msg
 }

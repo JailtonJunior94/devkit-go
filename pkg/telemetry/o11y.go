@@ -3,6 +3,7 @@ package o11y
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -63,22 +64,34 @@ func SetupTelemetry(
 
 	metrics, shutdownMetrics, err := NewMetrics(ctx, cfg.MetricsEndpoint, cfg.ServiceName, res, metricsOpts...)
 	if err != nil {
-		_ = shutdownTracer(ctx)
+		if shutdownErr := shutdownTracer(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown tracer during cleanup: %v", shutdownErr)
+		}
 		return nil, fmt.Errorf("failed to create metrics: %w", err)
 	}
 
 	logger, shutdownLogger, err := NewLogger(ctx, tracer, cfg.LoggerEndpoint, cfg.ServiceName, res, loggerOpts...)
 	if err != nil {
-		_ = shutdownTracer(ctx)
-		_ = shutdownMetrics(ctx)
+		if shutdownErr := shutdownTracer(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown tracer during cleanup: %v", shutdownErr)
+		}
+		if shutdownErr := shutdownMetrics(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown metrics during cleanup: %v", shutdownErr)
+		}
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
 	tel, err := NewTelemetry(tracer, metrics, logger, shutdownTracer, shutdownMetrics, shutdownLogger)
 	if err != nil {
-		_ = shutdownTracer(ctx)
-		_ = shutdownMetrics(ctx)
-		_ = shutdownLogger(ctx)
+		if shutdownErr := shutdownTracer(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown tracer during cleanup: %v", shutdownErr)
+		}
+		if shutdownErr := shutdownMetrics(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown metrics during cleanup: %v", shutdownErr)
+		}
+		if shutdownErr := shutdownLogger(ctx); shutdownErr != nil {
+			log.Printf("telemetry: failed to shutdown logger during cleanup: %v", shutdownErr)
+		}
 		return nil, fmt.Errorf("failed to create telemetry: %w", err)
 	}
 

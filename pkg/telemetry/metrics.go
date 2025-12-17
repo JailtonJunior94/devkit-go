@@ -3,6 +3,7 @@ package o11y
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -225,9 +226,17 @@ func parseLabels(labels ...any) []attribute.KeyValue {
 		case int8:
 			kv = append(kv, attribute.Int64(k, int64(tv)))
 		case uint:
-			kv = append(kv, attribute.Int64(k, int64(tv)))
+			if tv > math.MaxInt64 {
+				kv = append(kv, attribute.String(k, fmt.Sprintf("%d", tv)))
+			} else {
+				kv = append(kv, attribute.Int64(k, int64(tv)))
+			}
 		case uint64:
-			kv = append(kv, attribute.Int64(k, int64(tv)))
+			if tv > math.MaxInt64 {
+				kv = append(kv, attribute.String(k, fmt.Sprintf("%d", tv)))
+			} else {
+				kv = append(kv, attribute.Int64(k, int64(tv)))
+			}
 		case uint32:
 			kv = append(kv, attribute.Int64(k, int64(tv)))
 		case uint16:

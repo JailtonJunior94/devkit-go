@@ -79,15 +79,3 @@ func Cleanup(shutdown, shutdownCh func() error) {
 		}
 	}
 }
-
-func ProvideRabbitMQConnection() (*RabbitMQConnection, error) {
-	connection, shutdown, shutdownCh, err := NewConnection("amqp://guest:pass@rabbitmq@localhost:5672/")
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
-	}
-
-	_ = shutdown
-	_ = shutdownCh
-
-	return connection, nil
-}

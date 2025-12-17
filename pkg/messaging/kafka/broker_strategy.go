@@ -9,6 +9,17 @@ import (
 	"github.com/segmentio/kafka-go/sasl/scram"
 )
 
+// AuthConfig holds the authentication configuration for Kafka connections.
+type AuthConfig struct {
+	Username string
+	Password string
+	// TLSConfig allows custom TLS configuration. If nil, a secure default is used.
+	TLSConfig *tls.Config
+	// InsecureSkipVerify disables TLS certificate verification.
+	// WARNING: Only use in development environments. Never use in production.
+	InsecureSkipVerify bool
+}
+
 type BrokerStrategy interface {
 	Configure(authConfig *AuthConfig) (*kafka.Dialer, error)
 }
@@ -30,13 +41,19 @@ func (p *Plain) Configure(authConfig *AuthConfig) (*kafka.Dialer, error) {
 		Password: authConfig.Password,
 	}
 
+	tlsConfig := authConfig.TLSConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: authConfig.InsecureSkipVerify,
+		}
+	}
+
 	dialer := &kafka.Dialer{
 		SASLMechanism: mechanism,
 		Timeout:       10 * time.Second,
 		DualStack:     true,
-		TLS: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLS:           tlsConfig,
 	}
 
 	return dialer, nil
@@ -50,12 +67,18 @@ func (s *SCRAM) Configure(authConfig *AuthConfig) (*kafka.Dialer, error) {
 		return nil, err
 	}
 
+	tlsConfig := authConfig.TLSConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: authConfig.InsecureSkipVerify,
+		}
+	}
+
 	return &kafka.Dialer{
 		SASLMechanism: mechanism,
 		Timeout:       10 * time.Second,
 		DualStack:     true,
-		TLS: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLS:           tlsConfig,
 	}, nil
 }
