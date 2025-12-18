@@ -17,9 +17,12 @@ type Config struct {
 	PrefetchSize         int           `env:"RABBITMQ_PREFETCH_SIZE"`
 }
 
+// DefaultConfig returns default RabbitMQ configuration.
+// Note: For production, use environment variables or provide a custom Config.
+// The default URL uses guest credentials which are only valid for local development.
 func DefaultConfig() *Config {
 	return &Config{
-		URL:                  "amqp://guest:pass@rabbitmq@localhost:5672/",
+		URL:                  "amqp://guest:guest@localhost:5672/",
 		MaxConnections:       10,
 		MaxChannels:          100,
 		HeartbeatInterval:    60 * time.Second,

@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	ErrConsumerClosed = errors.New("consumer is closed")
+	ErrConsumerClosed        = errors.New("consumer is closed")
+	ErrConsumerAlreadyClosed = errors.New("consumer already closed")
 )
 
 type (
@@ -34,6 +35,7 @@ type (
 		mu        sync.RWMutex
 		closed    bool
 		closeMu   sync.RWMutex
+		closeOnce sync.Once
 	}
 )
 
@@ -112,12 +114,16 @@ func (c *consumer) Consume(ctx context.Context) error {
 }
 
 func (c *consumer) Close() error {
-	c.closeMu.Lock()
-	c.closed = true
-	c.closeMu.Unlock()
+	var closeErr error
+	c.closeOnce.Do(func() {
+		c.closeMu.Lock()
+		c.closed = true
+		c.closeMu.Unlock()
 
-	close(c.errorChan)
-	return c.channel.Close()
+		close(c.errorChan)
+		closeErr = c.channel.Close()
+	})
+	return closeErr
 }
 
 func (c *consumer) isClosed() bool {

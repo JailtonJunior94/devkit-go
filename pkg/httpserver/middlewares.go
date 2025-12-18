@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,14 +107,27 @@ func logPanic(ctx context.Context, err any) {
 	log.Printf("[%s] PANIC recovered: %v", requestID, err)
 }
 
+// sanitizeHeaderValue removes CR and LF characters to prevent HTTP header injection.
+func sanitizeHeaderValue(value string) string {
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return value
+}
+
 // CORS is a middleware that adds CORS headers to responses.
 // For production, consider using a more configurable CORS middleware.
+// Note: All header values are sanitized to prevent CRLF injection attacks.
 func CORS(allowedOrigins, allowedMethods, allowedHeaders string) Middleware {
+	// Sanitize at creation time for efficiency
+	origins := sanitizeHeaderValue(allowedOrigins)
+	methods := sanitizeHeaderValue(allowedMethods)
+	headers := sanitizeHeaderValue(allowedHeaders)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
-			w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
-			w.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
+			w.Header().Set("Access-Control-Allow-Origin", origins)
+			w.Header().Set("Access-Control-Allow-Methods", methods)
+			w.Header().Set("Access-Control-Allow-Headers", headers)
 
 			// Handle preflight requests
 			if r.Method == http.MethodOptions {

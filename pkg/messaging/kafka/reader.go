@@ -43,6 +43,7 @@ type (
 		errorChan       chan error
 		closed          atomic.Bool
 		retryOnce       sync.Once
+		closeOnce       sync.Once
 		mu              sync.RWMutex
 	}
 
@@ -184,19 +185,23 @@ func (k *reader) ConsumeWithWorkerPool(ctx context.Context, workerCount int) err
 }
 
 func (k *reader) Close() error {
-	k.closed.Store(true)
+	var closeErr error
+	k.closeOnce.Do(func() {
+		k.closed.Store(true)
 
-	if k.retryChan != nil {
-		close(k.retryChan)
-	}
+		if k.retryChan != nil {
+			close(k.retryChan)
+		}
 
-	close(k.errorChan)
+		close(k.errorChan)
 
-	if k.publisher != nil {
-		k.publisher.Close()
-	}
+		if k.publisher != nil {
+			k.publisher.Close()
+		}
 
-	return k.kafkaReader.Close()
+		closeErr = k.kafkaReader.Close()
+	})
+	return closeErr
 }
 
 func (k *reader) Errors() <-chan error {

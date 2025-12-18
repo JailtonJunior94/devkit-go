@@ -146,7 +146,11 @@ func (m *metrics) RecordDuration(ctx context.Context, name string, start time.Ti
 
 func (m *metrics) getOrCreateCounter(name string) (otelmetric.Int64Counter, error) {
 	if v, ok := m.counters.Load(name); ok {
-		return v.(otelmetric.Int64Counter), nil
+		ctr, ok := v.(otelmetric.Int64Counter)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type in counters map for %s", name)
+		}
+		return ctr, nil
 	}
 
 	ctr, err := m.meter.Int64Counter(name)
@@ -155,12 +159,20 @@ func (m *metrics) getOrCreateCounter(name string) (otelmetric.Int64Counter, erro
 	}
 
 	actual, _ := m.counters.LoadOrStore(name, ctr)
-	return actual.(otelmetric.Int64Counter), nil
+	result, ok := actual.(otelmetric.Int64Counter)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type in counters map for %s", name)
+	}
+	return result, nil
 }
 
 func (m *metrics) getOrCreateHistogram(name string) (otelmetric.Float64Histogram, error) {
 	if v, ok := m.histograms.Load(name); ok {
-		return v.(otelmetric.Float64Histogram), nil
+		h, ok := v.(otelmetric.Float64Histogram)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type in histograms map for %s", name)
+		}
+		return h, nil
 	}
 
 	h, err := m.meter.Float64Histogram(name)
@@ -169,12 +181,20 @@ func (m *metrics) getOrCreateHistogram(name string) (otelmetric.Float64Histogram
 	}
 
 	actual, _ := m.histograms.LoadOrStore(name, h)
-	return actual.(otelmetric.Float64Histogram), nil
+	result, ok := actual.(otelmetric.Float64Histogram)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type in histograms map for %s", name)
+	}
+	return result, nil
 }
 
 func (m *metrics) getOrCreateGauge(name string) (otelmetric.Float64Gauge, error) {
 	if v, ok := m.gauges.Load(name); ok {
-		return v.(otelmetric.Float64Gauge), nil
+		g, ok := v.(otelmetric.Float64Gauge)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type in gauges map for %s", name)
+		}
+		return g, nil
 	}
 
 	g, err := m.meter.Float64Gauge(name)
@@ -183,12 +203,20 @@ func (m *metrics) getOrCreateGauge(name string) (otelmetric.Float64Gauge, error)
 	}
 
 	actual, _ := m.gauges.LoadOrStore(name, g)
-	return actual.(otelmetric.Float64Gauge), nil
+	result, ok := actual.(otelmetric.Float64Gauge)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type in gauges map for %s", name)
+	}
+	return result, nil
 }
 
 func (m *metrics) getOrCreateUpDownCounter(name string) (otelmetric.Int64UpDownCounter, error) {
 	if v, ok := m.upDownCounters.Load(name); ok {
-		return v.(otelmetric.Int64UpDownCounter), nil
+		ctr, ok := v.(otelmetric.Int64UpDownCounter)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type in upDownCounters map for %s", name)
+		}
+		return ctr, nil
 	}
 
 	ctr, err := m.meter.Int64UpDownCounter(name)
@@ -197,7 +225,11 @@ func (m *metrics) getOrCreateUpDownCounter(name string) (otelmetric.Int64UpDownC
 	}
 
 	actual, _ := m.upDownCounters.LoadOrStore(name, ctr)
-	return actual.(otelmetric.Int64UpDownCounter), nil
+	result, ok := actual.(otelmetric.Int64UpDownCounter)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type in upDownCounters map for %s", name)
+	}
+	return result, nil
 }
 
 func parseLabels(labels ...any) []attribute.KeyValue {

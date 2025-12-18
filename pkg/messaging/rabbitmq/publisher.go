@@ -26,8 +26,8 @@ func (r *rabbitMQ) Publish(ctx context.Context, topicOrQueue, key string, header
 		Headers:     amqp.Table{},
 	}
 
-	for key, value := range headers {
-		msg.Headers[key] = value
+	for k, v := range headers {
+		msg.Headers[k] = v
 	}
 	return r.channel.PublishWithContext(ctx, topicOrQueue, key, false, false, msg)
 }

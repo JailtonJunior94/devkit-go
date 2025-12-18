@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/vos"
@@ -100,6 +101,13 @@ func logPanic(c *fiber.Ctx, err any) {
 	log.Printf("[%s] PANIC recovered: %v", requestID, err)
 }
 
+// sanitizeHeaderValue removes CR and LF characters to prevent HTTP header injection.
+func sanitizeHeaderValue(value string) string {
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return value
+}
+
 // CORSConfig holds CORS middleware configuration.
 type CORSConfig struct {
 	AllowOrigins     string
@@ -111,23 +119,28 @@ type CORSConfig struct {
 }
 
 // CORS returns a middleware that adds CORS headers to responses.
+// Note: All header values are sanitized to prevent CRLF injection attacks.
 func CORS(config CORSConfig) Middleware {
-	return func(c *fiber.Ctx) error {
-		origin := config.AllowOrigins
-		if origin == "" {
-			origin = "*"
-		}
+	// Sanitize at creation time for efficiency
+	origin := sanitizeHeaderValue(config.AllowOrigins)
+	if origin == "" {
+		origin = "*"
+	}
+	methods := sanitizeHeaderValue(config.AllowMethods)
+	headers := sanitizeHeaderValue(config.AllowHeaders)
+	exposeHeaders := sanitizeHeaderValue(config.ExposeHeaders)
 
+	return func(c *fiber.Ctx) error {
 		c.Set("Access-Control-Allow-Origin", origin)
-		c.Set("Access-Control-Allow-Methods", config.AllowMethods)
-		c.Set("Access-Control-Allow-Headers", config.AllowHeaders)
+		c.Set("Access-Control-Allow-Methods", methods)
+		c.Set("Access-Control-Allow-Headers", headers)
 
 		if config.AllowCredentials {
 			c.Set("Access-Control-Allow-Credentials", "true")
 		}
 
-		if config.ExposeHeaders != "" {
-			c.Set("Access-Control-Expose-Headers", config.ExposeHeaders)
+		if exposeHeaders != "" {
+			c.Set("Access-Control-Expose-Headers", exposeHeaders)
 		}
 
 		if config.MaxAge > 0 {
@@ -145,11 +158,17 @@ func CORS(config CORSConfig) Middleware {
 
 // CORSSimple is a simplified CORS middleware with string parameters.
 // For production, consider using the CORS middleware with CORSConfig.
+// Note: All header values are sanitized to prevent CRLF injection attacks.
 func CORSSimple(allowedOrigins, allowedMethods, allowedHeaders string) Middleware {
+	// Sanitize at creation time for efficiency
+	origins := sanitizeHeaderValue(allowedOrigins)
+	methods := sanitizeHeaderValue(allowedMethods)
+	headers := sanitizeHeaderValue(allowedHeaders)
+
 	return func(c *fiber.Ctx) error {
-		c.Set("Access-Control-Allow-Origin", allowedOrigins)
-		c.Set("Access-Control-Allow-Methods", allowedMethods)
-		c.Set("Access-Control-Allow-Headers", allowedHeaders)
+		c.Set("Access-Control-Allow-Origin", origins)
+		c.Set("Access-Control-Allow-Methods", methods)
+		c.Set("Access-Control-Allow-Headers", headers)
 
 		// Handle preflight requests
 		if c.Method() == fiber.MethodOptions {
