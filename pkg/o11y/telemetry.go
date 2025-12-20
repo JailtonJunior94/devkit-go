@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -18,11 +18,12 @@ type shutdownFunc struct {
 }
 
 type telemetry struct {
+	mu        sync.RWMutex
 	tracer    Tracer
 	metrics   Metrics
 	logger    Logger
 	shutdowns []shutdownFunc
-	closed    atomic.Bool
+	closed    bool
 }
 
 func NewTelemetry(tracer Tracer, metrics Metrics, logger Logger, tracerShutdown, metricsShutdown, loggerShutdown func(context.Context) error) (Telemetry, error) {
@@ -58,44 +59,54 @@ func NewTelemetry(tracer Tracer, metrics Metrics, logger Logger, tracerShutdown,
 }
 
 func (t *telemetry) Tracer() Tracer {
-	if t.closed.Load() {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed {
 		return noopTracer{}
 	}
 	return t.tracer
 }
 
 func (t *telemetry) Metrics() Metrics {
-	if t.closed.Load() {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed {
 		return noopMetrics{}
 	}
 	return t.metrics
 }
 
 func (t *telemetry) Logger() Logger {
-	if t.closed.Load() {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed {
 		return noopLogger{}
 	}
 	return t.logger
 }
 
 func (t *telemetry) Shutdown(ctx context.Context) error {
-	// Prevent double shutdown
-	if t.closed.Swap(true) {
+	// Acquire write lock to prevent concurrent access during shutdown
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
+	t.closed = true
+	t.mu.Unlock()
 
 	ctx, cancel := t.ensureValidContext(ctx)
 	defer cancel()
 
 	var errs []error
 
-	// Shutdown em ordem reversa de dependência: logger, metrics, tracer
-	// Logger precisa do tracer para correlação de trace_id
-	// Fazemos logger primeiro para garantir que todos os logs finais sejam capturados
+	// Shutdown in reverse dependency order: logger, metrics, tracer
+	// Logger needs tracer for trace_id correlation
+	// We shutdown logger first to ensure all final logs are captured
 	for i := len(t.shutdowns) - 1; i >= 0; i-- {
 		if err := t.shutdowns[i].fn(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.shutdowns[i].name, err))
-			// Continuar com os outros shutdowns mesmo se um falhar
+			// Continue with other shutdowns even if one fails
 		}
 	}
 
@@ -126,7 +137,9 @@ func (t *telemetry) ensureValidContext(ctx context.Context) (context.Context, co
 
 // IsClosed returns true if telemetry has been shut down
 func (t *telemetry) IsClosed() bool {
-	return t.closed.Load()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.closed
 }
 
 // noopTracer is a no-operation tracer for use after shutdown
