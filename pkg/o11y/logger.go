@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
@@ -143,6 +144,7 @@ type logger struct {
 	loggerProvider  *sdkLogger.LoggerProvider
 	sensitiveKeys   []string
 	redactSensitive bool
+	closed          *atomic.Bool
 }
 
 // NewLogger creates a new logger with the given configuration
@@ -203,13 +205,15 @@ func NewLoggerWithOptions(ctx context.Context, opts ...LoggerOption) (Logger, fu
 	}
 	slogger := otelslog.NewLogger(cfg.serviceName, otelslog.WithLoggerProvider(loggerProvider))
 
-	shutdown := createLoggerShutdown(loggerProvider)
+	closed := &atomic.Bool{}
+	shutdown := createLoggerShutdown(loggerProvider, closed)
 
 	return &logger{
 		slogger:         slogger,
 		loggerProvider:  loggerProvider,
 		sensitiveKeys:   cfg.sensitiveKeys,
 		redactSensitive: cfg.redactSensitive,
+		closed:          closed,
 	}, shutdown, nil
 }
 
@@ -233,7 +237,7 @@ func appendLoggerTLSOptions(opts []otlploghttp.Option, cfg *LoggerConfig) ([]otl
 	return opts, nil
 }
 
-func createLoggerShutdown(provider *sdkLogger.LoggerProvider) func(context.Context) error {
+func createLoggerShutdown(provider *sdkLogger.LoggerProvider, closed *atomic.Bool) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			var cancel context.CancelFunc
@@ -248,6 +252,9 @@ func createLoggerShutdown(provider *sdkLogger.LoggerProvider) func(context.Conte
 		if err := provider.Shutdown(ctx); err != nil {
 			return fmt.Errorf("logger: shutdown failed: %w", err)
 		}
+
+		// Mark logger as closed to invalidate old references
+		closed.Store(true)
 		return nil
 	}
 }
@@ -272,6 +279,11 @@ func (l *logger) log(ctx context.Context, level slog.Level, msg string, err erro
 	// Handle nil context
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	// Do nothing if logger has been shut down
+	if l.closed != nil && l.closed.Load() {
+		return
 	}
 
 	span := trace.SpanFromContext(ctx)

@@ -62,13 +62,13 @@ func TestMetrics_ParseLabels_OddNumberOfLabels(t *testing.T) {
 		maxLabelValueLen:   256,
 	}
 
-	// Odd number of labels - last key should be ignored
+	// Odd number of labels - should return nil to prevent processing invalid data
 	labels := []any{"key1", "value1", "key2"}
 
 	result := m.parseLabels(labels...)
 
-	if len(result) != 1 {
-		t.Errorf("expected 1 label (odd number), got %d", len(result))
+	if len(result) != 0 {
+		t.Errorf("expected 0 labels (invalid odd count should be rejected), got %d", len(result))
 	}
 }
 

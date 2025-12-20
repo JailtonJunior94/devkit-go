@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -33,6 +34,38 @@ type Metrics interface {
 	AddCounter(ctx context.Context, name string, v int64, labels ...any)
 	RecordHistogram(ctx context.Context, name string, v float64, labels ...any)
 }
+
+// IMPORTANT: Metric Naming Best Practices
+//
+// ⚠️  WARNING: NEVER use dynamic values in metric names!
+//
+// Metric instruments (counters, histograms) are cached indefinitely and NEVER cleaned up.
+// Creating metrics with dynamic names will cause memory leaks.
+//
+// BAD Examples (will cause memory leak):
+//
+//	for userID := range users {
+//	    // ❌ DON'T: Creates a new counter for each user
+//	    metrics.AddCounter(ctx, fmt.Sprintf("user_%d_requests", userID), 1)
+//	}
+//
+//	// ❌ DON'T: Creates a new counter for each request
+//	metrics.AddCounter(ctx, fmt.Sprintf("requests_%s", timestamp), 1)
+//
+// GOOD Examples (use labels for dynamic values):
+//
+//	// ✅ DO: Use labels for dynamic dimensions
+//	metrics.AddCounter(ctx, "user_requests", 1, "user_id", userID)
+//	metrics.AddCounter(ctx, "http_requests_total", 1, "method", "GET", "status", 200)
+//
+// The library enforces a limit of 1000 instruments (configurable via WithMetricsMaxInstruments).
+// Once this limit is reached, new metric creation will fail and be logged.
+//
+// Metric names should be:
+// - Static and known at compile time
+// - Descriptive of what is being measured
+// - Following snake_case convention
+// - Using labels for all dynamic dimensions
 
 // MetricsErrorCallback is called when a metrics operation fails
 type MetricsErrorCallback func(err error)
@@ -182,6 +215,7 @@ type metrics struct {
 	onError            MetricsErrorCallback
 	sensitiveKeys      []string
 	redactSensitive    bool
+	closed             *atomic.Bool
 }
 
 // NewMetrics creates a new metrics instance with the given configuration
@@ -250,7 +284,8 @@ func NewMetricsWithOptions(ctx context.Context, opts ...MetricsOption) (Metrics,
 		return nil, nil, fmt.Errorf("failed to create meter provider")
 	}
 
-	shutdown := createMetricsShutdown(meterProvider)
+	closed := &atomic.Bool{}
+	shutdown := createMetricsShutdown(meterProvider, closed)
 
 	return &metrics{
 		meter:              meterProvider.Meter(cfg.serviceName),
@@ -262,6 +297,7 @@ func NewMetricsWithOptions(ctx context.Context, opts ...MetricsOption) (Metrics,
 		onError:            cfg.onError,
 		sensitiveKeys:      cfg.sensitiveKeys,
 		redactSensitive:    cfg.redactSensitive,
+		closed:             closed,
 	}, shutdown, nil
 }
 
@@ -285,7 +321,7 @@ func appendMetricsTLSOptions(opts []otlpmetricgrpc.Option, cfg *MetricsConfig) (
 	return opts, nil
 }
 
-func createMetricsShutdown(provider *metric.MeterProvider) func(context.Context) error {
+func createMetricsShutdown(provider *metric.MeterProvider, closed *atomic.Bool) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			var cancel context.CancelFunc
@@ -300,6 +336,9 @@ func createMetricsShutdown(provider *metric.MeterProvider) func(context.Context)
 		if err := provider.Shutdown(ctx); err != nil {
 			return fmt.Errorf("metrics: shutdown failed: %w", err)
 		}
+
+		// Mark metrics as closed to invalidate old references
+		closed.Store(true)
 		return nil
 	}
 }
@@ -333,6 +372,14 @@ func (m *metrics) getOrCreateCounter(name string) (otelmetric.Int64Counter, erro
 }
 
 func (m *metrics) AddCounter(ctx context.Context, name string, v int64, labels ...any) {
+	// Handle nil context to prevent panic
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Do nothing if metrics has been shut down
+	if m.closed != nil && m.closed.Load() {
+		return
+	}
 	ctr, err := m.getOrCreateCounter(name)
 	if err != nil {
 		m.handleError(err)
@@ -379,6 +426,14 @@ func (m *metrics) getOrCreateHistogram(name string) (otelmetric.Float64Histogram
 }
 
 func (m *metrics) RecordHistogram(ctx context.Context, name string, v float64, labels ...any) {
+	// Handle nil context to prevent panic
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Do nothing if metrics has been shut down
+	if m.closed != nil && m.closed.Load() {
+		return
+	}
 	h, err := m.getOrCreateHistogram(name)
 	if err != nil {
 		m.handleError(err)
@@ -393,9 +448,12 @@ func (m *metrics) parseLabels(labels ...any) []attribute.KeyValue {
 		return nil
 	}
 
-	// Warn about odd number of labels (missing value for last key)
+	// Reject odd number of labels (missing value for last key)
 	if len(labels)%2 != 0 {
-		log.Printf("metrics: odd number of labels provided (%d), last key will be ignored", len(labels))
+		err := fmt.Errorf("metrics: invalid labels - odd count %d (each key must have a value)", len(labels))
+		m.handleError(err)
+		// Return empty to avoid processing invalid data
+		return nil
 	}
 
 	// Apply cardinality protection - limit number of labels

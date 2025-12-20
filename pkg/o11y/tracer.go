@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -129,6 +130,7 @@ func WithTracerMaxExportBatch(size int) TracerOption {
 }
 
 // WithTracerSampler sets the sampling strategy for the tracer.
+// Deprecated: Use WithTracerSamplingConfig instead to avoid exposing OpenTelemetry types.
 // Common samplers include:
 //   - sdktrace.AlwaysSample() - sample all traces (default, not recommended for high-volume production)
 //   - sdktrace.NeverSample() - sample no traces
@@ -137,6 +139,20 @@ func WithTracerMaxExportBatch(size int) TracerOption {
 func WithTracerSampler(sampler sdktrace.Sampler) TracerOption {
 	return func(c *TracerConfig) {
 		c.sampler = sampler
+	}
+}
+
+// WithTracerSamplingConfig sets the sampling strategy using the abstracted SamplingConfig.
+// This is the recommended way to configure sampling as it doesn't expose OpenTelemetry types.
+// Example:
+//
+//	WithTracerSamplingConfig(o11y.SamplingConfig{
+//	    Strategy: o11y.SamplingParentBased,
+//	    Ratio:    0.1, // Sample 10% of traces
+//	})
+func WithTracerSamplingConfig(cfg SamplingConfig) TracerOption {
+	return func(c *TracerConfig) {
+		c.sampler = convertSamplingConfig(cfg)
 	}
 }
 
@@ -184,6 +200,7 @@ type tracer struct {
 	tracer          trace.Tracer
 	sensitiveKeys   []string
 	redactSensitive bool
+	closed          *atomic.Bool
 }
 
 type otelSpan struct {
@@ -262,12 +279,14 @@ func NewTracerWithOptions(ctx context.Context, opts ...TracerOption) (Tracer, fu
 		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	}
 
-	shutdown := createTracerShutdown(tracerProvider)
+	closed := &atomic.Bool{}
+	shutdown := createTracerShutdown(tracerProvider, closed)
 
 	return &tracer{
 		tracer:          tracerProvider.Tracer(cfg.serviceName),
 		sensitiveKeys:   cfg.sensitiveKeys,
 		redactSensitive: cfg.redactSensitive,
+		closed:          closed,
 	}, shutdown, nil
 }
 
@@ -361,7 +380,7 @@ func isInternalAddress(host string) bool {
 	return false
 }
 
-func createTracerShutdown(provider *sdktrace.TracerProvider) func(context.Context) error {
+func createTracerShutdown(provider *sdktrace.TracerProvider, closed *atomic.Bool) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			var cancel context.CancelFunc
@@ -376,6 +395,9 @@ func createTracerShutdown(provider *sdktrace.TracerProvider) func(context.Contex
 		if err := provider.Shutdown(ctx); err != nil {
 			return fmt.Errorf("tracer: shutdown failed: %w", err)
 		}
+
+		// Mark tracer as closed to invalidate old references
+		closed.Store(true)
 		return nil
 	}
 }
@@ -383,6 +405,10 @@ func createTracerShutdown(provider *sdktrace.TracerProvider) func(context.Contex
 func (t *tracer) Start(ctx context.Context, name string, attrs ...Attribute) (context.Context, Span) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Return noop span if tracer has been shut down
+	if t.closed != nil && t.closed.Load() {
+		return ctx, noopSpan{}
 	}
 	ctx, span := t.tracer.Start(ctx, name, trace.WithAttributes(convertAttrs(attrs, t.sensitiveKeys, t.redactSensitive)...))
 	return ctx, &otelSpan{
@@ -394,6 +420,10 @@ func (t *tracer) Start(ctx context.Context, name string, attrs ...Attribute) (co
 
 func (t *tracer) WithAttributes(ctx context.Context, attrs ...Attribute) {
 	if ctx == nil {
+		return
+	}
+	// Do nothing if tracer has been shut down
+	if t.closed != nil && t.closed.Load() {
 		return
 	}
 	span := trace.SpanFromContext(ctx)
@@ -477,15 +507,31 @@ func convertAttrs(attrs []Attribute, sensitiveKeys []string, redact bool) []attr
 		case []bool:
 			kv = append(kv, attribute.BoolSlice(a.Key, v))
 		case fmt.Stringer:
-			kv = append(kv, attribute.String(a.Key, v.String()))
+			s := v.String()
+			kv = append(kv, attribute.String(a.Key, truncateAttrValue(s)))
 		case nil:
 			kv = append(kv, attribute.String(a.Key, "<nil>"))
 		default:
-			log.Printf("o11y: unsupported attribute type %T for key %q, using fmt.Sprintf", v, a.Key)
-			kv = append(kv, attribute.String(a.Key, fmt.Sprintf("%+v", v)))
+			// Limit size of string representation to prevent memory issues
+			s := fmt.Sprintf("%+v", v)
+			const maxAttrSize = 2048
+			if len(s) > maxAttrSize {
+				s = s[:maxAttrSize-3] + "..."
+				log.Printf("o11y: attribute %q truncated (type %T value too large: %d bytes)", a.Key, v, len(s))
+			}
+			kv = append(kv, attribute.String(a.Key, s))
 		}
 	}
 	return kv
+}
+
+// truncateAttrValue truncates attribute values to prevent excessive memory usage
+func truncateAttrValue(s string) string {
+	const maxAttrSize = 2048
+	if len(s) > maxAttrSize {
+		return s[:maxAttrSize-3] + "..."
+	}
+	return s
 }
 
 // isSensitiveKey checks if a field key matches any sensitive key pattern
