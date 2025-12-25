@@ -10,5 +10,6 @@ type (
 		ConsumeBatch(ctx context.Context) error
 		RegisterHandler(eventType string, handler ConsumeHandler)
 		ConsumeWithWorkerPool(ctx context.Context, workerCount int) error
+		Errors() <-chan error
 	}
 )

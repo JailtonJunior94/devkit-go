@@ -159,6 +159,9 @@ func (p *ConnectionPool) reconnect() {
 
 	log.Println("attempting to reconnect to RabbitMQ")
 
+	// Drain and close old connections and channels to prevent memory leak
+	p.drainAndCloseConnections()
+
 	if err := p.initConnections(); err != nil {
 		log.Printf("failed to reconnect: %v", err)
 		time.AfterFunc(p.config.ReconnectDelay, func() {
@@ -166,6 +169,33 @@ func (p *ConnectionPool) reconnect() {
 		})
 	} else {
 		log.Println("successfully reconnected to RabbitMQ")
+	}
+}
+
+func (p *ConnectionPool) drainAndCloseConnections() {
+	// Drain and close all existing connections
+	for {
+		select {
+		case conn := <-p.connections:
+			if conn != nil && !conn.IsClosed() {
+				conn.Close()
+			}
+		default:
+			goto drainChannels
+		}
+	}
+
+drainChannels:
+	// Drain and close all existing channels
+	for {
+		select {
+		case ch := <-p.channels:
+			if ch != nil && !ch.IsClosed() {
+				ch.Close()
+			}
+		default:
+			return
+		}
 	}
 }
 

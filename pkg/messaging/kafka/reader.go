@@ -42,6 +42,7 @@ type (
 		handlers        map[string][]messaging.ConsumeHandler
 		errorChan       chan error
 		closed          atomic.Bool
+		retryChanClosed atomic.Bool
 		retryOnce       sync.Once
 		closeOnce       sync.Once
 		mu              sync.RWMutex
@@ -190,6 +191,7 @@ func (k *reader) Close() error {
 		k.closed.Store(true)
 
 		if k.retryChan != nil {
+			k.retryChanClosed.Store(true)
 			close(k.retryChan)
 		}
 
@@ -283,10 +285,8 @@ func (k *reader) handleErrorWithAttempts(ctx context.Context, message kafka.Mess
 	if k.retryChan != nil {
 		k.startRetryWorker(ctx)
 
-		select {
-		case k.retryChan <- retryMessage{message: message, err: handlerErr, attempts: attempts}:
-		default:
-			log.Printf("retry channel full, moving to DLT")
+		if !k.sendRetry(retryMessage{message: message, err: handlerErr, attempts: attempts}) {
+			log.Printf("retry channel full or closed, moving to DLT")
 			if err := k.moveToDLT(ctx, message, handlerErr, attempts); err != nil {
 				log.Printf("failed to move message to DLT: %v", err)
 			}
@@ -341,9 +341,7 @@ func (k *reader) retryWorker(ctx context.Context) {
 							log.Printf("failed to move message to DLT: %v", err)
 						}
 					} else {
-						select {
-						case k.retryChan <- retryMessage{message: retryMsg.message, err: err, attempts: nextAttempt}:
-						default:
+						if !k.sendRetry(retryMessage{message: retryMsg.message, err: err, attempts: nextAttempt}) {
 							if err := k.moveToDLT(ctx, retryMsg.message, err, nextAttempt); err != nil {
 								log.Printf("failed to move message to DLT: %v", err)
 							}
@@ -382,6 +380,19 @@ func (k *reader) sendError(err error) {
 	select {
 	case k.errorChan <- err:
 	default:
+	}
+}
+
+func (k *reader) sendRetry(msg retryMessage) bool {
+	if k.retryChanClosed.Load() {
+		return false
+	}
+
+	select {
+	case k.retryChan <- msg:
+		return true
+	default:
+		return false
 	}
 }
 
