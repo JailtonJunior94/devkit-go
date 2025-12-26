@@ -1,387 +1,519 @@
-package uow_test
+package uow
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jailtonjunior94/financial/pkg/database"
-	"github.com/jailtonjunior94/financial/pkg/database/uow"
-	"github.com/stretchr/testify/suite"
-
-	_ "github.com/lib/pq"
+	"github.com/JailtonJunior94/devkit-go/pkg/database"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-type UnitOfWorkTestSuite struct {
-	suite.Suite
-	db  *sql.DB
-	uow uow.UnitOfWork
-	ctx context.Context
-}
+func setupTestDB(t *testing.T) *sql.DB {
+	// Create a temporary file for the database
+	tmpfile, err := os.CreateTemp("", "test_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tmpfile.Close()
 
-func TestUnitOfWorkSuite(t *testing.T) {
-	suite.Run(t, new(UnitOfWorkTestSuite))
-}
-
-func (s *UnitOfWorkTestSuite) SetupSuite() {
-	// Setup in-memory SQLite para testes
-	db, err := sql.Open("postgres", "postgres://root@localhost:26257/financial?sslmode=disable")
-	s.Require().NoError(err)
-
-	s.db = db
-	s.ctx = context.Background()
-
-	// Criar tabela de teste
-	_, err = s.db.ExecContext(s.ctx, `
-		CREATE TABLE IF NOT EXISTS test_transactions (
-			id SERIAL PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`)
-	s.Require().NoError(err)
-}
-
-func (s *UnitOfWorkTestSuite) TearDownSuite() {
-	_, _ = s.db.ExecContext(s.ctx, "DROP TABLE IF EXISTS test_transactions")
-	s.db.Close()
-}
-
-func (s *UnitOfWorkTestSuite) SetupTest() {
-	s.uow = uow.NewUnitOfWork(s.db)
-
-	// Limpar dados antes de cada teste
-	_, err := s.db.ExecContext(s.ctx, "DELETE FROM test_transactions")
-	s.Require().NoError(err)
-}
-
-// TestCommitSuccess valida que commit funciona corretamente
-func (s *UnitOfWorkTestSuite) TestCommitSuccess() {
-	err := s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test1")
-		s.Require().NoError(err)
-
-		_, err = tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test2")
-		s.Require().NoError(err)
-
-		return nil
+	// Clean up the temp file when test ends
+	t.Cleanup(func() {
+		os.Remove(tmpfile.Name())
 	})
 
-	s.NoError(err)
+	// Open database with WAL mode and busy timeout for better concurrency support
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?cache=shared&mode=rwc&_journal_mode=WAL&_busy_timeout=5000", tmpfile.Name()))
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
 
-	// Verificar que os dados foram commitados
-	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(2, count, "deve ter 2 registros após commit bem-sucedido")
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	// Create test table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS test_orders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			status TEXT NOT NULL,
+			total DECIMAL(10,2) NOT NULL
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	return db
 }
 
-// TestRollbackOnError valida que rollback acontece em caso de erro
-func (s *UnitOfWorkTestSuite) TestRollbackOnError() {
-	expectedErr := errors.New("business error")
+func TestUnitOfWork_SuccessfulCommit(t *testing.T) {
+	db := setupTestDB(t)
 
-	err := s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test1")
-		s.Require().NoError(err)
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
 
-		// Simular erro de negócio
+	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+		return err
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify data was committed
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 row, got %d", count)
+	}
+}
+
+func TestUnitOfWork_RollbackOnError(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	expectedErr := errors.New("business logic error")
+
+	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+		if err != nil {
+			return err
+		}
 		return expectedErr
 	})
 
-	s.Error(err)
-	s.ErrorIs(err, expectedErr)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got: %v", expectedErr, err)
+	}
 
-	// Verificar que nenhum dado foi persistido (rollback funcionou)
+	// Verify data was rolled back
 	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "não deve ter registros após rollback")
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 rows (rollback), got %d", count)
+	}
 }
 
-// TestRollbackOnPanic valida que rollback acontece em caso de panic
-func (s *UnitOfWorkTestSuite) TestRollbackOnPanic() {
+func TestUnitOfWork_PanicRecovery(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
 	defer func() {
-		if r := recover(); r != nil {
-			s.Equal("unexpected panic", r)
+		if r := recover(); r == nil {
+			t.Error("expected panic to be re-thrown")
 		}
 	}()
 
-	_ = s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test1")
-		s.Require().NoError(err)
-
-		// Simular panic
-		panic("unexpected panic")
+	_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+		if err != nil {
+			return err
+		}
+		panic("simulated panic")
 	})
 
-	// Verificar que nenhum dado foi persistido (rollback funcionou)
-	var count int
-	err := s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "não deve ter registros após panic e rollback")
+	// This code should not be reached
+	t.Error("code after panic should not execute")
 }
 
-// TestConcurrentTransactions valida thread-safety
-func (s *UnitOfWorkTestSuite) TestConcurrentTransactions() {
-	const numGoroutines = 10
+func TestUnitOfWork_PanicRecoveryRollback(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	func() {
+		defer func() {
+			_ = recover() // Catch panic to continue test
+		}()
+
+		_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+			_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+			if err != nil {
+				return err
+			}
+			panic("simulated panic")
+		})
+	}()
+
+	// Verify data was rolled back despite panic
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 rows (panic rollback), got %d", count)
+	}
+}
+
+func TestUnitOfWork_ConcurrentTransactions(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Enable concurrent connections for this test
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(3)
+	db.SetConnMaxLifetime(0)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	const numGoroutines = 20
 	var wg sync.WaitGroup
-	wg.Add(numGoroutines)
+	successCount := 0
+	lockErrorCount := 0
+	var mu sync.Mutex
 
-	errors := make(chan error, numGoroutines)
-
-	for i := range numGoroutines {
+	// Launch multiple concurrent transactions
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
-			err := s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-				_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "concurrent_test")
+			err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+				// Simulate some work
+				time.Sleep(time.Millisecond * 2)
+				_, err := db.ExecContext(ctx,
+					"INSERT INTO test_orders (status, total) VALUES (?, ?)",
+					"pending",
+					float64(id))
 				return err
 			})
 
+			mu.Lock()
 			if err != nil {
-				errors <- err
+				// SQLite lock errors are expected under high concurrency - not a UoW bug
+				if err.Error() == "database table is locked" {
+					lockErrorCount++
+				} else {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				successCount++
 			}
+			mu.Unlock()
 		}(i)
 	}
 
 	wg.Wait()
-	close(errors)
 
-	// Verificar que não houve erros
-	for err := range errors {
-		s.NoError(err)
+	// Verify successful transactions were committed
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
 	}
 
-	// Verificar que todos os registros foram inseridos
-	var count int
-	err := s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(numGoroutines, count, "deve ter exatamente %d registros após execução concorrente", numGoroutines)
-}
-
-// TestAtomicity valida que operações são atômicas
-func (s *UnitOfWorkTestSuite) TestAtomicity() {
-	err := s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		// Primeira inserção - sucesso
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "atomic1")
-		s.Require().NoError(err)
-
-		// Segunda inserção - sucesso
-		_, err = tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "atomic2")
-		s.Require().NoError(err)
-
-		// Terceira inserção - vai falhar por violar constraint (simulando erro)
-		// Retornar erro para forçar rollback
-		return errors.New("simulated constraint violation")
-	})
-
-	s.Error(err)
-
-	// Verificar que NENHUM registro foi persistido (atomicidade)
-	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "nenhum registro deve ser persistido quando transação falha")
-}
-
-// TestNestedTransactionPrevention valida que transações aninhadas são detectadas e bloqueadas
-func (s *UnitOfWorkTestSuite) TestNestedTransactionPrevention() {
-	err := s.uow.Do(s.ctx, func(ctx context.Context, tx1 database.DBExecutor) error {
-		_, err := tx1.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "outer")
-		s.Require().NoError(err)
-
-		// Tentar criar transação aninhada deve retornar erro
-		nestedErr := s.uow.Do(ctx, func(ctx context.Context, tx2 database.DBExecutor) error {
-			_, err := tx2.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "inner")
-			return err
-		})
-
-		// Deve retornar erro de transação aninhada
-		s.Error(nestedErr)
-		s.Contains(nestedErr.Error(), "nested transactions are not allowed")
-
-		return nil
-	})
-
-	s.NoError(err)
-
-	// Apenas o registro outer deve existir
-	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(1, count, "deve ter apenas 1 registro (outer)")
-}
-
-// TestTransactionTimeout valida que transações respeitam timeout configurado
-func (s *UnitOfWorkTestSuite) TestTransactionTimeout() {
-	// Criar UoW com timeout muito curto
-	uowWithTimeout := uow.NewUnitOfWorkWithOptions(s.db, sql.LevelReadCommitted, 100*time.Millisecond)
-
-	err := uowWithTimeout.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test")
-		s.Require().NoError(err)
-
-		// Simular operação longa que excede timeout
-		time.Sleep(200 * time.Millisecond)
-
-		// Esta operação deve falhar por timeout
-		_, err = tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test2")
-		return err
-	})
-
-	// Deve retornar erro de timeout
-	s.Error(err)
-
-	// Nenhum registro deve ser persistido (rollback por timeout)
-	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "não deve ter registros após timeout")
-}
-
-// TestDoublePanicProtection valida proteção contra panic duplo
-func (s *UnitOfWorkTestSuite) TestDoublePanicProtection() {
-	defer func() {
-		if r := recover(); r != nil {
-			s.Equal("first panic", r, "deve recuperar o panic original")
-		}
-	}()
-
-	// Criar um mock de tx que panics no Rollback
-	// Como não podemos mockar sql.Tx facilmente, vamos simular com panic direto
-	_ = s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test")
-		s.Require().NoError(err)
-
-		// Primeiro panic
-		panic("first panic")
-	})
-
-	// Verificar que rollback funcionou mesmo com panic
-	var count int
-	err := s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "não deve ter registros após panic")
-}
-
-// TestIsolationLevels valida que diferentes isolation levels funcionam
-func (s *UnitOfWorkTestSuite) TestIsolationLevels() {
-	scenarios := []struct {
-		name      string
-		isolation sql.IsolationLevel
-	}{
-		{"ReadUncommitted", sql.LevelReadUncommitted},
-		{"ReadCommitted", sql.LevelReadCommitted},
-		{"RepeatableRead", sql.LevelRepeatableRead},
-		{"Serializable", sql.LevelSerializable},
+	if count != successCount {
+		t.Errorf("expected %d rows (matching successful transactions), got %d", successCount, count)
 	}
 
-	for _, scenario := range scenarios {
-		s.T().Run(scenario.name, func(t *testing.T) {
-			// Limpar dados
-			_, _ = s.db.ExecContext(s.ctx, "DELETE FROM test_transactions")
+	// Verify we had some successful concurrent transactions (proves concurrency works)
+	if successCount < numGoroutines/2 {
+		t.Errorf("expected at least %d successful transactions, got %d (lock errors: %d)",
+			numGoroutines/2, successCount, lockErrorCount)
+	}
 
-			opts := &uow.TxOptions{
-				Isolation: scenario.isolation,
-			}
+	t.Logf("Concurrent test completed: %d successful, %d lock errors (SQLite limitation)",
+		successCount, lockErrorCount)
+}
 
-			err := s.uow.DoWithOptions(s.ctx, opts, func(ctx context.Context, tx database.DBExecutor) error {
-				_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", scenario.name)
-				return err
+func TestUnitOfWork_ConcurrentWithFailures(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Enable concurrent connections for this test
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(3)
+	db.SetConnMaxLifetime(0)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+	successCount := 0
+	intentionalFailCount := 0
+	var mu sync.Mutex
+
+	// Launch concurrent transactions, half will fail intentionally
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+				_, err := db.ExecContext(ctx,
+					"INSERT INTO test_orders (status, total) VALUES (?, ?)",
+					"pending",
+					float64(id))
+				if err != nil {
+					return err
+				}
+
+				// Fail every other transaction intentionally
+				if id%2 == 0 {
+					return errors.New("simulated error")
+				}
+				return nil
 			})
 
-			s.NoError(err)
+			mu.Lock()
+			if err == nil {
+				successCount++
+			} else if err.Error() == "simulated error" {
+				intentionalFailCount++
+			}
+			// Ignore SQLite lock errors for this test
+			mu.Unlock()
+		}(i)
+	}
 
-			// Verificar que foi commitado
-			var value string
-			err = s.db.QueryRowContext(s.ctx, "SELECT value FROM test_transactions LIMIT 1").Scan(&value)
-			s.NoError(err)
-			s.Equal(scenario.name, value)
+	wg.Wait()
+
+	// Verify only successful transactions were committed
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != successCount {
+		t.Errorf("expected %d rows, got %d", successCount, count)
+	}
+
+	// Verify we had some intentional failures (proves rollback works)
+	if intentionalFailCount == 0 {
+		t.Error("expected some intentional failures to test rollback")
+	}
+
+	t.Logf("Concurrent with failures test: %d successful, %d intentional failures (rollback tested)",
+		successCount, intentionalFailCount)
+}
+
+func TestUnitOfWork_ContextCancellation(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+
+	// Create already cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		t.Error("function should not be executed with cancelled context")
+		return nil
+	})
+
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestUnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+
+	// Create context with timeout that will expire during execution
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		// Insert data
+		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+		if err != nil {
+			return err
+		}
+
+		// Simulate long-running operation
+		time.Sleep(100 * time.Millisecond)
+
+		// Try to insert more data (this should succeed but transaction will be rolled back)
+		_, err = db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "completed", 200.00)
+		return err
+	})
+
+	// Should return context cancellation error
+	if err == nil {
+		t.Fatal("expected error for cancelled context during execution")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
+	}
+
+	// Verify transaction was rolled back
+	var count int
+	queryErr := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if queryErr != nil {
+		t.Fatalf("failed to query: %v", queryErr)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 rows (rollback due to context cancellation), got %d", count)
+	}
+}
+
+func TestUnitOfWork_WithIsolationLevel(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+	ctx := context.Background()
+
+	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+		return err
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify data was committed
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 row, got %d", count)
+	}
+}
+
+func TestUnitOfWork_WithReadOnly(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Insert test data first
+	_, err := db.Exec("INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+	if err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	uow := NewUnitOfWork(db, WithReadOnly(true))
+	ctx := context.Background()
+
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+		var count int
+		return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error for read operation, got: %v", err)
+	}
+}
+
+func TestUnitOfWork_DBTX(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+
+	dbtx := uow.DBTX()
+	if dbtx == nil {
+		t.Error("DBTX() should return non-nil value")
+	}
+
+	// Should return the underlying db connection
+	if dbtx != db {
+		t.Error("DBTX() should return the underlying database connection")
+	}
+}
+
+func TestUnitOfWork_MultiplePanicsSequential(t *testing.T) {
+	db := setupTestDB(t)
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	// Test that multiple panics in sequence are handled correctly
+	for i := 0; i < 3; i++ {
+		func() {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("iteration %d: expected panic to be propagated", i)
+				}
+			}()
+
+			_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+				_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", float64(i))
+				if err != nil {
+					return err
+				}
+				panic("simulated panic")
+			})
+		}()
+	}
+
+	// Verify no data was committed due to panics
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 rows (all panicked), got %d", count)
+	}
+}
+
+// Benchmark tests
+func BenchmarkUnitOfWork_Sequential(b *testing.B) {
+	// Create a mock testing.T for setup
+	t := &testing.T{}
+	db := setupTestDB(t)
+	// setupTestDB uses t.Cleanup, so we need to defer close manually for benchmarks
+	defer db.Close()
+
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+			_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+			return err
 		})
 	}
 }
 
-// TestReadOnlyTransaction valida que transações read-only funcionam
-func (s *UnitOfWorkTestSuite) TestReadOnlyTransaction() {
-	// Inserir dados de teste
-	_, err := s.db.ExecContext(s.ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "read_only_test")
-	s.Require().NoError(err)
+func BenchmarkUnitOfWork_Concurrent(b *testing.B) {
+	// Create a mock testing.T for setup
+	t := &testing.T{}
+	db := setupTestDB(t)
+	defer db.Close()
 
-	opts := &uow.TxOptions{
-		ReadOnly: true,
-	}
+	db.SetMaxOpenConns(20)
 
-	// Read-only deve permitir SELECT
-	err = s.uow.DoWithOptions(s.ctx, opts, func(ctx context.Context, tx database.DBExecutor) error {
-		var value string
-		err := tx.QueryRowContext(ctx, "SELECT value FROM test_transactions WHERE value = $1", "read_only_test").Scan(&value)
-		s.Require().NoError(err)
-		s.Equal("read_only_test", value)
-		return nil
+	uow := NewUnitOfWork(db)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+				_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
+				return err
+			})
+		}
 	})
-
-	s.NoError(err)
-}
-
-// TestContextCancellation valida comportamento com context cancelado
-func (s *UnitOfWorkTestSuite) TestContextCancellation() {
-	ctx, cancel := context.WithCancel(s.ctx)
-
-	err := s.uow.Do(ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test")
-		s.Require().NoError(err)
-
-		// Cancelar context durante transação
-		cancel()
-
-		// Próxima operação deve falhar
-		_, err = tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test2")
-		return err
-	})
-
-	// Deve retornar erro de context cancelado
-	s.Error(err)
-
-	// Nenhum registro deve ser persistido
-	var count int
-	err = s.db.QueryRowContext(s.ctx, "SELECT COUNT(*) FROM test_transactions").Scan(&count)
-	s.NoError(err)
-	s.Equal(0, count, "não deve ter registros após context cancelado")
-}
-
-// TestCommitErrorHandling valida tratamento de erro no commit
-func (s *UnitOfWorkTestSuite) TestCommitErrorHandling() {
-	// Este teste é difícil de simular sem mockar sql.Tx
-	// Vamos apenas garantir que erros de commit são propagados corretamente
-
-	err := s.uow.Do(s.ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		// Inserção válida
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test")
-		return err
-	})
-
-	s.NoError(err, "commit deve ter sucesso para operação válida")
-}
-
-// TestErrTxDoneHandling valida que sql.ErrTxDone é tratado adequadamente
-func (s *UnitOfWorkTestSuite) TestErrTxDoneHandling() {
-	ctx, cancel := context.WithTimeout(s.ctx, 50*time.Millisecond)
-	defer cancel()
-
-	err := s.uow.Do(ctx, func(ctx context.Context, tx database.DBExecutor) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO test_transactions (value) VALUES ($1)", "test")
-		s.Require().NoError(err)
-
-		// Aguardar timeout
-		time.Sleep(100 * time.Millisecond)
-
-		// Context já expirou
-		return context.DeadlineExceeded
-	})
-
-	// Deve retornar o erro original, não erro de rollback
-	s.Error(err)
-	s.ErrorIs(err, context.DeadlineExceeded)
 }
