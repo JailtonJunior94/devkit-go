@@ -39,6 +39,30 @@ pkg/observability/
 go get github.com/JailtonJunior94/devkit-go/pkg/observability
 ```
 
+## 📚 Exemplos Completos
+
+Este pacote inclui exemplos práticos e completos de uso:
+
+- **[HTTP Handler](./examples/http-handler/)** - Exemplo completo de API HTTP com tracing, logging e métricas
+- **[Service Layer](./examples/service-layer/)** - Demonstra repository pattern e service layer com observabilidade
+- **[Testing](./examples/testing/)** - Como testar serviços usando o fake provider
+
+Para executar os exemplos:
+
+```bash
+# HTTP Handler
+cd pkg/observability/examples/http-handler
+go run main.go
+
+# Service Layer
+cd pkg/observability/examples/service-layer
+go run main.go
+
+# Testes
+cd pkg/observability/examples/testing
+go test -v
+```
+
 ## Uso Básico
 
 ### 1. Inicialização (main.go)
@@ -525,3 +549,52 @@ Veja o diretório `examples/` para exemplos completos de uso.
 ## Licença
 
 MIT
+
+## ✨ Moderno e Idiomático (Go 1.18+)
+
+Este pacote foi modernizado para aproveitar os recursos mais recentes do Go:
+
+### Melhorias de Linguagem
+
+- ✅ **Usa `any` ao invés de `interface{}`** - Melhor legibilidade e alinhamento com Go moderno
+- ✅ **Early returns** - Sem else/else if para código mais limpo e fácil de ler
+- ✅ **Type-safe field helpers** - Funções `String()`, `Int()`, `Float64()`, etc.
+
+### Melhorias de Performance
+
+- ✅ **Zero allocations** para slices vazios (casos comuns otimizados)
+- ✅ **Pre-alocação exata** de capacidade quando necessário
+- ✅ **Funções de conversão centralizadas** (DRY - Don't Repeat Yourself)
+
+### Melhorias de Observabilidade
+
+- ✅ **Logging em todas as falhas** - Sem silent failures
+- ✅ **Mensagens de erro descritivas** - Facilita debugging em produção
+- ✅ **Redação automática de dados sensíveis** - Segurança por padrão
+
+### Melhorias de Qualidade
+
+- ✅ **Cobertura de testes > 38%** - Testes unitários abrangentes
+- ✅ **Exemplos completos** - HTTP handlers, services, testes
+- ✅ **Zero warnings** - staticcheck, go vet, golangci-lint
+
+## 📖 Documentação Adicional
+
+- [MIGRATION.md](./MIGRATION.md) - Guia de migração do pacote `o11y` antigo
+- [Exemplos HTTP](./examples/http-handler/) - API REST completa
+- [Exemplos Service Layer](./examples/service-layer/) - Padrões arquiteturais
+- [Exemplos de Testes](./examples/testing/) - Testes com fake provider
+
+## 🤝 Contribuindo
+
+Contribuições são bem-vindas! Por favor:
+
+1. Fork o projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'feat: Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+## 📝 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo LICENSE para mais detalhes.

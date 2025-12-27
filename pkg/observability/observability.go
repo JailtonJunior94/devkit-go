@@ -11,7 +11,7 @@ type Observability interface {
 // Field represents a key-value pair for structured logging and tracing attributes.
 type Field struct {
 	Key   string
-	Value interface{}
+	Value any
 }
 
 // String creates a string field.
@@ -45,7 +45,7 @@ func Error(err error) Field {
 }
 
 // Any creates a field with any value type.
-func Any(key string, value interface{}) Field {
+func Any(key string, value any) Field {
 	return Field{Key: key, Value: value}
 }
 

@@ -2,10 +2,9 @@ package otel
 
 import (
 	"context"
-	"fmt"
+	"log"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -27,8 +26,7 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 		metric.WithUnit(unit),
 	)
 	if err != nil {
-		// In production, you might want to handle this differently
-		// For now, we return a no-op counter to prevent crashes
+		log.Printf("ERROR: Failed to create counter %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopCounter{}
 	}
 
@@ -43,6 +41,7 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 		metric.WithUnit(unit),
 	)
 	if err != nil {
+		log.Printf("ERROR: Failed to create histogram %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopHistogram{}
 	}
 
@@ -57,6 +56,7 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 		metric.WithUnit(unit),
 	)
 	if err != nil {
+		log.Printf("ERROR: Failed to create up-down counter %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopUpDownCounter{}
 	}
 
@@ -85,12 +85,13 @@ type otelCounter struct {
 
 // Add increments the counter.
 func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	if len(fields) == 0 {
+	attrs := convertFieldsToAttributes(fields)
+	if attrs == nil {
 		c.counter.Add(ctx, value)
 		return
 	}
 
-	c.counter.Add(ctx, value, metric.WithAttributes(convertFieldsToOtelAttributes(fields)...))
+	c.counter.Add(ctx, value, metric.WithAttributes(attrs...))
 }
 
 // Increment increments the counter by 1.
@@ -105,12 +106,13 @@ type otelHistogram struct {
 
 // Record adds a value to the histogram.
 func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
-	if len(fields) == 0 {
+	attrs := convertFieldsToAttributes(fields)
+	if attrs == nil {
 		h.histogram.Record(ctx, value)
 		return
 	}
 
-	h.histogram.Record(ctx, value, metric.WithAttributes(convertFieldsToOtelAttributes(fields)...))
+	h.histogram.Record(ctx, value, metric.WithAttributes(attrs...))
 }
 
 // otelUpDownCounter implements observability.UpDownCounter.
@@ -120,42 +122,15 @@ type otelUpDownCounter struct {
 
 // Add adds a value to the up-down counter.
 func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	if len(fields) == 0 {
+	attrs := convertFieldsToAttributes(fields)
+	if attrs == nil {
 		u.counter.Add(ctx, value)
 		return
 	}
 
-	u.counter.Add(ctx, value, metric.WithAttributes(convertFieldsToOtelAttributes(fields)...))
+	u.counter.Add(ctx, value, metric.WithAttributes(attrs...))
 }
 
-// convertFieldsToOtelAttributes converts observability fields to OTel attributes.
-func convertFieldsToOtelAttributes(fields []observability.Field) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, len(fields))
-	for _, field := range fields {
-		attrs = append(attrs, convertFieldToOtelAttribute(field))
-	}
-	return attrs
-}
-
-// convertFieldToOtelAttribute converts a single field to an OTel attribute.
-func convertFieldToOtelAttribute(field observability.Field) attribute.KeyValue {
-	switch v := field.Value.(type) {
-	case string:
-		return attribute.String(field.Key, v)
-	case int:
-		return attribute.Int(field.Key, v)
-	case int64:
-		return attribute.Int64(field.Key, v)
-	case float64:
-		return attribute.Float64(field.Key, v)
-	case bool:
-		return attribute.Bool(field.Key, v)
-	case error:
-		return attribute.String(field.Key, v.Error())
-	default:
-		return attribute.String(field.Key, fmt.Sprintf("%v", v))
-	}
-}
 
 // No-op implementations for error cases
 type noopCounter struct{}

@@ -55,10 +55,12 @@ func NewFakeTracer() *FakeTracer {
 
 // Start creates a fake span and captures it.
 func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
+	config := observability.NewSpanConfig(opts)
+
 	span := &FakeSpan{
 		Name:       spanName,
 		StartTime:  time.Now(),
-		Attributes: make([]observability.Field, 0),
+		Attributes: config.Attributes(),
 		Events:     make([]FakeEvent, 0),
 	}
 

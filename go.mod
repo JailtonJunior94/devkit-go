@@ -7,7 +7,6 @@ require (
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/google/uuid v1.6.0
-	github.com/jailtonjunior94/order v0.0.0-20251227173617-1e57bf8fc966
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/rabbitmq/amqp091-go v1.10.0

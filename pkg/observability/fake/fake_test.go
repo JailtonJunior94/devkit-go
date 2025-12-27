@@ -33,7 +33,7 @@ func TestFakeTracer(t *testing.T) {
 		tracer.Reset()
 		ctx := context.Background()
 
-		ctx, span := tracer.Start(ctx, "test-span",
+		_, span := tracer.Start(ctx, "test-span",
 			observability.WithSpanKind(observability.SpanKindServer),
 			observability.WithAttributes(
 				observability.String("key", "value"),
