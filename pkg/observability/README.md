@@ -36,7 +36,7 @@ pkg/observability/
 ## Instalação
 
 ```bash
-go get github.com/jailtonjunior94/order/pkg/observability
+go get github.com/JailtonJunior94/devkit-go/pkg/observability
 ```
 
 ## Uso Básico
@@ -50,8 +50,8 @@ import (
     "context"
     "log"
 
-    "github.com/jailtonjunior94/order/pkg/observability"
-    "github.com/jailtonjunior94/order/pkg/observability/otel"
+    "github.com/JailtonJunior94/devkit-go/pkg/observability"
+    "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 )
 
 func main() {
@@ -88,7 +88,7 @@ package usecase
 import (
     "context"
 
-    "github.com/jailtonjunior94/order/pkg/observability"
+    "github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
 type CreateOrderUseCase struct {
@@ -158,7 +158,7 @@ import (
     "context"
     "database/sql"
 
-    "github.com/jailtonjunior94/order/pkg/observability"
+    "github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
 type PostgresOrderRepository struct {
@@ -213,7 +213,7 @@ func (r *PostgresOrderRepository) Create(ctx context.Context, dto CreateOrderDTO
 Zero overhead, ideal quando você não quer observabilidade:
 
 ```go
-import "github.com/jailtonjunior94/order/pkg/observability/noop"
+import "github.com/JailtonJunior94/devkit-go/pkg/observability/noop"
 
 obs := noop.NewProvider()
 ```
@@ -226,7 +226,7 @@ Captura todas as operações para assertions:
 import (
     "testing"
 
-    "github.com/jailtonjunior94/order/pkg/observability/fake"
+    "github.com/JailtonJunior94/devkit-go/pkg/observability/fake"
 )
 
 func TestCreateOrder(t *testing.T) {
@@ -258,7 +258,7 @@ func TestCreateOrder(t *testing.T) {
 Configuração completa:
 
 ```go
-import "github.com/jailtonjunior94/order/pkg/observability/otel"
+import "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 
 config := &otel.Config{
     ServiceName:     "order-service",

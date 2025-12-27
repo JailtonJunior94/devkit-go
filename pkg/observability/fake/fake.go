@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
 // Provider implements a fake observability provider for testing purposes.

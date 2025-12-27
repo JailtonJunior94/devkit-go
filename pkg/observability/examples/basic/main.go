@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
-	"github.com/jailtonjunior94/order/pkg/observability/noop"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/noop"
 )
 
 // OrderService demonstrates how to use observability in your services.

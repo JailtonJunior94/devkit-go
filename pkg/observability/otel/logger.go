@@ -6,12 +6,27 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace"
 )
+
+const (
+	redactedValue       = "[REDACTED]"
+	maxFields           = 50   // Maximum number of fields per log entry
+	maxFieldValueLength = 2048 // Maximum length of a field value
+)
+
+// DefaultSensitiveKeys contains common sensitive field names that should be redacted
+var DefaultSensitiveKeys = []string{
+	"password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "api-key",
+	"authorization", "auth", "credential", "credentials", "private_key", "privatekey",
+	"ssn", "social_security", "credit_card", "creditcard", "card_number", "cvv", "pin",
+	"access_token", "refresh_token", "bearer", "session", "cookie",
+}
 
 // otelLogger implements observability.Logger using OTel Logger API with slog fallback.
 type otelLogger struct {
@@ -97,6 +112,14 @@ func (l *otelLogger) Error(ctx context.Context, msg string, fields ...observabil
 
 // log is the internal logging method that adds trace context and structured fields.
 func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fields ...observability.Field) {
+	// Validate message
+	if msg == "" {
+		msg = "[empty message]"
+	}
+
+	// Sanitize and validate fields
+	fields = sanitizeFields(fields)
+
 	// Combine permanent fields with call-specific fields
 	allFields := make([]observability.Field, 0, len(l.fields)+len(fields)+3)
 	allFields = append(allFields, l.fields...)
@@ -304,4 +327,44 @@ func tryConvertSlogError(field observability.Field) (slog.Attr, bool) {
 		return slog.String(field.Key, v.Error()), true
 	}
 	return slog.Attr{}, false
+}
+
+// sanitizeFields sanitizes, validates, and redacts sensitive data from fields.
+func sanitizeFields(fields []observability.Field) []observability.Field {
+	// Limit number of fields to prevent cardinality explosion
+	if len(fields) > maxFields {
+		fields = fields[:maxFields]
+	}
+
+	sanitized := make([]observability.Field, len(fields))
+	for i, field := range fields {
+		// Redact sensitive keys
+		if isSensitiveKey(field.Key) {
+			sanitized[i] = observability.String(field.Key, redactedValue)
+			continue
+		}
+
+		// Truncate long string values
+		if s, ok := field.Value.(string); ok {
+			if len(s) > maxFieldValueLength {
+				sanitized[i] = observability.String(field.Key, s[:maxFieldValueLength]+"...[truncated]")
+				continue
+			}
+		}
+
+		sanitized[i] = field
+	}
+
+	return sanitized
+}
+
+// isSensitiveKey checks if a field key matches any sensitive key pattern.
+func isSensitiveKey(key string) bool {
+	keyLower := strings.ToLower(key)
+	for _, sensitive := range DefaultSensitiveKeys {
+		if strings.Contains(keyLower, strings.ToLower(sensitive)) {
+			return true
+		}
+	}
+	return false
 }

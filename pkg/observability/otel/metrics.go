@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )

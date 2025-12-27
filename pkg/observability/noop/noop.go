@@ -3,7 +3,7 @@ package noop
 import (
 	"context"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
 // Provider returns a no-op implementation of observability that has zero runtime overhead.

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
-	"github.com/jailtonjunior94/order/pkg/observability/fake"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/fake"
 )
 
 func TestFakeProvider(t *testing.T) {

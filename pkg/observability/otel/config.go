@@ -2,10 +2,12 @@ package otel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log"
 	"strings"
 
-	"github.com/jailtonjunior94/order/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
@@ -20,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"google.golang.org/grpc/credentials"
 )
 
 // OTLPProtocol defines the protocol to use for OTLP export.
@@ -39,6 +42,10 @@ type Config struct {
 	Environment    string
 	OTLPEndpoint   string
 	OTLPProtocol   OTLPProtocol // "grpc" or "http", defaults to "grpc"
+
+	// Security configuration
+	Insecure  bool        // Allow insecure connections (only for non-production environments)
+	TLSConfig *tls.Config // Custom TLS configuration (optional, uses system defaults if nil)
 
 	// Trace configuration
 	TraceSampleRate float64 // 0.0 to 1.0, default 1.0 (always sample)
@@ -89,10 +96,41 @@ type Provider struct {
 	shutdownFuncs   []func(context.Context) error
 }
 
+// validateSecurityConfig validates the security configuration.
+func validateSecurityConfig(config *Config) error {
+	// Prevent insecure connections in production
+	if config.Insecure {
+		if strings.ToLower(config.Environment) == "production" || strings.ToLower(config.Environment) == "prod" {
+			return fmt.Errorf("insecure connections are not allowed in production environment")
+		}
+		log.Printf("WARNING: Using insecure OTLP connection to %s (environment: %s). This should only be used in development/testing.",
+			config.OTLPEndpoint, config.Environment)
+	}
+
+	// Validate TLS configuration if provided
+	if config.TLSConfig != nil {
+		if config.TLSConfig.InsecureSkipVerify {
+			log.Printf("WARNING: TLS verification is disabled. This is insecure and should not be used in production.")
+		}
+
+		// Check minimum TLS version
+		if config.TLSConfig.MinVersion > 0 && config.TLSConfig.MinVersion < tls.VersionTLS12 {
+			return fmt.Errorf("minimum TLS version must be 1.2 or higher for security compliance")
+		}
+	}
+
+	return nil
+}
+
 // NewProvider creates and initializes a new OpenTelemetry provider.
 func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
+	}
+
+	// Security validation
+	if err := validateSecurityConfig(config); err != nil {
+		return nil, err
 	}
 
 	// Normalize protocol
@@ -175,6 +213,16 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 		return fmt.Errorf("failed to create trace exporter: %w", err)
 	}
 
+	// Ensure cleanup in case of failure
+	var cleanupExporter = true
+	defer func() {
+		if cleanupExporter {
+			if shutdownErr := exporter.Shutdown(ctx); shutdownErr != nil {
+				log.Printf("failed to shutdown trace exporter after initialization failure: %v", shutdownErr)
+			}
+		}
+	}()
+
 	sampler := p.createTraceSampler()
 
 	p.tracerProvider = sdktrace.NewTracerProvider(
@@ -186,24 +234,41 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 	otel.SetTracerProvider(p.tracerProvider)
 	p.shutdownFuncs = append(p.shutdownFuncs, p.tracerProvider.Shutdown)
 
+	// Success - don't cleanup exporter
+	cleanupExporter = false
 	return nil
 }
 
 // createTraceExporter creates the appropriate trace exporter based on protocol.
 func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
-		return otlptracehttp.New(
-			ctx,
+		opts := []otlptracehttp.Option{
 			otlptracehttp.WithEndpoint(p.config.OTLPEndpoint),
-			otlptracehttp.WithInsecure(),
-		)
+		}
+
+		if p.config.Insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		} else if p.config.TLSConfig != nil {
+			opts = append(opts, otlptracehttp.WithTLSClientConfig(p.config.TLSConfig))
+		}
+		// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+		return otlptracehttp.New(ctx, opts...)
 	}
 
-	return otlptracegrpc.New(
-		ctx,
+	// gRPC protocol
+	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(p.config.OTLPEndpoint),
-		otlptracegrpc.WithInsecure(),
-	)
+	}
+
+	if p.config.Insecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	} else if p.config.TLSConfig != nil {
+		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
+	}
+	// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+	return otlptracegrpc.New(ctx, opts...)
 }
 
 // createTraceSampler creates the appropriate sampler based on sample rate.
@@ -240,18 +305,33 @@ func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource
 // createMetricExporter creates the appropriate metric exporter based on protocol.
 func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
-		return otlpmetrichttp.New(
-			ctx,
+		opts := []otlpmetrichttp.Option{
 			otlpmetrichttp.WithEndpoint(p.config.OTLPEndpoint),
-			otlpmetrichttp.WithInsecure(),
-		)
+		}
+
+		if p.config.Insecure {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		} else if p.config.TLSConfig != nil {
+			opts = append(opts, otlpmetrichttp.WithTLSClientConfig(p.config.TLSConfig))
+		}
+		// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+		return otlpmetrichttp.New(ctx, opts...)
 	}
 
-	return otlpmetricgrpc.New(
-		ctx,
+	// gRPC protocol
+	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(p.config.OTLPEndpoint),
-		otlpmetricgrpc.WithInsecure(),
-	)
+	}
+
+	if p.config.Insecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	} else if p.config.TLSConfig != nil {
+		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
+	}
+	// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+	return otlpmetricgrpc.New(ctx, opts...)
 }
 
 // initLoggerProvider initializes the OpenTelemetry logger provider.
@@ -274,18 +354,33 @@ func (p *Provider) initLoggerProvider(ctx context.Context, res *resource.Resourc
 // createLogExporter creates the appropriate log exporter based on protocol.
 func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
-		return otlploghttp.New(
-			ctx,
+		opts := []otlploghttp.Option{
 			otlploghttp.WithEndpoint(p.config.OTLPEndpoint),
-			otlploghttp.WithInsecure(),
-		)
+		}
+
+		if p.config.Insecure {
+			opts = append(opts, otlploghttp.WithInsecure())
+		} else if p.config.TLSConfig != nil {
+			opts = append(opts, otlploghttp.WithTLSClientConfig(p.config.TLSConfig))
+		}
+		// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+		return otlploghttp.New(ctx, opts...)
 	}
 
-	return otlploggrpc.New(
-		ctx,
+	// gRPC protocol
+	opts := []otlploggrpc.Option{
 		otlploggrpc.WithEndpoint(p.config.OTLPEndpoint),
-		otlploggrpc.WithInsecure(),
-	)
+	}
+
+	if p.config.Insecure {
+		opts = append(opts, otlploggrpc.WithInsecure())
+	} else if p.config.TLSConfig != nil {
+		opts = append(opts, otlploggrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
+	}
+	// If neither Insecure nor TLSConfig is set, uses system default TLS
+
+	return otlploggrpc.New(ctx, opts...)
 }
 
 // Tracer returns the OpenTelemetry tracer.
