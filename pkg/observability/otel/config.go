@@ -96,6 +96,24 @@ type Provider struct {
 	shutdownFuncs   []func(context.Context) error
 }
 
+// validateConfig validates required configuration fields.
+func validateConfig(config *Config) error {
+	if config.ServiceName == "" {
+		return fmt.Errorf("ServiceName cannot be empty")
+	}
+
+	if config.OTLPEndpoint == "" {
+		return fmt.Errorf("OTLPEndpoint cannot be empty")
+	}
+
+	// Validate TraceSampleRate range
+	if config.TraceSampleRate < 0.0 || config.TraceSampleRate > 1.0 {
+		return fmt.Errorf("TraceSampleRate must be between 0.0 and 1.0, got %f", config.TraceSampleRate)
+	}
+
+	return nil
+}
+
 // validateSecurityConfig validates the security configuration.
 func validateSecurityConfig(config *Config) error {
 	// Prevent insecure connections in production
@@ -126,6 +144,11 @@ func validateSecurityConfig(config *Config) error {
 func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
+	}
+
+	// Validate required configuration fields
+	if err := validateConfig(config); err != nil {
+		return nil, err
 	}
 
 	// Security validation

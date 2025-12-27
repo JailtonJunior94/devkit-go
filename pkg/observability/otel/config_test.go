@@ -106,6 +106,107 @@ func TestValidateSecurityConfig(t *testing.T) {
 	}
 }
 
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "empty ServiceName should fail",
+			config: &Config{
+				ServiceName:     "",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 1.0,
+			},
+			wantErr: true,
+			errMsg:  "ServiceName cannot be empty",
+		},
+		{
+			name: "empty OTLPEndpoint should fail",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "",
+				TraceSampleRate: 1.0,
+			},
+			wantErr: true,
+			errMsg:  "OTLPEndpoint cannot be empty",
+		},
+		{
+			name: "TraceSampleRate below 0.0 should fail",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: -0.1,
+			},
+			wantErr: true,
+			errMsg:  "TraceSampleRate must be between 0.0 and 1.0",
+		},
+		{
+			name: "TraceSampleRate above 1.0 should fail",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 1.5,
+			},
+			wantErr: true,
+			errMsg:  "TraceSampleRate must be between 0.0 and 1.0",
+		},
+		{
+			name: "valid config should pass",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 1.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceSampleRate at 0.0 should pass",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 0.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceSampleRate at 1.0 should pass",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 1.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceSampleRate at 0.5 should pass",
+			config: &Config{
+				ServiceName:     "test-service",
+				OTLPEndpoint:    "localhost:4317",
+				TraceSampleRate: 0.5,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateConfig(tt.config)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestNormalizeProtocol(t *testing.T) {
 	tests := []struct {
 		input    string

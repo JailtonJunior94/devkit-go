@@ -20,12 +20,26 @@ const (
 	maxFieldValueLength = 2048 // Maximum length of a field value
 )
 
-// DefaultSensitiveKeys contains common sensitive field names that should be redacted
-var DefaultSensitiveKeys = []string{
+// defaultSensitiveKeys contains common sensitive field names that should be redacted.
+// This is private to prevent external modification and ensure thread-safety.
+var defaultSensitiveKeys = []string{
 	"password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "api-key",
 	"authorization", "auth", "credential", "credentials", "private_key", "privatekey",
 	"ssn", "social_security", "credit_card", "creditcard", "card_number", "cvv", "pin",
 	"access_token", "refresh_token", "bearer", "session", "cookie",
+}
+
+// sensitiveKeysLower contains lowercase versions of sensitive keys for efficient comparison.
+// Pre-computed once at initialization to avoid repeated ToLower() calls.
+var sensitiveKeysLower = initSensitiveKeysLower()
+
+// initSensitiveKeysLower pre-computes lowercase versions of sensitive keys.
+func initSensitiveKeysLower() []string {
+	lower := make([]string, len(defaultSensitiveKeys))
+	for i, k := range defaultSensitiveKeys {
+		lower[i] = strings.ToLower(k)
+	}
+	return lower
 }
 
 // otelLogger implements observability.Logger using OTel Logger API with slog fallback.
@@ -336,6 +350,25 @@ func sanitizeFields(fields []observability.Field) []observability.Field {
 		fields = fields[:maxFields]
 	}
 
+	// First pass: check if sanitization is needed to avoid unnecessary allocations
+	needsSanitization := false
+	for _, field := range fields {
+		if isSensitiveKey(field.Key) {
+			needsSanitization = true
+			break
+		}
+		if s, ok := field.Value.(string); ok && len(s) > maxFieldValueLength {
+			needsSanitization = true
+			break
+		}
+	}
+
+	// If no sanitization needed, return original slice (zero allocation)
+	if !needsSanitization {
+		return fields
+	}
+
+	// Only allocate when sanitization is actually required
 	sanitized := make([]observability.Field, len(fields))
 	for i, field := range fields {
 		// Redact sensitive keys
@@ -359,10 +392,11 @@ func sanitizeFields(fields []observability.Field) []observability.Field {
 }
 
 // isSensitiveKey checks if a field key matches any sensitive key pattern.
+// Uses pre-computed lowercase sensitive keys for performance.
 func isSensitiveKey(key string) bool {
 	keyLower := strings.ToLower(key)
-	for _, sensitive := range DefaultSensitiveKeys {
-		if strings.Contains(keyLower, strings.ToLower(sensitive)) {
+	for _, sensitive := range sensitiveKeysLower {
+		if strings.Contains(keyLower, sensitive) {
 			return true
 		}
 	}
