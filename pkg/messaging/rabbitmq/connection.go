@@ -1,81 +1,308 @@
 package rabbitmq
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"time"
+	"sync"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"github.com/cenkalti/backoff/v4"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type RabbitMQConnection struct {
-	Connection *amqp.Connection
-	Channel    *amqp.Channel
+// connectionManager gerencia conexão AMQP com reconexão automática.
+// Thread-safe e resiliente a falhas de rede.
+type connectionManager struct {
+	config        Config
+	strategy      ConnectionStrategy
+	observability observability.Observability
+
+	mu             sync.RWMutex
+	conn           *amqp.Connection
+	channel        *amqp.Channel
+	isConnected    bool
+	isReconnecting bool
+	closed         bool
+
+	reconnectChan chan struct{}
+	closeChan     chan struct{}
+	closeOnce     sync.Once
 }
 
-func NewConnection(url string) (*RabbitMQConnection, func() error, func() error, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("connection: error to create connection: %v", err)
+// newConnectionManager cria um novo gerenciador de conexão.
+func newConnectionManager(
+	config Config,
+	strategy ConnectionStrategy,
+	o11y observability.Observability,
+) *connectionManager {
+	return &connectionManager{
+		config:        config,
+		strategy:      strategy,
+		observability: o11y,
+		isConnected:   false,
+		reconnectChan: make(chan struct{}, 1),
+		closeChan:     make(chan struct{}),
+	}
+}
+
+// connect estabelece conexão inicial com RabbitMQ.
+// Retorna erro se falhar após todas as tentativas.
+func (cm *connectionManager) connect(ctx context.Context) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.closed {
+		return ErrClientClosed
 	}
 
-	shutdownConn := func() error {
-		if err := conn.Close(); err != nil {
-			return err
-		}
+	if cm.isConnected {
 		return nil
 	}
 
-	ch, err := conn.Channel()
+	cm.observability.Logger().Info(ctx, "connecting to RabbitMQ",
+		observability.String("strategy", cm.strategy.Name()),
+	)
+
+	conn, err := cm.strategy.Dial(cm.config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("channel: error to create channel: %v", err)
+		return fmt.Errorf("failed to dial: %w", err)
 	}
 
-	shutdownCh := func() error {
-		if err := ch.Close(); err != nil {
-			return err
+	channel, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("failed to create channel: %w", err)
+	}
+
+	if cm.config.EnablePublisherConfirms {
+		if err := channel.Confirm(false); err != nil {
+			_ = channel.Close()
+			_ = conn.Close()
+			return fmt.Errorf("failed to enable publisher confirms: %w", err)
 		}
-		return nil
 	}
 
-	return &RabbitMQConnection{Connection: conn, Channel: ch}, shutdownConn, shutdownCh, nil
+	cm.conn = conn
+	cm.channel = channel
+	cm.isConnected = true
+
+	cm.observability.Logger().Info(ctx, "connected to RabbitMQ successfully",
+		observability.String("strategy", cm.strategy.Name()),
+	)
+
+	if cm.config.EnableAutoReconnect {
+		go cm.watchConnection(ctx)
+	}
+
+	return nil
 }
 
-func NewConnectWithRetry(url string) (*RabbitMQConnection, func() error, func() error, error) {
+// watchConnection monitora a conexão e reconecta automaticamente se cair.
+func (cm *connectionManager) watchConnection(ctx context.Context) {
+	cm.mu.RLock()
+	if cm.closed || cm.conn == nil {
+		cm.mu.RUnlock()
+		return
+	}
+
+	connCloseChan := cm.conn.NotifyClose(make(chan *amqp.Error, 1))
+	chanCloseChan := cm.channel.NotifyClose(make(chan *amqp.Error, 1))
+	cm.mu.RUnlock()
+
+	select {
+	case err := <-connCloseChan:
+		if err != nil {
+			cm.observability.Logger().Warn(ctx, "connection closed unexpectedly",
+				observability.Error(err),
+			)
+			cm.triggerReconnect(ctx)
+		}
+	case err := <-chanCloseChan:
+		if err != nil {
+			cm.observability.Logger().Warn(ctx, "channel closed unexpectedly",
+				observability.Error(err),
+			)
+			cm.triggerReconnect(ctx)
+		}
+	case <-cm.closeChan:
+		return
+	case <-ctx.Done():
+		return
+	}
+}
+
+// triggerReconnect inicia processo de reconexão.
+func (cm *connectionManager) triggerReconnect(ctx context.Context) {
+	cm.mu.Lock()
+	if cm.closed || cm.isReconnecting {
+		cm.mu.Unlock()
+		return
+	}
+
+	cm.isConnected = false
+	cm.isReconnecting = true
+	cm.mu.Unlock()
+
+	go cm.reconnect(ctx)
+}
+
+// reconnect tenta reconectar com backoff exponencial.
+func (cm *connectionManager) reconnect(ctx context.Context) {
+	defer func() {
+		cm.mu.Lock()
+		cm.isReconnecting = false
+		cm.mu.Unlock()
+	}()
+
+	cm.observability.Logger().Info(ctx, "starting reconnection process",
+		observability.String("strategy", cm.strategy.Name()),
+	)
+
 	backoffConfig := backoff.NewExponentialBackOff()
-	backoffConfig.InitialInterval = 1 * time.Second
-	backoffConfig.MaxInterval = 30 * time.Second
-	backoffConfig.MaxElapsedTime = 5 * time.Minute
-
-	var connection *RabbitMQConnection
-	var shutdown, shutdownCh func() error
+	backoffConfig.InitialInterval = cm.config.ReconnectInitialInterval
+	backoffConfig.MaxInterval = cm.config.ReconnectMaxInterval
+	backoffConfig.MaxElapsedTime = cm.config.ReconnectTimeout
 
 	operation := func() error {
-		conn, shutdownFunc, shutdownChFunc, err := NewConnection(url)
+		select {
+		case <-cm.closeChan:
+			return backoff.Permanent(ErrClientClosed)
+		case <-ctx.Done():
+			return backoff.Permanent(ctx.Err())
+		default:
+		}
+
+		cm.observability.Logger().Info(ctx, "attempting to reconnect",
+			observability.String("strategy", cm.strategy.Name()),
+		)
+
+		conn, err := cm.strategy.Dial(cm.config)
 		if err != nil {
-			log.Printf("failed to connect to RabbitMQ: %v", err)
+			cm.observability.Logger().Warn(ctx, "reconnection attempt failed",
+				observability.Error(err),
+			)
 			return err
 		}
-		connection = conn
-		shutdown = shutdownFunc
-		shutdownCh = shutdownChFunc
+
+		channel, err := conn.Channel()
+		if err != nil {
+			_ = conn.Close()
+			cm.observability.Logger().Warn(ctx, "failed to create channel during reconnect",
+				observability.Error(err),
+			)
+			return err
+		}
+
+		if cm.config.EnablePublisherConfirms {
+			if err := channel.Confirm(false); err != nil {
+				_ = channel.Close()
+				_ = conn.Close()
+				return err
+			}
+		}
+
+		cm.mu.Lock()
+		cm.conn = conn
+		cm.channel = channel
+		cm.isConnected = true
+		cm.mu.Unlock()
+
+		cm.observability.Logger().Info(ctx, "reconnected successfully",
+			observability.String("strategy", cm.strategy.Name()),
+		)
+
+		go cm.watchConnection(ctx)
+
 		return nil
 	}
 
-	err := backoff.Retry(operation, backoffConfig)
-	return connection, shutdown, shutdownCh, err
+	if err := backoff.Retry(operation, backoffConfig); err != nil {
+		cm.observability.Logger().Error(ctx, "failed to reconnect after all retries",
+			observability.Error(err),
+		)
+	}
 }
 
-func Cleanup(shutdown, shutdownCh func() error) {
-	if shutdownCh != nil {
-		if err := shutdownCh(); err != nil {
-			log.Printf("Error closing channel: %v", err)
-		}
+// getChannel retorna o channel atual.
+// Thread-safe.
+func (cm *connectionManager) getChannel() (*amqp.Channel, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	if cm.closed {
+		return nil, ErrClientClosed
 	}
-	if shutdown != nil {
-		if err := shutdown(); err != nil {
-			log.Printf("Error closing connection: %v", err)
-		}
+
+	if !cm.isConnected {
+		return nil, ErrNoConnection
 	}
+
+	if cm.isReconnecting {
+		return nil, ErrReconnecting
+	}
+
+	return cm.channel, nil
+}
+
+// getConnection retorna a conexão atual.
+// Thread-safe.
+func (cm *connectionManager) getConnection() (*amqp.Connection, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	if cm.closed {
+		return nil, ErrClientClosed
+	}
+
+	if !cm.isConnected {
+		return nil, ErrNoConnection
+	}
+
+	return cm.conn, nil
+}
+
+// isHealthy verifica se a conexão está saudável.
+func (cm *connectionManager) isHealthy() bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	return cm.isConnected && !cm.closed && !cm.isReconnecting && cm.conn != nil && !cm.conn.IsClosed()
+}
+
+// close encerra a conexão graciosamente.
+func (cm *connectionManager) close(ctx context.Context) error {
+	var closeErr error
+
+	cm.closeOnce.Do(func() {
+		cm.mu.Lock()
+		cm.closed = true
+		close(cm.closeChan)
+
+		if cm.channel != nil {
+			if err := cm.channel.Close(); err != nil {
+				cm.observability.Logger().Warn(ctx, "error closing channel",
+					observability.Error(err),
+				)
+				closeErr = err
+			}
+		}
+
+		if cm.conn != nil {
+			if err := cm.conn.Close(); err != nil {
+				cm.observability.Logger().Warn(ctx, "error closing connection",
+					observability.Error(err),
+				)
+				if closeErr == nil {
+					closeErr = err
+				}
+			}
+		}
+
+		cm.isConnected = false
+		cm.mu.Unlock()
+
+		cm.observability.Logger().Info(ctx, "connection closed")
+	})
+
+	return closeErr
 }

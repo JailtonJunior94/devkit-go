@@ -2,379 +2,341 @@ package rabbitmq
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"sync"
 
-	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
-	"github.com/JailtonJunior94/devkit-go/pkg/vos"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-var (
-	ErrConsumerClosed        = errors.New("consumer is closed")
-	ErrConsumerAlreadyClosed = errors.New("consumer already closed")
-)
+// MessageHandler processa uma mensagem recebida.
+// Retorna nil para ACK, erro para NACK.
+type MessageHandler func(ctx context.Context, msg Message) error
 
-type (
-	Option func(consumer *consumer)
-
-	consumer struct {
-		channel   *amqp.Channel
-		handler   map[string]messaging.ConsumeHandler
-		queue     string
-		name      string
-		prefetch  int
-		autoAck   bool
-		exclusive bool
-		noLocal   bool
-		noWait    bool
-		args      amqp.Table
-		errorChan chan error
-		mu        sync.RWMutex
-		closed    bool
-		closeMu   sync.RWMutex
-		closeOnce sync.Once
-	}
-)
-
-func NewConsumer(options ...Option) (messaging.Consumer, error) {
-	consumer := &consumer{
-		handler:   make(map[string]messaging.ConsumeHandler),
-		errorChan: make(chan error, 100),
-	}
-
-	for _, opt := range options {
-		opt(consumer)
-	}
-
-	id, err := vos.NewUUID()
-	if err != nil {
-		return nil, fmt.Errorf("consumer: %v", err)
-	}
-
-	consumer.name = fmt.Sprintf("%s:%s:%s", consumer.name, consumer.queue, id.String())
-	return consumer, nil
+// Message representa uma mensagem recebida do RabbitMQ.
+type Message struct {
+	Body        []byte
+	Headers     map[string]interface{}
+	RoutingKey  string
+	Exchange    string
+	ContentType string
+	MessageID   string
+	Timestamp   int64
+	Delivery    amqp.Delivery
 }
 
-func (c *consumer) Consume(ctx context.Context) error {
-	if err := c.channel.Qos(c.prefetch, 0, false); err != nil {
-		return fmt.Errorf("consume: %v", err)
+// Consumer representa um consumidor de mensagens RabbitMQ.
+// Thread-safe e integrado com o sistema de observability do projeto.
+type Consumer struct {
+	client        *Client
+	observability observability.Observability
+	queue         string
+	prefetchCount int
+	autoAck       bool
+	exclusive     bool
+
+	mu       sync.RWMutex
+	handlers map[string]MessageHandler
+	workers  int
+	closed   bool
+}
+
+// ConsumerOption configura opções do consumer.
+type ConsumerOption func(*Consumer)
+
+// WithQueue define a queue a ser consumida.
+func WithQueue(name string) ConsumerOption {
+	return func(c *Consumer) {
+		c.queue = name
+	}
+}
+
+// WithPrefetchCount define quantas mensagens buscar antecipadamente.
+func WithPrefetchCount(count int) ConsumerOption {
+	return func(c *Consumer) {
+		c.prefetchCount = count
+	}
+}
+
+// WithAutoAck habilita/desabilita auto-ack.
+// Recomendado: false para produção (ACK manual após processamento).
+func WithAutoAck(autoAck bool) ConsumerOption {
+	return func(c *Consumer) {
+		c.autoAck = autoAck
+	}
+}
+
+// WithExclusive define se a queue é exclusiva desta conexão.
+func WithExclusive(exclusive bool) ConsumerOption {
+	return func(c *Consumer) {
+		c.exclusive = exclusive
+	}
+}
+
+// WithWorkerPool define número de workers concorrentes.
+// Padrão: 1 (sem concorrência).
+func WithWorkerPool(workers int) ConsumerOption {
+	return func(c *Consumer) {
+		c.workers = workers
+	}
+}
+
+// NewConsumer cria um novo Consumer a partir do Client.
+//
+// Exemplo:
+//
+//	consumer := rabbitmq.NewConsumer(
+//	    client,
+//	    rabbitmq.WithQueue("my-queue"),
+//	    rabbitmq.WithPrefetchCount(10),
+//	    rabbitmq.WithWorkerPool(5),
+//	)
+func NewConsumer(client *Client, opts ...ConsumerOption) *Consumer {
+	c := &Consumer{
+		client:        client,
+		observability: client.observability,
+		prefetchCount: client.config.DefaultPrefetchCount,
+		autoAck:       false,
+		exclusive:     false,
+		handlers:      make(map[string]MessageHandler),
+		workers:       1,
+		closed:        false,
 	}
 
-	messages, err := c.channel.Consume(
-		c.queue,
-		c.name,
-		c.autoAck,
-		c.exclusive,
-		c.noLocal,
-		c.noWait,
-		c.args,
-	)
-	if err != nil {
-		return fmt.Errorf("consume: %v", err)
+	for _, opt := range opts {
+		opt(c)
 	}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case message, ok := <-messages:
-				if !ok {
-					return
-				}
-
-				if c.isClosed() {
-					return
-				}
-
-				c.mu.RLock()
-				handler, exists := c.handler[message.RoutingKey]
-				c.mu.RUnlock()
-
-				if !exists {
-					log.Printf("handler not implemented for routing key: %s", message.RoutingKey)
-					// Nack message without requeue when no handler exists
-					if !c.autoAck {
-						if err := message.Nack(false, false); err != nil {
-							c.sendError(fmt.Errorf("nack failed for unhandled message: %w", err))
-						}
-					}
-					continue
-				}
-
-				c.dispatcher(ctx, message, handler)
-			}
-		}
-	}()
-
-	return nil
+	return c
 }
 
-func (c *consumer) Close() error {
-	var closeErr error
-	c.closeOnce.Do(func() {
-		c.closeMu.Lock()
-		c.closed = true
-		c.closeMu.Unlock()
-
-		close(c.errorChan)
-		closeErr = c.channel.Close()
-	})
-	return closeErr
-}
-
-func (c *consumer) isClosed() bool {
-	c.closeMu.RLock()
-	defer c.closeMu.RUnlock()
-	return c.closed
-}
-
-func (c *consumer) Errors() <-chan error {
-	return c.errorChan
-}
-
-func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
+// RegisterHandler registra handler para routing key específica.
+// Routing key pode ser:
+//   - Exata: "user.created"
+//   - Pattern: "user.*"
+//   - Catch-all: "*" (processa todas as mensagens)
+func (c *Consumer) RegisterHandler(routingKey string, handler MessageHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.handler[eventType] = handler
+
+	c.handlers[routingKey] = handler
+
+	c.observability.Logger().Info(context.Background(), "handler registered",
+		observability.String("queue", c.queue),
+		observability.String("routing_key", routingKey),
+	)
 }
 
-func (c *consumer) dispatcher(ctx context.Context, delivery amqp.Delivery, handler messaging.ConsumeHandler) {
-	err := handler(ctx, c.extractHeader(delivery), delivery.Body)
+// Consume inicia consumo de mensagens da queue.
+// Bloqueia até contexto ser cancelado ou ocorrer erro fatal.
+//
+// Comportamento:
+//   - Configura QoS (prefetch)
+//   - Inicia workers (se configurado)
+//   - Processa mensagens continuamente
+//   - ACK/NACK automático baseado no retorno do handler
+//   - Trata erros e reconexões automaticamente
+//
+// Retorna erro se:
+//   - Falhar ao configurar QoS
+//   - Falhar ao iniciar consumo
+//   - Consumer já estiver fechado
+func (c *Consumer) Consume(ctx context.Context) error {
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return ErrClientClosed
+	}
+	c.mu.RUnlock()
+
+	ch, err := c.client.Channel()
 	if err != nil {
-		log.Printf("handler error: %v", err)
-		c.sendError(err)
-
-		// Handle retry logic - this will Nack the message
-		if retryErr := c.handleRetry(ctx, c.channel, delivery); retryErr != nil {
-			log.Printf("retry handling failed: %v", retryErr)
-			c.sendError(retryErr)
-		}
-		// Don't ACK on error - the message was already Nacked in handleRetry
-		return
+		return fmt.Errorf("failed to get channel: %w", err)
 	}
 
-	// Only ACK when handler succeeds and autoAck is disabled
-	if !c.autoAck {
-		if err := delivery.Ack(false); err != nil {
-			log.Printf("ack failed: %v", err)
-			c.sendError(fmt.Errorf("ack failed: %w", err))
-		}
-	}
-}
-
-func (c *consumer) handleRetry(ctx context.Context, ch *amqp.Channel, delivery amqp.Delivery) error {
-	if c.retry(delivery) {
-		// Nack with requeue=false to send to DLX for retry
-		if err := delivery.Nack(false, false); err != nil {
-			return fmt.Errorf("handle_retry nack: %w", err)
-		}
-		return nil
+	if err := ch.Qos(c.prefetchCount, 0, false); err != nil {
+		return fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	// Max retries exceeded - Nack and send to DLQ
-	if err := delivery.Nack(false, false); err != nil {
-		return fmt.Errorf("handle_retry nack before dlq: %w", err)
-	}
-
-	return c.sendDLQ(ctx, ch, delivery)
-}
-
-func (c *consumer) retry(delivery amqp.Delivery) bool {
-	deaths, ok := delivery.Headers["x-death"].([]any)
-	if !ok || len(deaths) == 0 {
-		return true
-	}
-
-	for _, death := range deaths {
-		values, ok := death.(amqp.Table)
-		if !ok {
-			return true
-		}
-		if count, ok := values["count"].(int64); !ok || count < 3 {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *consumer) sendDLQ(ctx context.Context, ch *amqp.Channel, delivery amqp.Delivery) error {
-	headers := amqp.Table{}
-	for k, v := range delivery.Headers {
-		if k != "x-death" {
-			headers[k] = v
-		}
-	}
-
-	err := ch.PublishWithContext(ctx, "", fmt.Sprintf("%s.dlq", delivery.RoutingKey), false, false, amqp.Publishing{
-		ContentType: delivery.ContentType,
-		Headers:     headers,
-		Body:        delivery.Body,
-	})
-
-	if err != nil {
-		return fmt.Errorf("send_dlq: %w", err)
-	}
-	return nil
-}
-
-func (c *consumer) extractHeader(delivery amqp.Delivery) map[string]string {
-	headers := make(map[string]string)
-	for key, value := range delivery.Headers {
-		headers[key] = fmt.Sprintf("%v", value)
-	}
-	return headers
-}
-
-func (c *consumer) sendError(err error) {
-	select {
-	case c.errorChan <- err:
-	default:
-		// Channel full, log and drop error
-		log.Printf("error channel full, dropping error: %v", err)
-	}
-}
-
-func (c *consumer) ConsumeBatch(ctx context.Context) error {
-	return errors.New("not implemented")
-}
-
-func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
-	if err := c.channel.Qos(c.prefetch, 0, false); err != nil {
-		return fmt.Errorf("consume: %v", err)
-	}
-
-	messages, err := c.channel.Consume(
+	deliveries, err := ch.Consume(
 		c.queue,
-		c.name,
+		"",
 		c.autoAck,
 		c.exclusive,
-		c.noLocal,
-		c.noWait,
-		c.args,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("consume: %v", err)
+		return fmt.Errorf("failed to start consuming: %w", err)
 	}
 
-	// Create worker pool
-	messageChan := make(chan amqp.Delivery, workerCount*2)
+	c.observability.Logger().Info(ctx, "consumer started",
+		observability.String("queue", c.queue),
+		observability.Int("prefetch", c.prefetchCount),
+		observability.Int("workers", c.workers),
+		observability.Bool("auto_ack", c.autoAck),
+	)
 
-	// Start workers
-	for i := 0; i < workerCount; i++ {
-		go c.worker(ctx, messageChan)
+	if c.workers > 1 {
+		return c.consumeWithWorkerPool(ctx, deliveries)
 	}
 
-	// Dispatch messages to workers
-	go func() {
-		defer close(messageChan)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case message, ok := <-messages:
-				if !ok {
-					return
-				}
+	return c.consumeSingleWorker(ctx, deliveries)
+}
 
-				if c.isClosed() {
-					return
-				}
+// consumeSingleWorker processa mensagens sequencialmente.
+func (c *Consumer) consumeSingleWorker(ctx context.Context, deliveries <-chan amqp.Delivery) error {
+	for {
+		select {
+		case <-ctx.Done():
+			c.observability.Logger().Info(ctx, "consumer stopped by context",
+				observability.String("queue", c.queue),
+			)
+			return ctx.Err()
 
-				select {
-				case messageChan <- message:
-				case <-ctx.Done():
-					return
-				}
+		case delivery, ok := <-deliveries:
+			if !ok {
+				c.observability.Logger().Warn(ctx, "deliveries channel closed",
+					observability.String("queue", c.queue),
+				)
+				return fmt.Errorf("deliveries channel closed")
 			}
+
+			c.processMessage(ctx, delivery)
 		}
+	}
+}
+
+// consumeWithWorkerPool processa mensagens com pool de workers.
+func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan amqp.Delivery) error {
+	messageChan := make(chan amqp.Delivery, c.workers*2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < c.workers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			c.worker(ctx, workerID, messageChan)
+		}(i)
+	}
+
+	go func() {
+		<-ctx.Done()
+		close(messageChan)
 	}()
+
+	for delivery := range deliveries {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return ctx.Err()
+		case messageChan <- delivery:
+		}
+	}
+
+	close(messageChan)
+	wg.Wait()
 
 	return nil
 }
 
-func (c *consumer) worker(ctx context.Context, messageChan <-chan amqp.Delivery) {
+// worker processa mensagens do canal de trabalho.
+func (c *Consumer) worker(ctx context.Context, workerID int, messageChan <-chan amqp.Delivery) {
+	c.observability.Logger().Debug(ctx, "worker started",
+		observability.String("queue", c.queue),
+		observability.Int("worker_id", workerID),
+	)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case message, ok := <-messageChan:
+		case delivery, ok := <-messageChan:
 			if !ok {
 				return
 			}
-
-			c.mu.RLock()
-			handler, exists := c.handler[message.RoutingKey]
-			c.mu.RUnlock()
-
-			if !exists {
-				log.Printf("handler not implemented for routing key: %s", message.RoutingKey)
-				if !c.autoAck {
-					if err := message.Nack(false, false); err != nil {
-						c.sendError(fmt.Errorf("nack failed for unhandled message: %w", err))
-					}
-				}
-				continue
-			}
-
-			c.dispatcher(ctx, message, handler)
+			c.processMessage(ctx, delivery)
 		}
 	}
 }
 
-func WithName(name string) Option {
-	return func(consumer *consumer) {
-		consumer.name = name
+// processMessage processa uma mensagem recebida.
+func (c *Consumer) processMessage(ctx context.Context, delivery amqp.Delivery) {
+	msg := Message{
+		Body:        delivery.Body,
+		Headers:     make(map[string]interface{}),
+		RoutingKey:  delivery.RoutingKey,
+		Exchange:    delivery.Exchange,
+		ContentType: delivery.ContentType,
+		MessageID:   delivery.MessageId,
+		Timestamp:   delivery.Timestamp.Unix(),
+		Delivery:    delivery,
+	}
+
+	for k, v := range delivery.Headers {
+		msg.Headers[k] = v
+	}
+
+	c.mu.RLock()
+	handler, exists := c.handlers[delivery.RoutingKey]
+	if !exists {
+		handler, exists = c.handlers["*"]
+	}
+	c.mu.RUnlock()
+
+	if !exists {
+		c.observability.Logger().Warn(ctx, "no handler for routing key",
+			observability.String("queue", c.queue),
+			observability.String("routing_key", delivery.RoutingKey),
+		)
+
+		if !c.autoAck {
+			if err := delivery.Nack(false, false); err != nil {
+				c.observability.Logger().Error(ctx, "failed to nack unhandled message",
+					observability.Error(err),
+				)
+			}
+		}
+		return
+	}
+
+	if err := handler(ctx, msg); err != nil {
+		c.observability.Logger().Error(ctx, "handler error",
+			observability.String("queue", c.queue),
+			observability.String("routing_key", delivery.RoutingKey),
+			observability.Error(err),
+		)
+
+		if !c.autoAck {
+			if err := delivery.Nack(false, true); err != nil {
+				c.observability.Logger().Error(ctx, "failed to nack message",
+					observability.Error(err),
+				)
+			}
+		}
+		return
+	}
+
+	if !c.autoAck {
+		if err := delivery.Ack(false); err != nil {
+			c.observability.Logger().Error(ctx, "failed to ack message",
+				observability.Error(err),
+			)
+		}
 	}
 }
 
-func WithChannel(ch *amqp.Channel) Option {
-	return func(consumer *consumer) {
-		consumer.channel = ch
-	}
-}
+// Close encerra o consumer.
+func (c *Consumer) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-func WithQueue(name string) Option {
-	return func(consumer *consumer) {
-		consumer.queue = name
-	}
-}
+	c.closed = true
 
-func WithPrefetch(qty int) Option {
-	return func(consumer *consumer) {
-		consumer.prefetch = qty
-	}
-}
+	c.observability.Logger().Info(context.Background(), "consumer closed",
+		observability.String("queue", c.queue),
+	)
 
-func WithAutoAck(autoAck bool) Option {
-	return func(consumer *consumer) {
-		consumer.autoAck = autoAck
-	}
-}
-
-func WithExclusive(exclusive bool) Option {
-	return func(consumer *consumer) {
-		consumer.exclusive = exclusive
-	}
-}
-
-func WithNoLocal(noLocal bool) Option {
-	return func(consumer *consumer) {
-		consumer.noLocal = noLocal
-	}
-}
-
-func WithNoWait(noWait bool) Option {
-	return func(consumer *consumer) {
-		consumer.noWait = noWait
-	}
-}
-
-func WithArgs(args amqp.Table) Option {
-	return func(consumer *consumer) {
-		consumer.args = args
-	}
+	return nil
 }
