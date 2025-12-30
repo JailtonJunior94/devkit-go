@@ -150,7 +150,7 @@ func TestNoopMetrics(t *testing.T) {
 	})
 }
 
-// Benchmark to ensure no-op has minimal overhead
+// Benchmark to ensure no-op has minimal overhead.
 func BenchmarkNoopTracer(b *testing.B) {
 	provider := noop.NewProvider()
 	tracer := provider.Tracer()

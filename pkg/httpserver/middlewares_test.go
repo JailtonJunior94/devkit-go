@@ -101,7 +101,7 @@ func TestGenerateFallbackID(t *testing.T) {
 func TestRecovery_NoPanic(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	wrapped := Recovery(handler)
@@ -256,7 +256,7 @@ func TestTimeout_NoTimeout(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	wrapped := Timeout(1 * time.Second)(handler)

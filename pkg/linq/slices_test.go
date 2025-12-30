@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Test Filter function
+// Test Filter function.
 func TestFilter(t *testing.T) {
 	t.Run("filters even numbers", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5, 6}
@@ -68,7 +68,7 @@ func TestFilter(t *testing.T) {
 	})
 }
 
-// Test Find function
+// Test Find function.
 func TestFind(t *testing.T) {
 	t.Run("finds first matching element", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5}
@@ -125,7 +125,7 @@ func TestFind(t *testing.T) {
 	})
 }
 
-// Test Remove function
+// Test Remove function.
 func TestRemove(t *testing.T) {
 	t.Run("removes matching elements", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5}
@@ -187,7 +187,7 @@ func TestRemove(t *testing.T) {
 	})
 }
 
-// Test Map function
+// Test Map function.
 func TestMap(t *testing.T) {
 	t.Run("maps numbers to doubled values", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4}
@@ -254,7 +254,7 @@ func TestMap(t *testing.T) {
 	})
 }
 
-// Test GroupBy function
+// Test GroupBy function.
 func TestGroupBy(t *testing.T) {
 	t.Run("groups numbers by even/odd", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5, 6}
@@ -312,7 +312,7 @@ func TestGroupBy(t *testing.T) {
 	})
 }
 
-// Test Sum function
+// Test Sum function.
 func TestSum(t *testing.T) {
 	t.Run("sums integers", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5}
@@ -371,7 +371,7 @@ func TestSum(t *testing.T) {
 	})
 }
 
-// Test concurrent safety - ensures no race conditions
+// Test concurrent safety - ensures no race conditions.
 func TestConcurrentSafety(t *testing.T) {
 	t.Run("Filter is safe with concurrent reads", func(t *testing.T) {
 		numbers := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
@@ -434,7 +434,7 @@ func TestConcurrentSafety(t *testing.T) {
 	})
 }
 
-// Benchmarks
+// Benchmarks.
 func BenchmarkFilter(b *testing.B) {
 	numbers := make([]int, 1000)
 	for i := range numbers {

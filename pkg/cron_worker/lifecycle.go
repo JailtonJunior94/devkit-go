@@ -11,7 +11,7 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// Start inicia o worker e o scheduler
+// Start inicia o worker e o scheduler.
 func (s *Server) Start(ctx context.Context) error {
 	if s.running.Load() {
 		return &WorkerError{
@@ -72,7 +72,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return s.Shutdown(shutdownCtx)
 }
 
-// Shutdown encerra graciosamente o worker
+// Shutdown encerra graciosamente o worker.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownRun.Do(func() {
 		s.shutdownMu.Lock()
@@ -134,7 +134,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.shutdownErr
 }
 
-// scheduleJobs registra todos os jobs no scheduler
+// scheduleJobs registra todos os jobs no scheduler.
 func (s *Server) scheduleJobs(ctx context.Context) error {
 	s.jobsMu.RLock()
 	defer s.jobsMu.RUnlock()
@@ -155,7 +155,7 @@ func (s *Server) scheduleJobs(ctx context.Context) error {
 	return nil
 }
 
-// scheduleJob registra um job específico no scheduler
+// scheduleJob registra um job específico no scheduler.
 func (s *Server) scheduleJob(ctx context.Context, name string, job Job) error {
 	schedule := job.Schedule()
 
@@ -182,7 +182,7 @@ func (s *Server) scheduleJob(ctx context.Context, name string, job Job) error {
 	return nil
 }
 
-// runJob executa um job com timeout e tracking
+// runJob executa um job com timeout e tracking.
 func (s *Server) runJob(parentCtx context.Context, name string, job Job) {
 	// Incrementa contador de jobs ativos
 	s.activeJobs.Add(1)

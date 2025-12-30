@@ -274,7 +274,7 @@ func TestDefaultHandleError(t *testing.T) {
 func TestHandler_ReturnsNil(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 		return nil
 	}
 
@@ -292,7 +292,7 @@ func TestHandler_ReturnsNil(t *testing.T) {
 
 	body, _ := io.ReadAll(rec.Body)
 	var result map[string]string
-	json.Unmarshal(body, &result)
+	_ = json.Unmarshal(body, &result)
 
 	if result["status"] != "ok" {
 		t.Errorf("expected status ok, got %s", result["status"])

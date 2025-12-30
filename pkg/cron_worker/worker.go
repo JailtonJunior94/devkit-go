@@ -9,7 +9,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// CronWorker define a interface para um worker baseado em cron jobs
+// CronWorker define a interface para um worker baseado em cron jobs.
 type CronWorker interface {
 	// Start inicia o worker e o scheduler de cron jobs
 	Start(ctx context.Context) error
@@ -24,7 +24,7 @@ type CronWorker interface {
 	RegisterJobs(jobs ...Job) error
 }
 
-// Server implementa a interface CronWorker
+// Server implementa a interface CronWorker.
 type Server struct {
 	config        *Config
 	observability observability.Observability
@@ -36,10 +36,9 @@ type Server struct {
 	shutdownMu    sync.Mutex
 	shutdownErr   error
 	shutdownRun   sync.Once
-	wg            sync.WaitGroup
 }
 
-// New cria uma nova instância do worker de cron
+// New cria uma nova instância do worker de cron.
 func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	config := DefaultConfig()
 	for _, opt := range opts {
@@ -82,7 +81,7 @@ func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	return srv, nil
 }
 
-// RegisterJobs registra um ou mais jobs no scheduler
+// RegisterJobs registra um ou mais jobs no scheduler.
 func (s *Server) RegisterJobs(jobs ...Job) error {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
@@ -138,19 +137,19 @@ func (s *Server) RegisterJobs(jobs ...Job) error {
 	return nil
 }
 
-// GetJobCount retorna o número total de jobs registrados
+// GetJobCount retorna o número total de jobs registrados.
 func (s *Server) GetJobCount() int {
 	s.jobsMu.RLock()
 	defer s.jobsMu.RUnlock()
 	return len(s.jobs)
 }
 
-// GetActiveJobCount retorna o número de jobs atualmente em execução
+// GetActiveJobCount retorna o número de jobs atualmente em execução.
 func (s *Server) GetActiveJobCount() int32 {
 	return s.activeJobs.Load()
 }
 
-// IsRunning verifica se o worker está em execução
+// IsRunning verifica se o worker está em execução.
 func (s *Server) IsRunning() bool {
 	return s.running.Load()
 }

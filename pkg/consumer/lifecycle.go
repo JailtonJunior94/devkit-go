@@ -3,7 +3,6 @@ package consumer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -187,107 +186,4 @@ func (s *Server) worker(ctx context.Context, workerID int) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-}
-
-// processMessage processes a single message through the middleware chain
-// and registered handlers. This is called by the worker loop.
-func (s *Server) processMessage(ctx context.Context, msg *Message) error {
-	// Create processing context with timeout
-	processCtx, cancel := context.WithTimeout(ctx, s.config.ProcessingTimeout)
-	defer cancel()
-
-	// Build handler chain with middleware
-	handler := s.buildHandlerChain(msg.Topic)
-
-	// Execute handler chain
-	if err := handler(processCtx, msg); err != nil {
-		return &ProcessingError{
-			Topic:      msg.Topic,
-			Partition:  msg.Partition,
-			Offset:     msg.Offset,
-			Attempt:    msg.Attempt,
-			MaxRetries: s.config.MaxRetries,
-			Err:        err,
-		}
-	}
-
-	return nil
-}
-
-// buildHandlerChain constructs the message processing chain by wrapping
-// the topic handlers with middleware in reverse order.
-func (s *Server) buildHandlerChain(topic string) MessageHandlerFunc {
-	// Get handlers for this topic
-	handlers := s.getHandlers(topic)
-
-	// Base handler that executes all registered handlers
-	baseHandler := func(ctx context.Context, msg *Message) error {
-		for _, h := range handlers {
-			if err := h.Handle(ctx, msg); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// Wrap with middleware in reverse order
-	handler := baseHandler
-	for i := len(s.middlewares) - 1; i >= 0; i-- {
-		handler = s.middlewares[i](handler)
-	}
-
-	return handler
-}
-
-// retryMessage attempts to retry a failed message with exponential backoff.
-func (s *Server) retryMessage(ctx context.Context, msg *Message, err error) error {
-	if msg.Attempt >= s.config.MaxRetries {
-		s.observability.Logger().Error(ctx, "message exceeded max retries",
-			observability.String("topic", msg.Topic),
-			observability.Int("partition", int(msg.Partition)),
-			observability.Int64("offset", msg.Offset),
-			observability.Int("attempts", msg.Attempt),
-			observability.String("error", err.Error()))
-
-		// Send to DLQ if enabled
-		if s.config.EnableDLQ {
-			return s.sendToDLQ(ctx, msg, err)
-		}
-
-		return fmt.Errorf("max retries exceeded: %w", err)
-	}
-
-	// Calculate backoff duration with exponential increase
-	backoff := s.config.RetryBackoff * time.Duration(1<<uint(msg.Attempt))
-	s.observability.Logger().Warn(ctx, "retrying message after backoff",
-		observability.String("topic", msg.Topic),
-		observability.Int("attempt", msg.Attempt+1),
-		observability.Int("max_retries", s.config.MaxRetries),
-		observability.String("backoff", backoff.String()))
-
-	// Wait for backoff duration or context cancellation
-	timer := time.NewTimer(backoff)
-	defer timer.Stop()
-
-	select {
-	case <-timer.C:
-		msg.Attempt++
-		return s.processMessage(ctx, msg)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// sendToDLQ sends a failed message to the dead letter queue.
-func (s *Server) sendToDLQ(ctx context.Context, msg *Message, err error) error {
-	s.observability.Logger().Warn(ctx, "sending message to DLQ",
-		observability.String("topic", msg.Topic),
-		observability.String("dlq_topic", s.config.DLQTopic),
-		observability.Int("partition", int(msg.Partition)),
-		observability.Int64("offset", msg.Offset),
-		observability.String("error", err.Error()))
-
-	// In a real implementation, this would publish to the DLQ topic
-	// For now, we just log it
-	return nil
 }

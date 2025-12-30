@@ -93,7 +93,7 @@ func TestRetryableTransport(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	}))
 	defer server.Close()
 
@@ -112,5 +112,8 @@ func TestRetryableTransport(t *testing.T) {
 
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }

@@ -132,7 +132,7 @@ func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...obse
 }
 
 
-// No-op implementations for error cases
+// No-op implementations for error cases.
 type noopCounter struct{}
 
 func (c *noopCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {}

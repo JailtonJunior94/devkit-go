@@ -8,7 +8,7 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// HealthStatus representa o status de saúde do worker
+// HealthStatus representa o status de saúde do worker.
 type HealthStatus struct {
 	// Status indica se o worker está saudável
 	Status string `json:"status"`
@@ -32,7 +32,7 @@ type HealthStatus struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// CheckResult representa o resultado de um health check
+// CheckResult representa o resultado de um health check.
 type CheckResult struct {
 	// Status indica se o check passou
 	Status string `json:"status"`
@@ -47,7 +47,7 @@ type CheckResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// HealthCheck é uma função de verificação de saúde customizada
+// HealthCheck é uma função de verificação de saúde customizada.
 type HealthCheck struct {
 	// Name é o nome do health check
 	Name string
@@ -59,7 +59,7 @@ type HealthCheck struct {
 	Timeout time.Duration
 }
 
-// Health retorna o status de saúde atual do worker
+// Health retorna o status de saúde atual do worker.
 func (s *Server) Health(ctx context.Context) HealthStatus {
 	status := HealthStatus{
 		Status:     "healthy",
@@ -95,7 +95,7 @@ func (s *Server) Health(ctx context.Context) HealthStatus {
 	return status
 }
 
-// executeHealthChecks executa todos os health checks customizados
+// executeHealthChecks executa todos os health checks customizados.
 func (s *Server) executeHealthChecks(ctx context.Context) map[string]CheckResult {
 	results := make(map[string]CheckResult)
 	var mu sync.Mutex
@@ -118,7 +118,7 @@ func (s *Server) executeHealthChecks(ctx context.Context) map[string]CheckResult
 	return results
 }
 
-// runHealthCheck executa um health check individual
+// runHealthCheck executa um health check individual.
 func (s *Server) runHealthCheck(ctx context.Context, hc HealthCheck) CheckResult {
 	start := time.Now()
 
@@ -167,12 +167,12 @@ func (s *Server) runHealthCheck(ctx context.Context, hc HealthCheck) CheckResult
 	return result
 }
 
-// Readiness verifica se o worker está pronto para processar jobs
+// Readiness verifica se o worker está pronto para processar jobs.
 func (s *Server) Readiness(ctx context.Context) bool {
 	return s.running.Load() && s.GetJobCount() > 0
 }
 
-// Liveness verifica se o worker está vivo
+// Liveness verifica se o worker está vivo.
 func (s *Server) Liveness(ctx context.Context) bool {
 	return s.running.Load()
 }

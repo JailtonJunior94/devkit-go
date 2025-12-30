@@ -42,7 +42,9 @@ func MakeRequestWithLimit[TSuccess any, TError any](ctx context.Context, client 
 	}
 
 	if response != nil {
-		defer response.Body.Close()
+		defer func() {
+			_ = response.Body.Close()
+		}()
 	}
 
 	// Limit the response body size to prevent memory exhaustion attacks

@@ -117,22 +117,6 @@ func (s *Server) registerMessageHandler(topic string, handler MessageHandler) {
 	s.handlers[topic] = append(s.handlers[topic], handler)
 }
 
-// getHandlers retrieves all registered handlers for a given topic.
-func (s *Server) getHandlers(topic string) []MessageHandler {
-	s.handlerMutex.RLock()
-	defer s.handlerMutex.RUnlock()
-
-	handlers := s.handlers[topic]
-	if handlers == nil {
-		return []MessageHandler{}
-	}
-
-	// Return a copy to avoid concurrent modification
-	result := make([]MessageHandler, len(handlers))
-	copy(result, handlers)
-	return result
-}
-
 // addHealthCheck adds a health check function with the given name.
 func (s *Server) addHealthCheck(name string, check HealthCheckFunc) {
 	s.healthChecksMutex.Lock()

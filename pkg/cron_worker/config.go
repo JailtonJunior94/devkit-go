@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Config contém as configurações do worker de cron
+// Config contém as configurações do worker de cron.
 type Config struct {
 	// ServiceName é o nome do serviço
 	ServiceName string
@@ -53,7 +53,7 @@ type Config struct {
 	OnJobPanic func(jobName string, recovered interface{})
 }
 
-// DefaultConfig retorna uma configuração padrão
+// DefaultConfig retorna uma configuração padrão.
 func DefaultConfig() *Config {
 	return &Config{
 		ServiceName:       "cron-worker",
@@ -74,7 +74,7 @@ func DefaultConfig() *Config {
 	}
 }
 
-// Validate valida as configurações
+// Validate valida as configurações.
 func (c *Config) Validate() error {
 	if c.ServiceName == "" {
 		return errors.New("service name is required")

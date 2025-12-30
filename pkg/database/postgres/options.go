@@ -19,7 +19,7 @@ type Option func(*Database)
 //   - Muito alto: exaustão de recursos no servidor PostgreSQL
 //   - Sweet spot: monitorar "wait_count" nas métricas do pool
 //
-// Padrão: 25 conexões
+// Padrão: 25 conexões.
 func WithMaxOpenConns(n int) Option {
 	return func(d *Database) {
 		d.db.SetMaxOpenConns(n)
@@ -39,7 +39,7 @@ func WithMaxOpenConns(n int) Option {
 //   - Sweet spot: 25-50% de MaxOpenConns para tráfego variável
 //
 // Importante: deve ser <= MaxOpenConns
-// Padrão: 6 conexões (25% de 25)
+// Padrão: 6 conexões (25% de 25).
 func WithMaxIdleConns(n int) Option {
 	return func(d *Database) {
 		d.db.SetMaxIdleConns(n)
@@ -63,7 +63,7 @@ func WithMaxIdleConns(n int) Option {
 //   - Muito alto: acúmulo de problemas em conexões antigas
 //   - Sweet spot: 5-10 minutos para maioria dos casos
 //
-// Padrão: 5 minutos
+// Padrão: 5 minutos.
 func WithConnMaxLifetime(d time.Duration) Option {
 	return func(db *Database) {
 		db.db.SetConnMaxLifetime(d)
@@ -87,7 +87,7 @@ func WithConnMaxLifetime(d time.Duration) Option {
 //   - Muito alto: mantém conexões abertas indefinidamente
 //   - Sweet spot: 2-3 minutos para tráfego variável
 //
-// Padrão: 2 minutos
+// Padrão: 2 minutos.
 func WithConnMaxIdleTime(d time.Duration) Option {
 	return func(db *Database) {
 		db.db.SetConnMaxIdleTime(d)

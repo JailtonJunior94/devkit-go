@@ -20,11 +20,13 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	tmpfile.Close()
+	if err := tmpfile.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
 
 	// Clean up the temp file when test ends
 	t.Cleanup(func() {
-		os.Remove(tmpfile.Name())
+		_ = os.Remove(tmpfile.Name())
 	})
 
 	// Open database with WAL mode and busy timeout for better concurrency support
@@ -34,7 +36,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	}
 
 	t.Cleanup(func() {
-		db.Close()
+		_ = db.Close()
 	})
 
 	// Create test table
@@ -476,13 +478,17 @@ func TestUnitOfWork_MultiplePanicsSequential(t *testing.T) {
 	}
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkUnitOfWork_Sequential(b *testing.B) {
 	// Create a mock testing.T for setup
 	t := &testing.T{}
 	db := setupTestDB(t)
 	// setupTestDB uses t.Cleanup, so we need to defer close manually for benchmarks
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			b.Logf("failed to close database: %v", err)
+		}
+	}()
 
 	uow := NewUnitOfWork(db)
 	ctx := context.Background()
@@ -500,7 +506,11 @@ func BenchmarkUnitOfWork_Concurrent(b *testing.B) {
 	// Create a mock testing.T for setup
 	t := &testing.T{}
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			b.Logf("failed to close database: %v", err)
+		}
+	}()
 
 	db.SetMaxOpenConns(20)
 

@@ -34,10 +34,10 @@ func Example_completeWorkflow() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Shutdown(context.Background())
 
 	// 2. Declarar topologia (exchanges, queues, bindings)
 	if err := setupTopology(ctx, client); err != nil {
+		_ = client.Shutdown(context.Background())
 		log.Fatal(err)
 	}
 
@@ -63,6 +63,7 @@ func Example_completeWorkflow() {
 		}),
 		rabbitmq.WithMessageID("msg-123"),
 	); err != nil {
+		_ = client.Shutdown(context.Background())
 		log.Fatal(err)
 	}
 
@@ -119,7 +120,9 @@ func Example_developmentLocal() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Shutdown(ctx)
+	defer func() {
+		_ = client.Shutdown(ctx)
+	}()
 
 	fmt.Println("Connected to local RabbitMQ")
 }
@@ -148,7 +151,9 @@ func Example_tlsConnection() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Shutdown(ctx)
+	defer func() {
+		_ = client.Shutdown(ctx)
+	}()
 
 	fmt.Println("Connected with TLS")
 }
@@ -165,7 +170,9 @@ func Example_healthCheckIntegration() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Shutdown(context.Background())
+	defer func() {
+		_ = client.Shutdown(context.Background())
+	}()
 
 	// Integração com HTTP server (pkg/http_server/server_fiber)
 	healthChecks := map[string]func(context.Context) error{
@@ -192,7 +199,6 @@ func Example_publisherWithRetry() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Shutdown(ctx)
 
 	publisher := rabbitmq.NewPublisher(client)
 
@@ -217,10 +223,12 @@ func Example_publisherWithRetry() {
 	}
 
 	if publishErr != nil {
+		_ = client.Shutdown(ctx)
 		log.Fatal("Failed to publish after retries")
 	}
 
 	fmt.Println("Message published successfully")
+	_ = client.Shutdown(ctx)
 }
 
 // setupTopology configura exchanges, queues e bindings.

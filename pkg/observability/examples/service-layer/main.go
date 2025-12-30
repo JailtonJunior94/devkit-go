@@ -373,7 +373,9 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize observability:", err)
 	}
-	defer obs.Shutdown(ctx)
+	defer func() {
+		_ = obs.Shutdown(ctx)
+	}()
 
 	// Create repository and service
 	repo := NewOrderRepository(obs)

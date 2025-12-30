@@ -373,14 +373,17 @@ func TestHashAdapter_ConcurrentUsage(t *testing.T) {
 	})
 }
 
-// Benchmarks
+// Benchmarks.
 func BenchmarkHashAdapter_GenerateHash_Cost4(b *testing.B) {
 	adapter := NewHashAdapterWithCost(MinBcryptCost)
 	password := "benchmarkPassword"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		adapter.GenerateHash(password)
+		_, err := adapter.GenerateHash(password)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -390,7 +393,10 @@ func BenchmarkHashAdapter_GenerateHash_Cost10(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		adapter.GenerateHash(password)
+		_, err := adapter.GenerateHash(password)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

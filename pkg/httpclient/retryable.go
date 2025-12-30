@@ -102,8 +102,8 @@ func (t *retryableTransport) drainBody(resp *http.Response) {
 		return
 	}
 	// Limit drain size to prevent memory exhaustion from malicious servers
-	io.CopyN(io.Discard, resp.Body, DefaultMaxDrainSize)
-	resp.Body.Close()
+	_, _ = io.CopyN(io.Discard, resp.Body, DefaultMaxDrainSize)
+	_ = resp.Body.Close()
 }
 
 func WithMaxRetries(retryCount int) Option {
@@ -132,7 +132,7 @@ func WithBackoff(duration time.Duration) Option {
 }
 
 // WithTimeout sets the timeout for HTTP requests.
-// Default: 30 seconds
+// Default: 30 seconds.
 func WithTimeout(timeout time.Duration) Option {
 	return func(retryableTransport *retryableTransport) {
 		if timeout > 0 {

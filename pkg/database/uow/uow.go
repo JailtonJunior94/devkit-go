@@ -41,7 +41,7 @@ type unitOfWork struct {
 type UnitOfWorkOption func(*unitOfWork)
 
 // WithIsolationLevel configura o nível de isolamento da transação.
-// Exemplo: WithIsolationLevel(sql.LevelSerializable)
+// Exemplo: WithIsolationLevel(sql.LevelSerializable).
 func WithIsolationLevel(level sql.IsolationLevel) UnitOfWorkOption {
 	return func(u *unitOfWork) {
 		if u.options == nil {

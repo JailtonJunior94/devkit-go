@@ -59,7 +59,7 @@ func GetRequestID(ctx context.Context) string {
 }
 
 // generateFallbackID generates a fallback ID when UUID generation fails.
-// Format: timestamp (hex) + random bytes = 8 + 8 = 16 hex chars
+// Format: timestamp (hex) + random bytes = 8 + 8 = 16 hex chars.
 func generateFallbackID() string {
 	// Use timestamp for ordering
 	ts := time.Now().UnixNano()

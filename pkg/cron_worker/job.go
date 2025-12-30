@@ -2,7 +2,7 @@ package cron_worker
 
 import "context"
 
-// Job define a interface para um cron job
+// Job define a interface para um cron job.
 type Job interface {
 	// Name retorna o nome do job
 	Name() string
@@ -21,14 +21,14 @@ type Job interface {
 	Run(ctx context.Context) error
 }
 
-// FuncJob implementa Job usando uma função
+// FuncJob implementa Job usando uma função.
 type FuncJob struct {
 	name     string
 	schedule string
 	fn       func(ctx context.Context) error
 }
 
-// NewFuncJob cria um novo FuncJob
+// NewFuncJob cria um novo FuncJob.
 func NewFuncJob(name, schedule string, fn func(ctx context.Context) error) *FuncJob {
 	return &FuncJob{
 		name:     name,
@@ -37,17 +37,17 @@ func NewFuncJob(name, schedule string, fn func(ctx context.Context) error) *Func
 	}
 }
 
-// Name retorna o nome do job
+// Name retorna o nome do job.
 func (j *FuncJob) Name() string {
 	return j.name
 }
 
-// Schedule retorna o cron schedule do job
+// Schedule retorna o cron schedule do job.
 func (j *FuncJob) Schedule() string {
 	return j.schedule
 }
 
-// Run executa a função do job
+// Run executa a função do job.
 func (j *FuncJob) Run(ctx context.Context) error {
 	return j.fn(ctx)
 }

@@ -42,7 +42,7 @@ type (
 )
 
 // WithPort sets the server port.
-// Default: "8080"
+// Default: "8080".
 func WithPort(port string) Option {
 	return func(s settings) settings {
 		s.port = port
@@ -52,7 +52,7 @@ func WithPort(port string) Option {
 
 // WithReadTimeout sets the maximum duration for reading the entire request.
 // This includes the body. A zero or negative value means no timeout.
-// Default: 15 seconds
+// Default: 15 seconds.
 func WithReadTimeout(timeout time.Duration) Option {
 	return func(s settings) settings {
 		s.readTimeout = timeout
@@ -62,7 +62,7 @@ func WithReadTimeout(timeout time.Duration) Option {
 
 // WithWriteTimeout sets the maximum duration before timing out writes of the response.
 // A zero or negative value means no timeout.
-// Default: 15 seconds
+// Default: 15 seconds.
 func WithWriteTimeout(timeout time.Duration) Option {
 	return func(s settings) settings {
 		s.writeTimeout = timeout
@@ -72,7 +72,7 @@ func WithWriteTimeout(timeout time.Duration) Option {
 
 // WithIdleTimeout sets the maximum amount of time to wait for the next request
 // when keep-alives are enabled.
-// Default: 60 seconds
+// Default: 60 seconds.
 func WithIdleTimeout(timeout time.Duration) Option {
 	return func(s settings) settings {
 		s.idleTimeout = timeout
@@ -81,7 +81,7 @@ func WithIdleTimeout(timeout time.Duration) Option {
 }
 
 // WithReadHeaderTimeout sets the amount of time allowed to read request headers.
-// Default: 5 seconds
+// Default: 5 seconds.
 func WithReadHeaderTimeout(timeout time.Duration) Option {
 	return func(s settings) settings {
 		s.readHeaderTimeout = timeout
@@ -90,7 +90,7 @@ func WithReadHeaderTimeout(timeout time.Duration) Option {
 }
 
 // WithMaxHeaderBytes sets the maximum size of request headers.
-// Default: 1MB (1 << 20)
+// Default: 1MB (1 << 20).
 func WithMaxHeaderBytes(size int) Option {
 	return func(s settings) settings {
 		s.maxHeaderBytes = size
@@ -99,7 +99,7 @@ func WithMaxHeaderBytes(size int) Option {
 }
 
 // WithShutdownTimeout sets the timeout for graceful shutdown.
-// Default: 30 seconds
+// Default: 30 seconds.
 func WithShutdownTimeout(timeout time.Duration) Option {
 	return func(s settings) settings {
 		s.shutdownTimeout = timeout

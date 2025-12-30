@@ -236,7 +236,7 @@ func TestErrorWithDetails(t *testing.T) {
 	})
 }
 
-// Test concurrent usage
+// Test concurrent usage.
 func TestConcurrentUsage(t *testing.T) {
 	t.Run("handles concurrent JSON writes", func(t *testing.T) {
 		const goroutines = 100
@@ -262,7 +262,7 @@ func TestConcurrentUsage(t *testing.T) {
 	})
 }
 
-// Benchmarks
+// Benchmarks.
 func BenchmarkJSON(b *testing.B) {
 	data := map[string]string{"message": "success", "status": "ok"}
 

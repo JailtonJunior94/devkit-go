@@ -7,7 +7,7 @@ const (
 	// Recomendado: 10-14 (10 é um bom equilíbrio entre segurança e performance).
 	// Custo 10 = ~100ms em hardware moderno
 	// Custo 12 = ~400ms em hardware moderno
-	// Custo 14 = ~1.6s em hardware moderno
+	// Custo 14 = ~1.6s em hardware moderno.
 	DefaultBcryptCost = 10
 
 	// MinBcryptCost é o custo mínimo aceitável (apenas para testes).

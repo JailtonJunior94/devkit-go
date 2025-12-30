@@ -38,7 +38,9 @@ func NewLogger() Logger {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer logger.Sync()
+	defer func() {
+		_ = logger.Sync()
+	}()
 	return &zapLogger{logger: logger}
 }
 

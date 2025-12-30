@@ -8,13 +8,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// cronLogger adapta o observability logger para o cron logger
+// cronLogger adapta o observability logger para o cron logger.
 type cronLogger struct {
 	serviceName string
 	o11y        observability.Observability
 }
 
-// newCronLogger cria um novo cron logger
+// newCronLogger cria um novo cron logger.
 func newCronLogger(serviceName string, o11y observability.Observability) cron.Logger {
 	return &cronLogger{
 		serviceName: serviceName,
@@ -22,14 +22,14 @@ func newCronLogger(serviceName string, o11y observability.Observability) cron.Lo
 	}
 }
 
-// Info implementa cron.Logger
+// Info implementa cron.Logger.
 func (l *cronLogger) Info(msg string, keysAndValues ...interface{}) {
 	ctx := context.Background()
 	fields := l.convertKeysAndValues(keysAndValues...)
 	l.o11y.Logger().Info(ctx, msg, fields...)
 }
 
-// Error implementa cron.Logger
+// Error implementa cron.Logger.
 func (l *cronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
 	ctx := context.Background()
 	fields := l.convertKeysAndValues(keysAndValues...)
@@ -37,7 +37,7 @@ func (l *cronLogger) Error(err error, msg string, keysAndValues ...interface{}) 
 	l.o11y.Logger().Error(ctx, msg, fields...)
 }
 
-// convertKeysAndValues converte pares chave-valor para observability.Field
+// convertKeysAndValues converte pares chave-valor para observability.Field.
 func (l *cronLogger) convertKeysAndValues(keysAndValues ...interface{}) []observability.Field {
 	fields := []observability.Field{
 		observability.String("worker", l.serviceName),
@@ -60,7 +60,7 @@ func (l *cronLogger) convertKeysAndValues(keysAndValues ...interface{}) []observ
 	return fields
 }
 
-// convertValue converte um valor para observability.Field
+// convertValue converte um valor para observability.Field.
 func (l *cronLogger) convertValue(key string, value interface{}) observability.Field {
 	switch v := value.(type) {
 	case string:

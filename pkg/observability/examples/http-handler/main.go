@@ -166,7 +166,7 @@ func (h *HTTPHandler) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(user)
 
 	// Record success metric
 	successCounter := h.obs.Metrics().Counter(
@@ -210,7 +210,7 @@ func (h *HTTPHandler) handleError(ctx context.Context, w http.ResponseWriter, sp
 	// Send error response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
 }
@@ -235,7 +235,6 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize observability:", err)
 	}
-	defer obs.Shutdown(ctx)
 
 	// Create service and handler
 	service := NewUserService(obs)
@@ -250,6 +249,7 @@ func main() {
 	log.Println("Try: curl 'http://localhost:8080/users?id=invalid'")
 
 	if err := http.ListenAndServe(":8080", nil); err != nil {
+		_ = obs.Shutdown(ctx)
 		log.Fatal(err)
 	}
 }
