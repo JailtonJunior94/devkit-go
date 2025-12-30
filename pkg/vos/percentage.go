@@ -1,171 +1,324 @@
 package vos
 
 import (
-	"errors"
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 )
 
-var (
-	// ErrDivisionByZeroPercentage é retornado quando se tenta dividir por zero.
-	ErrDivisionByZeroPercentage = errors.New("division by zero")
-)
-
-// Percentage representa um valor percentual com precisão de 4 casas decimais.
-// Internamente armazena o valor em basis points (1 bp = 0.0001% = 1/10000) para evitar
-// problemas de precisão de ponto flutuante. É seguro para cálculos precisos.
+// Percentage represents a percentage value with fixed precision.
+// It is a DDD Value Object that is immutable, thread-safe, and safe for calculations.
 //
-// Exemplo:
+// Internal representation uses int64 with scale 3 (e.g., 12.345% = 12345).
+// This avoids floating-point precision issues in financial calculations.
 //
-//	p := NewPercentage(10.5)  // 10.50%
-//	p2 := NewPercentageFromBasisPoints(105000)  // 10.5000% (equivalente)
+// Example:
+//
+//	p, _ := NewPercentage(12345)  // 12.345%
+//	p2, _ := NewPercentageFromFloat(12.345)  // 12.345% (less precise, not recommended)
 type Percentage struct {
-	// basisPoints armazena o valor em basis points (1/10000) para garantir precisão
-	// 10000 basis points = 1%
-	basisPoints int64
+	value int64 // Value scaled by 1000 (3 decimal places) - immutable
 }
 
-// NewPercentage cria um Percentage a partir de um valor percentual (float64).
-// O valor é convertido para basis points internamente para garantir precisão.
+const (
+	percentageScaleFactor = 1000 // 10^scale = 1000 for 3 decimal places
+	maxPercentageValue    = 1 << 53
+	minPercentageValue    = -maxPercentageValue
+)
+
+// NewPercentage creates a new Percentage value object from a scaled integer.
+// This is the recommended constructor for precision-critical operations.
 //
-// Exemplo: NewPercentage(10.5) representa 10.50%
-func NewPercentage(value float64) Percentage {
-	return Percentage{basisPoints: int64(value * 10000)}
-}
-
-// NewPercentageFromBasisPoints cria um Percentage a partir de basis points.
-// Recomendado quando a precisão é crítica.
-// 1 basis point = 0.0001%
+// The value should be scaled by 1000. For example:
+//   - 12345 represents 12.345%
+//   - 1000 represents 1.000%
+//   - 100000 represents 100.000%
 //
-// Exemplo: NewPercentageFromBasisPoints(105000) representa 10.5000%
-func NewPercentageFromBasisPoints(basisPoints int64) Percentage {
-	return Percentage{basisPoints: basisPoints}
-}
-
-// Add adiciona dois valores percentuais.
-func (p Percentage) Add(other Percentage) Percentage {
-	return Percentage{basisPoints: p.basisPoints + other.basisPoints}
-}
-
-// Sub subtrai um valor percentual de outro.
-func (p Percentage) Sub(other Percentage) Percentage {
-	return Percentage{basisPoints: p.basisPoints - other.basisPoints}
-}
-
-// Mul multiplica o valor percentual por um fator.
-// Note que o resultado é arredondado para o basis point mais próximo.
-func (p Percentage) Mul(factor float64) Percentage {
-	return Percentage{basisPoints: int64(float64(p.basisPoints) * factor)}
-}
-
-// Div divide o valor percentual por um divisor.
-// Retorna erro se o divisor for zero.
-// Note que o resultado é arredondado para o basis point mais próximo.
-func (p Percentage) Div(divisor float64) (Percentage, error) {
-	if divisor == 0 {
-		return Percentage{}, ErrDivisionByZeroPercentage
+// Returns ErrInvalidValue for invalid inputs.
+// Returns ErrOverflow if value exceeds safe limits.
+//
+// Example:
+//
+//	p, err := NewPercentage(12345)  // 12.345%
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func NewPercentage(value int64) (Percentage, error) {
+	if value > maxPercentageValue || value < minPercentageValue {
+		return Percentage{}, ErrOverflow
 	}
-	return Percentage{basisPoints: int64(float64(p.basisPoints) / divisor)}, nil
+
+	return Percentage{value: value}, nil
 }
 
-// String retorna a representação em string formatada do valor percentual.
-// Formato: 10.50%
-func (p Percentage) String() string {
-	return fmt.Sprintf("%.4f%%", p.Float())
+// NewPercentageFromFloat creates Percentage from a float64 value.
+// This is less precise due to floating-point representation.
+// Use NewPercentage with scaled integer for precision-critical operations.
+//
+// Example:
+//
+//	p, err := NewPercentageFromFloat(12.345)  // 12.345%
+func NewPercentageFromFloat(value float64) (Percentage, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return Percentage{}, ErrInvalidValue
+	}
+
+	scaled := int64(math.Round(value * percentageScaleFactor))
+
+	if scaled > maxPercentageValue || scaled < minPercentageValue {
+		return Percentage{}, ErrOverflow
+	}
+
+	return Percentage{value: scaled}, nil
 }
 
-// Equals verifica se dois valores percentuais são iguais.
-// Usa comparação exata de inteiros, não há problemas de precisão de float.
-func (p Percentage) Equals(other Percentage) bool {
-	return p.basisPoints == other.basisPoints
+// NewPercentageFromString creates Percentage from a string representation.
+// Accepts formats: "12.345", "12,345", "12.3", "12"
+//
+// Example:
+//
+//	p, err := NewPercentageFromString("12.345")  // 12.345%
+func NewPercentageFromString(value string) (Percentage, error) {
+	// Normalize decimal separator
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, ",", ".")
+	value = strings.TrimSuffix(value, "%")
+	value = strings.TrimSpace(value)
+
+	// Parse as float64
+	floatValue, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return Percentage{}, ErrInvalidFormat
+	}
+
+	return NewPercentageFromFloat(floatValue)
 }
 
-// LessThan verifica se este valor é menor que outro.
-func (p Percentage) LessThan(other Percentage) bool {
-	return p.basisPoints < other.basisPoints
+// Value returns the raw scaled value (value * 1000).
+// Useful for database storage and precise calculations.
+func (p Percentage) Value() int64 {
+	return p.value
 }
 
-// GreaterThan verifica se este valor é maior que outro.
-func (p Percentage) GreaterThan(other Percentage) bool {
-	return p.basisPoints > other.basisPoints
-}
-
-// LessThanOrEqual verifica se este valor é menor ou igual a outro.
-func (p Percentage) LessThanOrEqual(other Percentage) bool {
-	return p.basisPoints <= other.basisPoints
-}
-
-// GreaterThanOrEqual verifica se este valor é maior ou igual a outro.
-func (p Percentage) GreaterThanOrEqual(other Percentage) bool {
-	return p.basisPoints >= other.basisPoints
-}
-
-// Float retorna o valor percentual como float64.
-// Use apenas para exibição, não para cálculos.
+// Float returns the value as float64.
+// WARNING: Use only for display purposes, not for calculations due to precision loss.
 func (p Percentage) Float() float64 {
-	return float64(p.basisPoints) / 10000.0
+	return float64(p.value) / percentageScaleFactor
 }
 
-// BasisPoints retorna o valor em basis points.
-// Útil para armazenamento em banco de dados.
-// 1 basis point = 0.0001%
-func (p Percentage) BasisPoints() int64 {
-	return p.basisPoints
+// Add adds two Percentage values.
+// Returns ErrOverflow if result would overflow.
+func (p Percentage) Add(other Percentage) (Percentage, error) {
+	// Check for overflow
+	if (other.value > 0 && p.value > maxPercentageValue-other.value) ||
+		(other.value < 0 && p.value < minPercentageValue-other.value) {
+		return Percentage{}, ErrOverflow
+	}
+
+	return Percentage{value: p.value + other.value}, nil
 }
 
-// IsZero verifica se o valor é zero.
+// Subtract subtracts another Percentage value from this one.
+// Returns ErrOverflow if result would overflow.
+func (p Percentage) Subtract(other Percentage) (Percentage, error) {
+	// Check for overflow
+	if (other.value < 0 && p.value > maxPercentageValue+other.value) ||
+		(other.value > 0 && p.value < minPercentageValue+other.value) {
+		return Percentage{}, ErrOverflow
+	}
+
+	return Percentage{value: p.value - other.value}, nil
+}
+
+// Multiply multiplies Percentage by an integer factor.
+// Returns ErrOverflow if result would overflow.
+func (p Percentage) Multiply(factor int64) (Percentage, error) {
+	// Check for overflow
+	if factor != 0 && (p.value > maxPercentageValue/factor || p.value < minPercentageValue/factor) {
+		return Percentage{}, ErrOverflow
+	}
+
+	return Percentage{value: p.value * factor}, nil
+}
+
+// Divide divides Percentage by an integer divisor.
+// Returns ErrDivisionByZero if divisor is zero.
+// Result is truncated towards zero.
+func (p Percentage) Divide(divisor int64) (Percentage, error) {
+	if divisor == 0 {
+		return Percentage{}, ErrDivisionByZero
+	}
+
+	return Percentage{value: p.value / divisor}, nil
+}
+
+// Apply applies this percentage to a Money value.
+// Returns the calculated amount as Money with the same currency.
+// Returns ErrCurrencyMismatch for operations between different currencies.
+//
+// Example:
+//
+//	p, _ := NewPercentageFromFloat(10.0)  // 10%
+//	m, _ := NewMoney(10000, CurrencyBRL)  // 100.00 BRL
+//	result, err := p.Apply(m)  // 10.00 BRL (10% of 100.00)
+func (p Percentage) Apply(money Money) (Money, error) {
+	// Calculate: (money.cents * percentage) / 100 / 1000
+	// This is: (cents * p.value) / 100000
+	// We use integer arithmetic to maintain precision
+
+	cents := money.Cents()
+	percentage := p.value
+
+	// Perform calculation with overflow checking
+	result := (cents * percentage) / (100 * percentageScaleFactor)
+
+	return NewMoney(result, money.Currency())
+}
+
+// Equals checks if two Percentage values are equal.
+func (p Percentage) Equals(other Percentage) bool {
+	return p.value == other.value
+}
+
+// GreaterThan checks if this Percentage is greater than another.
+func (p Percentage) GreaterThan(other Percentage) bool {
+	return p.value > other.value
+}
+
+// LessThan checks if this Percentage is less than another.
+func (p Percentage) LessThan(other Percentage) bool {
+	return p.value < other.value
+}
+
+// GreaterThanOrEqual checks if this Percentage is greater than or equal to another.
+func (p Percentage) GreaterThanOrEqual(other Percentage) bool {
+	return p.value >= other.value
+}
+
+// LessThanOrEqual checks if this Percentage is less than or equal to another.
+func (p Percentage) LessThanOrEqual(other Percentage) bool {
+	return p.value <= other.value
+}
+
+// IsZero checks if the value is zero.
 func (p Percentage) IsZero() bool {
-	return p.basisPoints == 0
+	return p.value == 0
 }
 
-// IsNegative verifica se o valor é negativo.
-func (p Percentage) IsNegative() bool {
-	return p.basisPoints < 0
-}
-
-// IsPositive verifica se o valor é positivo.
+// IsPositive checks if the value is positive (> 0).
 func (p Percentage) IsPositive() bool {
-	return p.basisPoints > 0
+	return p.value > 0
 }
 
-// Abs retorna o valor absoluto.
+// IsNegative checks if the value is negative (< 0).
+func (p Percentage) IsNegative() bool {
+	return p.value < 0
+}
+
+// Abs returns the absolute value.
 func (p Percentage) Abs() Percentage {
-	if p.basisPoints < 0 {
-		return Percentage{basisPoints: -p.basisPoints}
+	if p.value < 0 {
+		return Percentage{value: -p.value}
 	}
 	return p
 }
 
-// Negate retorna o valor negado.
+// Negate returns the negated value.
 func (p Percentage) Negate() Percentage {
-	return Percentage{basisPoints: -p.basisPoints}
+	return Percentage{value: -p.value}
 }
 
-// Apply aplica a porcentagem a um valor.
-// Exemplo: Percentage(10%).Apply(100) = 10
-func (p Percentage) Apply(value float64) float64 {
-	return value * p.Float() / 100.0
+// String returns a human-readable string representation.
+// Format: "12.345%".
+func (p Percentage) String() string {
+	return fmt.Sprintf("%.3f%%", p.Float())
 }
 
-// ApplyToMoney aplica a porcentagem a um Money e retorna um Money.
-// Exemplo: Percentage(10%).ApplyToMoney(Money(100)) = Money(10)
-func (p Percentage) ApplyToMoney(m Money) Money {
-	cents := int64(float64(m.Cents()) * p.Float() / 100.0)
-	return NewMoneyFromCents(cents)
-}
-
-// MarshalJSON implementa json.Marshaler.
-// Serializa como float64 (ex: 10.50 para 10.50%)
+// MarshalJSON implements json.Marshaler.
+// Serializes as string with 3 decimal places: "12.345".
 func (p Percentage) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%.4f", p.Float())), nil
+	return []byte(fmt.Sprintf(`"%.3f"`, p.Float())), nil
 }
 
-// UnmarshalJSON implementa json.Unmarshaler.
-// Aceita float64 (ex: 10.50 para 10.50%)
+// UnmarshalJSON implements json.Unmarshaler.
+// Accepts string or number: "12.345" or 12.345.
 func (p *Percentage) UnmarshalJSON(data []byte) error {
-	var value float64
-	if _, err := fmt.Sscanf(string(data), "%f", &value); err != nil {
+	// Try to unmarshal as string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		percentage, err := NewPercentageFromString(str)
+		if err != nil {
+			return err
+		}
+		*p = percentage
+		return nil
+	}
+
+	// Try to unmarshal as number
+	var num float64
+	if err := json.Unmarshal(data, &num); err != nil {
+		return ErrInvalidFormat
+	}
+
+	percentage, err := NewPercentageFromFloat(num)
+	if err != nil {
 		return err
 	}
-	p.basisPoints = int64(value * 10000)
+
+	*p = percentage
 	return nil
+}
+
+// Value implements driver.Valuer for database persistence.
+// Stores as integer (scaled by 1000) for precision.
+func (p Percentage) ValuerValue() (driver.Value, error) {
+	return p.value, nil
+}
+
+// Scan implements sql.Scanner for database retrieval.
+// Reads from INTEGER or NUMERIC database column.
+func (p *Percentage) Scan(value interface{}) error {
+	if value == nil {
+		return ErrNullValue
+	}
+
+	switch v := value.(type) {
+	case int64:
+		// Stored as scaled integer (recommended)
+		percentage, err := NewPercentage(v)
+		if err != nil {
+			return err
+		}
+		*p = percentage
+		return nil
+	case float64:
+		// Stored as float (convert to scaled integer)
+		percentage, err := NewPercentageFromFloat(v)
+		if err != nil {
+			return err
+		}
+		*p = percentage
+		return nil
+	case string:
+		// Stored as string
+		percentage, err := NewPercentageFromString(v)
+		if err != nil {
+			return err
+		}
+		*p = percentage
+		return nil
+	case []byte:
+		// Stored as bytes
+		percentage, err := NewPercentageFromString(string(v))
+		if err != nil {
+			return err
+		}
+		*p = percentage
+		return nil
+	default:
+		return ErrInvalidFormat
+	}
 }
