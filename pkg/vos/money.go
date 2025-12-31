@@ -172,8 +172,26 @@ func (m Money) Subtract(other Money) (Money, error) {
 // Multiply multiplies Money by an integer factor.
 // Returns ErrOverflow if result would overflow.
 func (m Money) Multiply(factor int64) (Money, error) {
-	// Check for overflow
-	if factor != 0 && (m.cents > maxMoneyCents/factor || m.cents < -maxMoneyCents/factor) {
+	// Handle zero factor
+	if factor == 0 {
+		return Money{cents: 0, currency: m.currency}, nil
+	}
+
+	// Use absolute values for overflow checking
+	// This correctly handles negative factors
+	absCents := m.cents
+	if absCents < 0 {
+		absCents = -absCents
+	}
+
+	absFactor := factor
+	if absFactor < 0 {
+		absFactor = -absFactor
+	}
+
+	// Check for overflow: absCents * absFactor > maxMoneyCents
+	// Rewritten as: absCents > maxMoneyCents / absFactor
+	if absCents > maxMoneyCents/absFactor {
 		return Money{}, ErrOverflow
 	}
 

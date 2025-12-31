@@ -171,9 +171,31 @@ func (p Percentage) Apply(money Money) (Money, error) {
 
 	cents := money.Cents()
 	percentage := p.value
+	divisor := int64(100 * percentageScaleFactor)
 
-	// Perform calculation with overflow checking
-	result := (cents * percentage) / (100 * percentageScaleFactor)
+	// Check for overflow BEFORE multiplication
+	// We need to ensure that cents * percentage doesn't overflow int64
+	if percentage != 0 {
+		// Use absolute values for overflow check
+		absCents := cents
+		if absCents < 0 {
+			absCents = -absCents
+		}
+
+		absPercentage := percentage
+		if absPercentage < 0 {
+			absPercentage = -absPercentage
+		}
+
+		// Check if multiplication would overflow
+		// We compare: absCents > maxPercentageValue / absPercentage
+		if absPercentage > 0 && absCents > maxPercentageValue/absPercentage {
+			return Money{}, ErrOverflow
+		}
+	}
+
+	// Safe to perform multiplication now
+	result := (cents * percentage) / divisor
 
 	return NewMoney(result, money.Currency())
 }

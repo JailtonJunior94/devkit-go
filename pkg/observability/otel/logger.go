@@ -270,14 +270,22 @@ func tryConvertError(field observability.Field) (otellog.KeyValue, bool) {
 }
 
 // With creates a child logger with additional fields.
+// Creates a deep copy of fields to prevent race conditions.
 func (l *otelLogger) With(fields ...observability.Field) observability.Logger {
+	// Create new slice with deep copy to prevent race conditions
+	// If we used append(l.fields, fields...) and l.fields had capacity,
+	// it would modify the underlying array shared by other loggers
+	newFields := make([]observability.Field, len(l.fields)+len(fields))
+	copy(newFields, l.fields)
+	copy(newFields[len(l.fields):], fields)
+
 	return &otelLogger{
 		otelLog:     l.otelLog,
 		slogLogger:  l.slogLogger,
 		level:       l.level,
 		format:      l.format,
 		serviceName: l.serviceName,
-		fields:      append(l.fields, fields...),
+		fields:      newFields,
 	}
 }
 

@@ -213,6 +213,7 @@ func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan 
 	messageChan := make(chan amqp.Delivery, c.workers*2)
 	var wg sync.WaitGroup
 
+	// Start workers
 	for i := 0; i < c.workers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -221,24 +222,40 @@ func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan 
 		}(i)
 	}
 
+	// Goroutine dedicada para distribuir mensagens
+	// Isso previne race condition ao fechar o canal
+	distributorDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		close(messageChan)
+		defer close(messageChan)
+		defer close(distributorDone)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case delivery, ok := <-deliveries:
+				if !ok {
+					// Canal de deliveries fechado
+					return
+				}
+
+				// Tentar enviar mensagem ou cancelar se contexto cancelado
+				select {
+				case <-ctx.Done():
+					return
+				case messageChan <- delivery:
+				}
+			}
+		}
 	}()
 
-	for delivery := range deliveries {
-		select {
-		case <-ctx.Done():
-			wg.Wait()
-			return ctx.Err()
-		case messageChan <- delivery:
-		}
-	}
+	// Aguardar distribuidor terminar
+	<-distributorDone
 
-	close(messageChan)
+	// Aguardar todos os workers finalizarem
 	wg.Wait()
 
-	return nil
+	return ctx.Err()
 }
 
 // worker processa mensagens do canal de trabalho.

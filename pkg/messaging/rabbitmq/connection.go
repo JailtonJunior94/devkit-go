@@ -27,6 +27,10 @@ type connectionManager struct {
 	reconnectChan chan struct{}
 	closeChan     chan struct{}
 	closeOnce     sync.Once
+
+	// Controle do watcher para prevenir goroutine leak
+	watcherCancel context.CancelFunc
+	watcherCtx    context.Context
 }
 
 // newConnectionManager cria um novo gerenciador de conexão.
@@ -91,7 +95,15 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 	)
 
 	if cm.config.EnableAutoReconnect {
-		go cm.watchConnection(ctx)
+		// Cancelar watcher anterior se existir (previne goroutine leak)
+		if cm.watcherCancel != nil {
+			cm.watcherCancel()
+			cm.watcherCancel = nil
+		}
+
+		// Criar novo contexto para o watcher
+		cm.watcherCtx, cm.watcherCancel = context.WithCancel(ctx)
+		go cm.watchConnection(cm.watcherCtx)
 	}
 
 	return nil
@@ -205,13 +217,22 @@ func (cm *connectionManager) reconnect(ctx context.Context) {
 		cm.conn = conn
 		cm.channel = channel
 		cm.isConnected = true
+
+		// Cancelar watcher anterior se existir (previne goroutine leak)
+		if cm.watcherCancel != nil {
+			cm.watcherCancel()
+			cm.watcherCancel = nil
+		}
+
+		// Criar novo contexto para o watcher
+		cm.watcherCtx, cm.watcherCancel = context.WithCancel(ctx)
 		cm.mu.Unlock()
 
 		cm.observability.Logger().Info(ctx, "reconnected successfully",
 			observability.String("strategy", cm.strategy.Name()),
 		)
 
-		go cm.watchConnection(ctx)
+		go cm.watchConnection(cm.watcherCtx)
 
 		return nil
 	}
@@ -275,6 +296,13 @@ func (cm *connectionManager) close(ctx context.Context) error {
 
 	cm.closeOnce.Do(func() {
 		cm.mu.Lock()
+
+		// Cancelar watcher antes de fechar (previne goroutine leak)
+		if cm.watcherCancel != nil {
+			cm.watcherCancel()
+			cm.watcherCancel = nil
+		}
+
 		cm.closed = true
 		close(cm.closeChan)
 

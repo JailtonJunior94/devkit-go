@@ -54,9 +54,6 @@ type Server struct {
 	workerCtx    context.Context
 	isRunning    atomic.Bool
 	shutdownOnce sync.Once
-
-	// Message processing
-	errorChan chan error
 }
 
 // New creates a new Consumer server with the provided observability
@@ -77,7 +74,6 @@ func New(o11y observability.Observability, opts ...Option) Consumer {
 		handlers:      make(map[string][]MessageHandler),
 		middlewares:   make([]Middleware, 0),
 		healthChecks:  make(map[string]HealthCheckFunc),
-		errorChan:     make(chan error, 1),
 	}
 
 	// Apply functional options
