@@ -15,6 +15,7 @@ Uma biblioteca **resiliente, segura e extremamente intuitiva** para gerenciar mi
 
 - ✅ **PostgreSQL**
 - ✅ **CockroachDB** (com otimizações específicas para ambientes distribuídos)
+- ✅ **MySQL/MariaDB**
 
 ## Instalação
 
@@ -152,6 +153,8 @@ func runMigration(fn func(context.Context, *migration.Migrator) error) error {
 		driverType = migration.DriverPostgres
 	case "cockroachdb":
 		driverType = migration.DriverCockroachDB
+	case "mysql":
+		driverType = migration.DriverMySQL
 	default:
 		return fmt.Errorf("unsupported driver: %s", driver)
 	}
@@ -350,6 +353,23 @@ migrator, err := migration.New(
 
 	// Timeout generoso para statements devido a possíveis retry automáticos
 	migration.WithStatementTimeout(5*time.Minute),
+)
+```
+
+### Configuração Específica para MySQL/MariaDB
+
+```go
+migrator, err := migration.New(
+	migration.WithDriver(migration.DriverMySQL),
+	migration.WithDSN("mysql://user:pass@tcp(localhost:3306)/mydb?parseTime=true"),
+	migration.WithSource("file://migrations"),
+	migration.WithLogger(logger),
+
+	// MySQL suporta multi-statement nativamente
+	migration.WithMultiStatement(true),
+
+	// Lock timeout padrão é adequado
+	migration.WithLockTimeout(30*time.Second),
 )
 ```
 
@@ -652,7 +672,6 @@ MIT License - veja LICENSE para detalhes.
 
 ## Roadmap
 
-- [ ] Suporte a MySQL/MariaDB
 - [ ] Suporte a SQLite
 - [ ] Migrations source: S3, GCS, GitHub
 - [ ] Dry-run mode

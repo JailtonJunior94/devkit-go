@@ -153,6 +153,60 @@ func (c *cockroachStrategy) Validate(config Config) error {
 	return nil
 }
 
+// mysqlStrategy implements DriverStrategy for MySQL/MariaDB.
+type mysqlStrategy struct{}
+
+// NewMySQLStrategy creates a new MySQL driver strategy.
+func NewMySQLStrategy() DriverStrategy {
+	return &mysqlStrategy{}
+}
+
+func (m *mysqlStrategy) Name() string {
+	return "mysql"
+}
+
+func (m *mysqlStrategy) BuildDatabaseURL(dsn string, params DatabaseParams) (string, error) {
+	parsedURL, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("invalid MySQL DSN format: %w", err)
+	}
+
+	query := parsedURL.Query()
+
+	if params.LockTimeout > 0 {
+		lockTimeoutSeconds := int(params.LockTimeout.Seconds())
+		query.Set("x-migrations-table-lock-timeout", fmt.Sprintf("%ds", lockTimeoutSeconds))
+	}
+
+	if params.StatementTimeout > 0 {
+		stmtTimeoutMs := int(params.StatementTimeout.Milliseconds())
+		query.Set("x-statement-timeout", fmt.Sprintf("%dms", stmtTimeoutMs))
+	}
+
+	if params.MultiStatementEnabled {
+		query.Set("x-multi-statement", "true")
+		query.Set("multiStatements", "true")
+		if params.MultiStatementMaxSize > 0 {
+			query.Set("x-multi-statement-max-size", fmt.Sprintf("%d", params.MultiStatementMaxSize))
+		}
+	}
+
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
+}
+
+func (m *mysqlStrategy) SupportsMultiStatement() bool {
+	return true
+}
+
+func (m *mysqlStrategy) RecommendedLockTimeout() time.Duration {
+	return 30 * time.Second
+}
+
+func (m *mysqlStrategy) Validate(config Config) error {
+	return nil
+}
+
 // GetDriverStrategy returns the appropriate driver strategy based on the driver type.
 func GetDriverStrategy(driver Driver) (DriverStrategy, error) {
 	switch driver {
@@ -160,6 +214,8 @@ func GetDriverStrategy(driver Driver) (DriverStrategy, error) {
 		return NewPostgresStrategy(), nil
 	case DriverCockroachDB:
 		return NewCockroachStrategy(), nil
+	case DriverMySQL:
+		return NewMySQLStrategy(), nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrInvalidDriver, driver)
 	}

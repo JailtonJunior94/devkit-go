@@ -7,7 +7,7 @@
 - **Cobertura de Testes**: 10.1%
 - **Issues Lint**: 0
 - **Design Patterns**: 4 (Strategy, Option, Adapter, Dependency Injection)
-- **Bancos Suportados**: 2 (PostgreSQL, CockroachDB)
+- **Bancos Suportados**: 3 (PostgreSQL, CockroachDB, MySQL/MariaDB)
 
 ## 📁 Estrutura Completa
 
@@ -48,6 +48,7 @@ pkg/migration/
 ### Core Features
 - ✅ Suporte a PostgreSQL com Strategy Pattern
 - ✅ Suporte a CockroachDB com otimizações específicas
+- ✅ Suporte a MySQL/MariaDB com multi-statement
 - ✅ Operações de migration: Up, Down, Steps, Version
 - ✅ Logging estruturado com slog (standard library)
 - ✅ Option Pattern para configuração flexível
@@ -79,7 +80,7 @@ pkg/migration/
 ### 1. Strategy Pattern
 **Arquivo:** `driver_strategy.go`
 - Interface `DriverStrategy` para comportamento específico de drivers
-- Implementações: `postgresStrategy`, `cockroachStrategy`
+- Implementações: `postgresStrategy`, `cockroachStrategy`, `mysqlStrategy`
 - Permite adicionar novos drivers sem alterar código existente
 
 ### 2. Option Pattern
@@ -211,6 +212,7 @@ NewNoopLogger() Logger
 | Intuitiva | ✅ | Option Pattern, clear API, extensive docs |
 | PostgreSQL | ✅ | `postgresStrategy` implementado |
 | CockroachDB | ✅ | `cockroachStrategy` com otimizações |
+| MySQL/MariaDB | ✅ | `mysqlStrategy` implementado |
 | CLI Ready | ✅ | Exemplo com Cobra no README |
 | Docker Ready | ✅ | Dockerfile no README |
 | Kubernetes Ready | ✅ | InitContainer YAML no README |
@@ -277,7 +279,6 @@ go run main.go
 
 ## 🔮 Roadmap Futuro
 
-- [ ] Suporte a MySQL/MariaDB
 - [ ] Suporte a SQLite
 - [ ] Migration sources: S3, GCS, GitHub
 - [ ] Dry-run mode

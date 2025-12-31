@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release of migration library
 - PostgreSQL driver support with Strategy Pattern
 - CockroachDB driver support with optimizations for distributed databases
+- MySQL/MariaDB driver support with multi-statement configuration
 - Structured logging using `log/slog` (Go standard library)
 - Option Pattern for flexible configuration
 - Comprehensive error handling with typed errors
@@ -75,7 +76,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compatible with golang-migrate/migrate v4
 
 ### Future Enhancements (Roadmap)
-- MySQL/MariaDB driver support
 - SQLite driver support
 - Additional migration sources (S3, GCS, GitHub)
 - Dry-run mode for testing migrations
