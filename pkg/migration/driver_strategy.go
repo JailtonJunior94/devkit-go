@@ -52,6 +52,9 @@ func (p *postgresStrategy) BuildDatabaseURL(dsn string, params DatabaseParams) (
 		return "", fmt.Errorf("invalid PostgreSQL DSN format: %w", err)
 	}
 
+	// Ensure postgres:// scheme for the driver
+	parsedURL.Scheme = "postgres"
+
 	query := parsedURL.Query()
 
 	if params.LockTimeout > 0 {
@@ -108,6 +111,10 @@ func (c *cockroachStrategy) BuildDatabaseURL(dsn string, params DatabaseParams) 
 	if err != nil {
 		return "", fmt.Errorf("invalid CockroachDB DSN format: %w", err)
 	}
+
+	// Ensure cockroachdb:// scheme for the driver
+	// This prevents the use of pg_advisory_lock which CockroachDB doesn't support
+	parsedURL.Scheme = "cockroachdb"
 
 	query := parsedURL.Query()
 
@@ -170,6 +177,9 @@ func (m *mysqlStrategy) BuildDatabaseURL(dsn string, params DatabaseParams) (str
 	if err != nil {
 		return "", fmt.Errorf("invalid MySQL DSN format: %w", err)
 	}
+
+	// Ensure mysql:// scheme for the driver
+	parsedURL.Scheme = "mysql"
 
 	query := parsedURL.Query()
 

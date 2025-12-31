@@ -344,6 +344,8 @@ migrator, err := migration.New(
 ```go
 migrator, err := migration.New(
 	migration.WithDriver(migration.DriverCockroachDB),
+	// O scheme da URL será automaticamente convertido para cockroachdb://
+	// Você pode usar postgres://, postgresql://, ou cockroachdb://
 	migration.WithDSN("postgres://user@localhost:26257/mydb?sslmode=disable"),
 	migration.WithSource("file://migrations"),
 	migration.WithLogger(logger),
@@ -355,6 +357,8 @@ migrator, err := migration.New(
 	migration.WithStatementTimeout(5*time.Minute),
 )
 ```
+
+**Importante:** A biblioteca converte automaticamente o scheme da URL para `cockroachdb://`, o que evita o uso de `pg_advisory_lock()` que não é suportado pelo CockroachDB.
 
 ### Configuração Específica para MySQL/MariaDB
 
@@ -638,6 +642,31 @@ func TestMigrations(t *testing.T) {
 - Aguarde a outra instância finalizar
 - Aumente `WithLockTimeout()`
 - Verifique se não há processos mortos segurando locks
+
+### CockroachDB: pg_advisory_lock error
+
+**Erro:**
+```
+failed to open database: try lock failed:
+SELECT pg_advisory_lock($1)
+(details: pq: unknown function: pg_advisory_lock())
+```
+
+**Causa:** CockroachDB não suporta a função `pg_advisory_lock()` do PostgreSQL.
+
+**Solução:**
+A biblioteca **já resolve isso automaticamente** convertendo o scheme da URL para `cockroachdb://`.
+Certifique-se de usar `migration.DriverCockroachDB`:
+
+```go
+migrator, err := migration.New(
+    migration.WithDriver(migration.DriverCockroachDB), // IMPORTANTE!
+    migration.WithDSN("postgres://..."), // Qualquer scheme funciona
+    // ...
+)
+```
+
+A biblioteca converterá automaticamente para `cockroachdb://...` internamente.
 
 ## Performance
 
