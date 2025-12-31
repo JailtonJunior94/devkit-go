@@ -412,11 +412,12 @@ func (m *Migrator) Close() error {
 					Error(closeErr),
 					String("database", m.databaseName),
 				)
-			} else {
-				m.logger.Info(ctx, "migrator closed successfully",
-					String("database", m.databaseName),
-				)
+				return
 			}
+
+			m.logger.Info(ctx, "migrator closed successfully",
+				String("database", m.databaseName),
+			)
 		}
 	})
 

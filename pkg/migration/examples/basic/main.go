@@ -46,9 +46,9 @@ func run() error {
 	if err := migrator.Up(ctx); err != nil {
 		if migration.IsNoChangeError(err) {
 			log.Println("No migrations to apply - database is up to date")
-		} else {
-			return fmt.Errorf("migration failed: %w", err)
+			return nil
 		}
+		return fmt.Errorf("migration failed: %w", err)
 	}
 
 	// Verificar versão atual

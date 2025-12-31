@@ -111,13 +111,12 @@ func (c *cockroachStrategy) BuildDatabaseURL(dsn string, params DatabaseParams) 
 
 	query := parsedURL.Query()
 
-	if params.LockTimeout > 0 {
-		lockTimeoutSeconds := int(params.LockTimeout.Seconds())
-		query.Set("x-migrations-table-lock-timeout", fmt.Sprintf("%ds", lockTimeoutSeconds))
-	} else {
-		defaultLockTimeout := int(c.RecommendedLockTimeout().Seconds())
-		query.Set("x-migrations-table-lock-timeout", fmt.Sprintf("%ds", defaultLockTimeout))
+	lockTimeout := params.LockTimeout
+	if lockTimeout == 0 {
+		lockTimeout = c.RecommendedLockTimeout()
 	}
+	lockTimeoutSeconds := int(lockTimeout.Seconds())
+	query.Set("x-migrations-table-lock-timeout", fmt.Sprintf("%ds", lockTimeoutSeconds))
 
 	if params.StatementTimeout > 0 {
 		stmtTimeoutMs := int(params.StatementTimeout.Milliseconds())
