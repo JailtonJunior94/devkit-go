@@ -100,25 +100,31 @@ func New(o11y observability.Observability, opts ...Option) (*Client, error) {
 	return client, nil
 }
 
-// Channel retorna o channel AMQP subjacente.
-// Este channel é gerenciado automaticamente pelo cliente (reconexão, etc).
-//
-// IMPORTANTE: Não chame Close() diretamente no channel retornado.
-// Use sempre o método Shutdown() do Client para garantir graceful shutdown.
+// Channel retorna um novo channel AMQP para operações customizadas.
+// IMPORTANTE: O chamador é responsável por fechar o channel retornado.
 //
 // Retorna erro se:
 //   - O cliente estiver fechado
 //   - Não houver conexão ativa
 //   - O cliente estiver em processo de reconexão
+//
+// Deprecated: Use métodos específicos (DeclareExchange, DeclareQueue, etc) sempre que possível.
+// Este método será removido em v2.0.0.
 func (c *Client) Channel() (*amqp.Channel, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Guard clause: cliente fechado
 	if c.closed {
 		return nil, ErrClientClosed
 	}
 
-	return c.connMgr.getChannel()
+	pool, err := c.connMgr.getChannelPool()
+	if err != nil {
+		return nil, err
+	}
+
+	return pool.GetGenericChannel()
 }
 
 // Connection retorna a conexão AMQP subjacente.
@@ -134,6 +140,7 @@ func (c *Client) Connection() (*amqp.Connection, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Guard clause: cliente fechado
 	if c.closed {
 		return nil, ErrClientClosed
 	}
@@ -159,10 +166,12 @@ func (c *Client) Ping(ctx context.Context) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Guard clause: cliente fechado
 	if c.closed {
 		return ErrClientClosed
 	}
 
+	// Guard clause: conexão não saudável
 	if !c.connMgr.isHealthy() {
 		return fmt.Errorf("rabbitmq: connection is not healthy")
 	}
@@ -202,10 +211,19 @@ func (c *Client) Config() Config {
 //   - autoDelete: Deletado quando não há mais bindings
 //   - args: Argumentos adicionais (opcional)
 func (c *Client) DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete bool, args amqp.Table) error {
+	// Guard clause: validação de durabilidade em produção
+	if c.config.Environment == "production" && !durable {
+		c.observability.Logger().Warn(ctx, "NON-DURABLE exchange in production - data loss risk!",
+			observability.String("exchange", name),
+			observability.String("environment", c.config.Environment),
+		)
+	}
+
 	ch, err := c.Channel()
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
+	defer func() { _ = ch.Close() }()
 
 	if err := ch.ExchangeDeclare(name, kind, durable, autoDelete, false, false, args); err != nil {
 		return fmt.Errorf("failed to declare exchange: %w", err)
@@ -234,10 +252,19 @@ func (c *Client) DeclareExchange(ctx context.Context, name, kind string, durable
 //   - amqp.Queue: Informações da queue criada
 //   - error: Erro se falhar
 func (c *Client) DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive bool, args amqp.Table) (amqp.Queue, error) {
+	// Guard clause: validação de durabilidade em produção
+	if c.config.Environment == "production" && !durable {
+		c.observability.Logger().Warn(ctx, "NON-DURABLE queue in production - data loss risk!",
+			observability.String("queue", name),
+			observability.String("environment", c.config.Environment),
+		)
+	}
+
 	ch, err := c.Channel()
 	if err != nil {
 		return amqp.Queue{}, fmt.Errorf("failed to get channel: %w", err)
 	}
+	defer func() { _ = ch.Close() }()
 
 	queue, err := ch.QueueDeclare(name, durable, autoDelete, exclusive, false, args)
 	if err != nil {
@@ -266,6 +293,7 @@ func (c *Client) BindQueue(ctx context.Context, queueName, routingKey, exchangeN
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
+	defer func() { _ = ch.Close() }()
 
 	if err := ch.QueueBind(queueName, routingKey, exchangeName, false, args); err != nil {
 		return fmt.Errorf("failed to bind queue: %w", err)

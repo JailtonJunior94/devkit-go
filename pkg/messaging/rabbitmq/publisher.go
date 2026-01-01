@@ -50,9 +50,19 @@ func NewPublisher(client *Client) *Publisher {
 //   - Publisher confirm falhar (se habilitado)
 //   - Ocorrer erro de rede
 func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, body []byte, opts ...PublishOption) error {
-	ch, err := p.client.Channel()
+	// Guard clause: cliente não conectado
+	if !p.client.IsConnected() {
+		return ErrClientClosed
+	}
+
+	pool, err := p.client.connMgr.getChannelPool()
 	if err != nil {
-		return fmt.Errorf("failed to get channel: %w", err)
+		return fmt.Errorf("failed to get channel pool: %w", err)
+	}
+
+	pubCh, err := pool.GetPublisherChannel()
+	if err != nil {
+		return fmt.Errorf("failed to get publisher channel: %w", err)
 	}
 
 	msg := amqp.Publishing{
@@ -69,29 +79,27 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	publishCtx, cancel := context.WithTimeout(ctx, p.client.config.PublishTimeout)
 	defer cancel()
 
-	if p.client.config.EnablePublisherConfirms {
-		confirm := make(chan amqp.Confirmation, 1)
-		ch.NotifyPublish(confirm)
-
-		if err := ch.PublishWithContext(publishCtx, exchange, routingKey, false, false, msg); err != nil {
-			return fmt.Errorf("failed to publish: %w", err)
+	// Guard clause: publisher confirms desabilitado
+	if !p.client.config.EnablePublisherConfirms {
+		if err := pubCh.PublishWithoutConfirm(publishCtx, exchange, routingKey, msg); err != nil {
+			return err
 		}
 
-		select {
-		case c := <-confirm:
-			if !c.Ack {
-				return ErrPublishConfirmFailed
-			}
-		case <-publishCtx.Done():
-			return ErrPublishTimeout
-		}
-	} else {
-		if err := ch.PublishWithContext(publishCtx, exchange, routingKey, false, false, msg); err != nil {
-			return fmt.Errorf("failed to publish: %w", err)
-		}
+		p.observability.Logger().Debug(ctx, "message published (no confirms)",
+			observability.String("exchange", exchange),
+			observability.String("routing_key", routingKey),
+			observability.Int("body_size", len(body)),
+		)
+
+		return nil
 	}
 
-	p.observability.Logger().Debug(ctx, "message published",
+	// Publisher confirms habilitado
+	if err := pubCh.PublishWithConfirm(publishCtx, exchange, routingKey, msg); err != nil {
+		return err
+	}
+
+	p.observability.Logger().Debug(ctx, "message published with confirm",
 		observability.String("exchange", exchange),
 		observability.String("routing_key", routingKey),
 		observability.Int("body_size", len(body)),

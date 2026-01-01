@@ -19,7 +19,7 @@ type connectionManager struct {
 
 	mu             sync.RWMutex
 	conn           *amqp.Connection
-	channel        *amqp.Channel
+	channelPool    *ChannelPool
 	isConnected    bool
 	isReconnecting bool
 	closed         bool
@@ -55,10 +55,12 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
+	// Guard clause: já fechado
 	if cm.closed {
 		return ErrClientClosed
 	}
 
+	// Guard clause: já conectado
 	if cm.isConnected {
 		return nil
 	}
@@ -72,39 +74,35 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to dial: %w", err)
 	}
 
-	channel, err := conn.Channel()
+	// Criar ChannelPool
+	pool, err := newChannelPool(conn, cm.observability, cm.config.EnablePublisherConfirms)
 	if err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("failed to create channel: %w", err)
-	}
-
-	if cm.config.EnablePublisherConfirms {
-		if err := channel.Confirm(false); err != nil {
-			_ = channel.Close()
-			_ = conn.Close()
-			return fmt.Errorf("failed to enable publisher confirms: %w", err)
-		}
+		return fmt.Errorf("failed to create channel pool: %w", err)
 	}
 
 	cm.conn = conn
-	cm.channel = channel
+	cm.channelPool = pool
 	cm.isConnected = true
 
 	cm.observability.Logger().Info(ctx, "connected to RabbitMQ successfully",
 		observability.String("strategy", cm.strategy.Name()),
 	)
 
-	if cm.config.EnableAutoReconnect {
-		// Cancelar watcher anterior se existir (previne goroutine leak)
-		if cm.watcherCancel != nil {
-			cm.watcherCancel()
-			cm.watcherCancel = nil
-		}
-
-		// Criar novo contexto para o watcher
-		cm.watcherCtx, cm.watcherCancel = context.WithCancel(ctx)
-		go cm.watchConnection(cm.watcherCtx)
+	// Guard clause: auto-reconnect desabilitado
+	if !cm.config.EnableAutoReconnect {
+		return nil
 	}
+
+	// Cancelar watcher anterior se existir (previne goroutine leak)
+	if cm.watcherCancel != nil {
+		cm.watcherCancel()
+		cm.watcherCancel = nil
+	}
+
+	// Criar novo contexto para o watcher
+	cm.watcherCtx, cm.watcherCancel = context.WithCancel(ctx)
+	go cm.watchConnection(cm.watcherCtx)
 
 	return nil
 }
@@ -112,30 +110,28 @@ func (cm *connectionManager) connect(ctx context.Context) error {
 // watchConnection monitora a conexão e reconecta automaticamente se cair.
 func (cm *connectionManager) watchConnection(ctx context.Context) {
 	cm.mu.RLock()
+
+	// Guard clause: conexão inválida ou fechada
 	if cm.closed || cm.conn == nil {
 		cm.mu.RUnlock()
 		return
 	}
 
 	connCloseChan := cm.conn.NotifyClose(make(chan *amqp.Error, 1))
-	chanCloseChan := cm.channel.NotifyClose(make(chan *amqp.Error, 1))
 	cm.mu.RUnlock()
 
 	select {
 	case err := <-connCloseChan:
-		if err != nil {
-			cm.observability.Logger().Warn(ctx, "connection closed unexpectedly",
-				observability.Error(err),
-			)
-			cm.triggerReconnect(ctx)
+		// Guard clause: fechamento intencional (err == nil)
+		if err == nil {
+			return
 		}
-	case err := <-chanCloseChan:
-		if err != nil {
-			cm.observability.Logger().Warn(ctx, "channel closed unexpectedly",
-				observability.Error(err),
-			)
-			cm.triggerReconnect(ctx)
-		}
+
+		cm.observability.Logger().Warn(ctx, "connection closed unexpectedly",
+			observability.Error(err),
+		)
+		cm.triggerReconnect(ctx)
+
 	case <-cm.closeChan:
 		return
 	case <-ctx.Done():
@@ -196,26 +192,25 @@ func (cm *connectionManager) reconnect(ctx context.Context) {
 			return err
 		}
 
-		channel, err := conn.Channel()
+		// Criar novo ChannelPool
+		pool, err := newChannelPool(conn, cm.observability, cm.config.EnablePublisherConfirms)
 		if err != nil {
 			_ = conn.Close()
-			cm.observability.Logger().Warn(ctx, "failed to create channel during reconnect",
+			cm.observability.Logger().Warn(ctx, "failed to create channel pool during reconnect",
 				observability.Error(err),
 			)
 			return err
 		}
 
-		if cm.config.EnablePublisherConfirms {
-			if err := channel.Confirm(false); err != nil {
-				_ = channel.Close()
-				_ = conn.Close()
-				return err
-			}
+		cm.mu.Lock()
+
+		// Fechar pool antigo se existir
+		if cm.channelPool != nil {
+			_ = cm.channelPool.Close(ctx)
 		}
 
-		cm.mu.Lock()
 		cm.conn = conn
-		cm.channel = channel
+		cm.channelPool = pool
 		cm.isConnected = true
 
 		// Cancelar watcher anterior se existir (previne goroutine leak)
@@ -244,25 +239,28 @@ func (cm *connectionManager) reconnect(ctx context.Context) {
 	}
 }
 
-// getChannel retorna o channel atual.
+// getChannelPool retorna o channel pool atual.
 // Thread-safe.
-func (cm *connectionManager) getChannel() (*amqp.Channel, error) {
+func (cm *connectionManager) getChannelPool() (*ChannelPool, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
+	// Guard clause: fechado
 	if cm.closed {
 		return nil, ErrClientClosed
 	}
 
+	// Guard clause: não conectado
 	if !cm.isConnected {
 		return nil, ErrNoConnection
 	}
 
+	// Guard clause: reconectando
 	if cm.isReconnecting {
 		return nil, ErrReconnecting
 	}
 
-	return cm.channel, nil
+	return cm.channelPool, nil
 }
 
 // getConnection retorna a conexão atual.
@@ -271,10 +269,12 @@ func (cm *connectionManager) getConnection() (*amqp.Connection, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
+	// Guard clause: fechado
 	if cm.closed {
 		return nil, ErrClientClosed
 	}
 
+	// Guard clause: não conectado
 	if !cm.isConnected {
 		return nil, ErrNoConnection
 	}
@@ -306,15 +306,17 @@ func (cm *connectionManager) close(ctx context.Context) error {
 		cm.closed = true
 		close(cm.closeChan)
 
-		if cm.channel != nil {
-			if err := cm.channel.Close(); err != nil {
-				cm.observability.Logger().Warn(ctx, "error closing channel",
+		// Fechar channel pool primeiro
+		if cm.channelPool != nil {
+			if err := cm.channelPool.Close(ctx); err != nil {
+				cm.observability.Logger().Warn(ctx, "error closing channel pool",
 					observability.Error(err),
 				)
 				closeErr = err
 			}
 		}
 
+		// Depois fechar conexão
 		if cm.conn != nil {
 			if err := cm.conn.Close(); err != nil {
 				cm.observability.Logger().Warn(ctx, "error closing connection",

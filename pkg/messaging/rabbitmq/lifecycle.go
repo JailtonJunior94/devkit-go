@@ -50,13 +50,15 @@ func (c *Client) Shutdown(ctx context.Context) error {
 			shutdownErr = err
 		}
 
-		if shutdownErr == nil {
-			c.observability.Logger().Info(ctx, "RabbitMQ client shutdown completed successfully")
-		} else {
+		// Guard clause: erro durante shutdown
+		if shutdownErr != nil {
 			c.observability.Logger().Error(ctx, "RabbitMQ client shutdown completed with errors",
 				observability.Error(shutdownErr),
 			)
+			return
 		}
+
+		c.observability.Logger().Info(ctx, "RabbitMQ client shutdown completed successfully")
 	})
 
 	return shutdownErr

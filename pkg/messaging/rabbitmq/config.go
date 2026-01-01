@@ -48,6 +48,15 @@ type Config struct {
 	// Valor padrão: true (recomendado para produção)
 	EnablePublisherConfirms bool
 
+	// Número máximo de retries antes de enviar para DLQ
+	// Valor padrão: 3
+	MaxRetries int
+
+	// Usar delayed retry (requer plugin rabbitmq-delayed-message-exchange)
+	// Se false, usa requeue imediato
+	// Valor padrão: false
+	UseDelayedRetry bool
+
 	// Nome do serviço (para logs e métricas)
 	ServiceName string
 
@@ -71,6 +80,8 @@ func DefaultConfig() Config {
 		DefaultPrefetchCount:     10,
 		EnableAutoReconnect:      true,
 		EnablePublisherConfirms:  true,
+		MaxRetries:               3,
+		UseDelayedRetry:          false,
 		ServiceName:              "unknown-service",
 		ServiceVersion:           "unknown",
 		Environment:              "development",
@@ -122,6 +133,10 @@ func (c Config) Validate() error {
 
 	if c.DefaultPrefetchCount < 1 {
 		return errors.New("default prefetch count must be >= 1")
+	}
+
+	if c.MaxRetries < 0 {
+		return errors.New("max retries must be >= 0")
 	}
 
 	return nil
