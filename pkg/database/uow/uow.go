@@ -5,25 +5,29 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/database"
 )
 
 var (
-	ErrTransactionAlreadyFinished = errors.New("transaction has already been committed or rolled back")
+	errTransactionAlreadyFinished = errors.New("transaction has already been committed or rolled back")
 )
 
 // UnitOfWork fornece uma abstração para gerenciar transações de banco de dados.
 // Garante que todas as operações sejam executadas dentro de uma transação atômica.
+//
+// Thread-Safety:
+// Múltiplas goroutines podem chamar Do() simultaneamente na mesma instância de UnitOfWork.
+// Cada chamada cria uma transação independente e isolada. O UnitOfWork não mantém
+// estado transacional entre chamadas.
+//
+// Context Handling:
+// O context é verificado antes de iniciar a transação e após a execução da função callback.
+// IMPORTANTE: O método Commit() do database/sql não aceita context, portanto operações de
+// commit lentas NÃO podem ser canceladas via context. Considere usar timeouts no contexto
+// superior para prevenir bloqueios indefinidos.
 type UnitOfWork interface {
-	// DBTX retorna a conexão de banco de dados subjacente.
-	// AVISO: Use este método com extrema cautela. Operações executadas diretamente
-	// através desta conexão NÃO serão parte de nenhuma transação gerenciada pelo
-	// Unit of Work. Prefira sempre usar o método Do() para garantir atomicidade.
-	// Este método existe apenas para casos específicos onde você precisa executar
-	// operações fora do contexto transacional e entende completamente as implicações.
-	DBTX() database.DBTX
-
 	// Do executa a função fornecida dentro de uma transação.
 	// Se a função retornar erro, a transação é revertida (rollback).
 	// Se a função tiver sucesso, a transação é confirmada (commit).
@@ -66,10 +70,18 @@ func WithReadOnly(readOnly bool) UnitOfWorkOption {
 // O parâmetro db deve ser uma conexão válida de banco de dados.
 // Options podem ser fornecidas para configurar o comportamento da transação.
 //
+// Panic:
+// Esta função entra em panic se db for nil. Isso indica um erro de programação
+// e deve ser corrigido no código do chamador.
+//
 // Exemplo:
 //
 //	uow := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
 func NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) UnitOfWork {
+	if db == nil {
+		panic("database connection cannot be nil")
+	}
+
 	u := &unitOfWork{
 		db:      db,
 		options: nil,
@@ -82,10 +94,6 @@ func NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) UnitOfWork {
 	return u
 }
 
-func (u *unitOfWork) DBTX() database.DBTX {
-	return u.db
-}
-
 func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db database.DBTX) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled before transaction start: %w", err)
@@ -96,11 +104,11 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	var finished bool
+	var finished atomic.Bool
 
 	defer func() {
 		if p := recover(); p != nil {
-			if !finished {
+			if !finished.Load() {
 				if rbErr := tx.Rollback(); rbErr != nil {
 					// Não podemos retornar o erro, mas podemos incluí-lo no panic
 					// para não mascarar problemas de rollback
@@ -114,7 +122,7 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 	}()
 
 	if err = fn(ctx, tx); err != nil {
-		finished = true
+		finished.Store(true)
 		if rbErr := rollbackTx(tx); rbErr != nil {
 			return fmt.Errorf("transaction error: %w, rollback error: %v", err, rbErr)
 		}
@@ -123,20 +131,17 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 
 	// Verificar se o context foi cancelado durante a execução
 	if err = ctx.Err(); err != nil {
-		finished = true
+		finished.Store(true)
 		if rbErr := rollbackTx(tx); rbErr != nil {
 			return fmt.Errorf("context cancelled during transaction: %w, rollback error: %v", err, rbErr)
 		}
 		return fmt.Errorf("context cancelled during transaction: %w", err)
 	}
 
-	finished = true
+	finished.Store(true)
 	if err = tx.Commit(); err != nil {
-		if rbErr := rollbackTx(tx); rbErr != nil {
-			if !errors.Is(rbErr, ErrTransactionAlreadyFinished) {
-				return fmt.Errorf("commit error: %w, rollback error: %v", err, rbErr)
-			}
-		}
+		// Quando commit falha, a maioria dos drivers já faz rollback automático.
+		// Não tentamos rollback aqui para evitar mascarar o erro real.
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -145,12 +150,13 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 
 func rollbackTx(tx *sql.Tx) error {
 	if tx == nil {
-		return ErrTransactionAlreadyFinished
+		// Se tx for nil aqui, indica um bug no código
+		panic("rollbackTx called with nil transaction - this is a bug")
 	}
 
 	if err := tx.Rollback(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {
-			return ErrTransactionAlreadyFinished
+			return errTransactionAlreadyFinished
 		}
 		return err
 	}
