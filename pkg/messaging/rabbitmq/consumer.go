@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"maps"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -444,9 +445,7 @@ func (c *Consumer) buildMessage(delivery amqp.Delivery) Message {
 		Delivery:    delivery,
 	}
 
-	for k, v := range delivery.Headers {
-		msg.Headers[k] = v
-	}
+	maps.Copy(msg.Headers, delivery.Headers)
 
 	return msg
 }
@@ -547,20 +546,60 @@ func (c *Consumer) sendToDLQ(ctx context.Context, delivery amqp.Delivery, retryC
 	}
 }
 
-// requeueMessage recoloca mensagem na fila para retry.
+// requeueMessage recoloca mensagem na fila para retry com backoff exponencial.
+// Implementa delay antes do requeue para evitar retry storm.
 func (c *Consumer) requeueMessage(ctx context.Context, delivery amqp.Delivery, retryCount int) {
-	c.observability.Logger().Debug(ctx, "requeuing message for retry",
+	// Calculate exponential backoff to prevent retry storm
+	backoff := c.calculateRetryBackoff(retryCount)
+
+	c.observability.Logger().Debug(ctx, "requeuing message for retry with backoff",
 		observability.String("queue", c.queue),
 		observability.String("routing_key", delivery.RoutingKey),
 		observability.Int("retry_count", retryCount),
+		observability.String("backoff", backoff.String()),
 	)
 
-	// NACK com requeue
+	// Wait before requeue to prevent retry storm
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		// Context cancelled - NACK without requeue to avoid blocking
+		if err := delivery.Nack(false, false); err != nil {
+			c.observability.Logger().Error(ctx, "failed to nack message on context cancellation",
+				observability.Error(err),
+			)
+		}
+		return
+	case <-timer.C:
+		// Backoff completed - proceed with requeue
+	}
+
+	// NACK com requeue após backoff
 	if err := delivery.Nack(false, true); err != nil {
 		c.observability.Logger().Error(ctx, "failed to nack message",
 			observability.Error(err),
 		)
 	}
+}
+
+// calculateRetryBackoff calcula o backoff exponencial para retries.
+// Previne retry storm implementando atraso crescente entre tentativas.
+func (c *Consumer) calculateRetryBackoff(retryCount int) time.Duration {
+	// Base backoff: 100ms
+	baseBackoff := 100 * time.Millisecond
+	// Max backoff: 30s
+	maxBackoff := 30 * time.Second
+
+	// Exponential backoff: baseBackoff * 2^retryCount
+	backoff := baseBackoff * (1 << uint(retryCount))
+
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+
+	return backoff
 }
 
 // getMaxRetries retorna o número máximo de retries configurado.

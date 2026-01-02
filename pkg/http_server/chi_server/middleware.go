@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -20,9 +21,13 @@ const (
 )
 
 // recoverMiddleware recovers from panics and logs them.
+// SECURITY: Uses a wrapper to track if headers were sent to prevent double write.
 func recoverMiddleware(o11y observability.Observability) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Wrap ResponseWriter to track if headers were sent
+			rw := &responseWriter{ResponseWriter: w}
+
 			defer func() {
 				recovered := recover()
 				if recovered == nil {
@@ -46,12 +51,40 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 
 				o11y.Logger().Error(r.Context(), "panic recovered", fields...)
 
-				writeErrorResponse(w, r, http.StatusInternalServerError, "Internal server error")
+				// Only write error if headers haven't been sent yet
+				if !rw.headerWritten {
+					writeErrorResponse(w, r, http.StatusInternalServerError, "Internal server error")
+				} else {
+					o11y.Logger().Warn(r.Context(),
+						"cannot send panic error response: headers already sent",
+						observability.String("request_id", requestID),
+					)
+				}
 			}()
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(rw, r)
 		})
 	}
+}
+
+// responseWriter wraps http.ResponseWriter to track if headers were written
+type responseWriter struct {
+	http.ResponseWriter
+	headerWritten bool
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if !rw.headerWritten {
+		rw.headerWritten = true
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.headerWritten {
+		rw.headerWritten = true
+	}
+	return rw.ResponseWriter.Write(b)
 }
 
 // requestIDMiddleware generates or propagates a request ID.
@@ -72,7 +105,7 @@ func requestIDMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// timeoutMiddleware applies a timeout to requests.
+// timeoutMiddleware applies a timeout to requests with race-free implementation.
 func timeoutMiddleware(
 	globalTimeout time.Duration,
 	routeTimeouts map[string]time.Duration,
@@ -88,21 +121,74 @@ func timeoutMiddleware(
 			ctx, cancel := context.WithTimeout(r.Context(), timeout)
 			defer cancel()
 
+			// Wrap the ResponseWriter to detect if headers were written
+			tw := &timeoutWriter{ResponseWriter: w}
 			done := make(chan struct{})
 
 			go func() {
 				defer close(done)
-				next.ServeHTTP(w, r.WithContext(ctx))
+				next.ServeHTTP(tw, r.WithContext(ctx))
 			}()
 
 			select {
 			case <-done:
+				// Handler completed successfully
 				return
 			case <-ctx.Done():
-				writeErrorResponse(w, r, http.StatusRequestTimeout, "Request timeout")
+				// Timeout occurred
+				tw.mu.Lock()
+				defer tw.mu.Unlock()
+
+				// Only write timeout error if handler hasn't written anything yet
+				if !tw.written {
+					tw.written = true
+					tw.timedOut = true
+					writeErrorResponse(w, r, http.StatusRequestTimeout, "Request timeout")
+				}
+				// If handler already wrote, we can't send timeout error
+				// The partial response will be sent to client
 			}
 		})
 	}
+}
+
+// timeoutWriter wraps http.ResponseWriter to track if response was written
+type timeoutWriter struct {
+	http.ResponseWriter
+	mu       sync.Mutex
+	written  bool
+	timedOut bool
+}
+
+func (tw *timeoutWriter) WriteHeader(code int) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	if tw.timedOut {
+		// Timeout already occurred, don't write
+		return
+	}
+
+	if !tw.written {
+		tw.written = true
+		tw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (tw *timeoutWriter) Write(b []byte) (int, error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	if tw.timedOut {
+		// Timeout already occurred, don't write
+		return 0, http.ErrHandlerTimeout
+	}
+
+	if !tw.written {
+		tw.written = true
+	}
+
+	return tw.ResponseWriter.Write(b)
 }
 
 // securityHeadersMiddleware adds security headers to responses.
@@ -120,11 +206,39 @@ func securityHeadersMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// corsMiddleware handles CORS.
+// corsMiddleware handles CORS with proper origin validation.
 func corsMiddleware(origins string) func(http.Handler) http.Handler {
+	// Parse allowed origins
+	allowedOrigins := parseOrigins(origins)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", origins)
+			origin := r.Header.Get("Origin")
+
+			// If no Origin header, skip CORS
+			if origin == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Validate if origin is allowed
+			if !isOriginAllowed(origin, allowedOrigins) {
+				writeErrorResponse(w, r, http.StatusForbidden, "origin not allowed")
+				return
+			}
+
+			// SECURITY: Never use wildcard (*) with credentials
+			// If wildcard is needed, it must be set explicitly and credentials disabled
+			if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				// Do NOT set Access-Control-Allow-Credentials with wildcard
+			} else {
+				// Set specific origin (not wildcard)
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				// Credentials can be allowed with specific origins
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID")
 			w.Header().Set("Access-Control-Max-Age", "3600")
@@ -139,17 +253,68 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 	}
 }
 
+// parseOrigins splits comma-separated origins
+func parseOrigins(origins string) []string {
+	if origins == "" {
+		return []string{}
+	}
+
+	// Handle wildcard
+	if strings.TrimSpace(origins) == "*" {
+		return []string{"*"}
+	}
+
+	// Split by comma and trim spaces
+	var result []string
+	parts := strings.Split(origins, ",")
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
+}
+
+// isOriginAllowed checks if the origin is in the allowed list
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	if len(allowedOrigins) == 0 {
+		return false
+	}
+
+	// Check for wildcard
+	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+		return true
+	}
+
+	// Check exact match
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+
+	return false
+}
+
 // bodyLimitMiddleware enforces a maximum request body size.
+// SECURITY: Always applies MaxBytesReader regardless of Content-Length header
+// to prevent bypass via chunked encoding or missing/manipulated headers.
 func bodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// ALWAYS apply MaxBytesReader to prevent DOS attacks
+			// This works even with chunked encoding or missing Content-Length
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+
+			// Check Content-Length as an early validation (optimization)
+			// but don't rely on it for security
 			if r.ContentLength > maxBytes {
 				writeErrorResponse(w, r, http.StatusRequestEntityTooLarge,
-					fmt.Sprintf("Request body too large. Maximum size is %d bytes", maxBytes))
+					fmt.Sprintf("Request body exceeds maximum size of %d bytes", maxBytes))
 				return
 			}
-
-			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
 			next.ServeHTTP(w, r)
 		})

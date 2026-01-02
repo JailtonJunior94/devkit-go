@@ -25,72 +25,85 @@ func (c *consumer) handleMessageWithRetry(ctx context.Context, msg kafka.Message
 
 	// Get or create retry state
 	state := c.getOrCreateRetryState(messageKey)
-
-	// Try to process the message
-	err := handler(ctx, headers, msg.Value)
-	if err == nil {
-		// Success - commit and clean up
-		if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
-			c.config.logger.Error(ctx, "failed to commit message",
-				Field{Key: "error", Value: commitErr},
-			)
-		}
+	defer func() {
+		// Cleanup state on completion (success or DLQ)
 		c.retryAttempts.Delete(messageKey)
-		return nil
-	}
+	}()
 
-	// Message processing failed
-	state.mu.Lock()
-	state.attempts++
-	currentAttempt := state.attempts
-	state.mu.Unlock()
-
-	c.config.logger.Warn(ctx, "message processing failed",
-		Field{Key: "topic", Value: msg.Topic},
-		Field{Key: "partition", Value: msg.Partition},
-		Field{Key: "offset", Value: msg.Offset},
-		Field{Key: "attempt", Value: currentAttempt},
-		Field{Key: "error", Value: err},
-	)
-
-	// Check if we should retry or send to DLQ
 	maxRetries := c.config.dlqConfig.MaxRetries
-	if currentAttempt >= maxRetries {
-		return c.sendToDLQ(ctx, msg, err, state)
+	currentBackoff := c.config.dlqConfig.RetryBackoff
+
+	// Iterative retry loop (avoids stack overflow)
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Check context before each attempt
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Try to process the message
+		err := handler(ctx, headers, msg.Value)
+
+		if err == nil {
+			// Success - commit and return
+			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+				c.config.logger.Error(ctx, "failed to commit message",
+					Field{Key: "error", Value: commitErr})
+				return commitErr
+			}
+			return nil
+		}
+
+		// Update state
+		state.mu.Lock()
+		state.attempts = attempt + 1
+		state.retryHistory = append(state.retryHistory, Retry{
+			Attempt:   attempt + 1,
+			Timestamp: time.Now(),
+			Error:     err.Error(),
+			Backoff:   currentBackoff.String(),
+		})
+		state.mu.Unlock()
+
+		c.config.logger.Warn(ctx, "message processing failed, will retry",
+			Field{Key: "topic", Value: msg.Topic},
+			Field{Key: "partition", Value: msg.Partition},
+			Field{Key: "offset", Value: msg.Offset},
+			Field{Key: "attempt", Value: attempt + 1},
+			Field{Key: "max_attempts", Value: maxRetries},
+			Field{Key: "error", Value: err},
+			Field{Key: "backoff", Value: currentBackoff.String()},
+		)
+
+		// Last attempt - don't sleep, go straight to DLQ
+		if attempt == maxRetries-1 {
+			break
+		}
+
+		// Sleep with context awareness
+		if sleepErr := c.sleepWithContext(ctx, currentBackoff); sleepErr != nil {
+			return sleepErr
+		}
+
+		// Calculate next backoff with exponential increase
+		currentBackoff = calculateBackoff(currentBackoff, c.config.dlqConfig.MaxRetryBackoff)
 	}
 
-	// Add to retry history
-	state.mu.Lock()
-	backoff := calculateBackoff(
-		c.config.dlqConfig.RetryBackoff,
-		c.config.dlqConfig.MaxRetryBackoff,
-	)
-	state.retryHistory = append(state.retryHistory, Retry{
-		Attempt:   currentAttempt,
-		Timestamp: time.Now(),
-		Error:     err.Error(),
-		Backoff:   backoff.String(),
-	})
-	state.mu.Unlock()
-
-	// Wait before retry (respecting context)
-	if sleepErr := c.sleepWithContext(ctx, backoff); sleepErr != nil {
-		return sleepErr
-	}
-
-	// Retry
-	return c.handleMessageWithRetry(ctx, msg, handler)
+	// All retries exhausted - send to DLQ
+	return c.sendToDLQ(ctx, msg, fmt.Errorf("max retries exceeded"), state)
 }
 
 // sendToDLQ sends a failed message to the Dead Letter Queue.
 func (c *consumer) sendToDLQ(ctx context.Context, msg kafka.Message, err error, state *retryState) error {
 	if !c.config.dlqConfig.Enabled || c.dlqStrategy == nil {
-		c.config.logger.Error(ctx, "max retries exceeded but DLQ is disabled",
+		c.config.logger.Error(ctx, "CRITICAL: max retries exceeded but DLQ is disabled - message will be lost",
 			Field{Key: "topic", Value: msg.Topic},
 			Field{Key: "partition", Value: msg.Partition},
 			Field{Key: "offset", Value: msg.Offset},
 			Field{Key: "error", Value: err},
 		)
+		// Don't commit - let Kafka redeliver
 		return fmt.Errorf("%w: %v", ErrMaxRetriesExceeded, err)
 	}
 
@@ -116,42 +129,51 @@ func (c *consumer) sendToDLQ(ctx context.Context, msg kafka.Message, err error, 
 		c.config.dlqConfig,
 	)
 
-	// Send to DLQ using strategy
+	// CRITICAL: Only commit if DLQ publish succeeds
 	if dlqErr := c.dlqStrategy.HandleFailure(ctx, dlqMsg); dlqErr != nil {
-		c.config.logger.Error(ctx, "failed to send message to DLQ",
+		c.config.logger.Error(ctx, "CRITICAL: failed to send message to DLQ - message will be redelivered",
 			Field{Key: "error", Value: dlqErr},
 			Field{Key: "original_error", Value: err},
+			Field{Key: "topic", Value: msg.Topic},
+			Field{Key: "offset", Value: msg.Offset},
 		)
+		// DO NOT COMMIT - let Kafka redeliver
 		return fmt.Errorf("failed to send to DLQ: %w", dlqErr)
 	}
 
-	// Commit the original message to prevent reprocessing
+	// Only now it's safe to commit
 	if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
-		c.config.logger.Error(ctx, "failed to commit message after DLQ",
+		c.config.logger.Error(ctx, "CRITICAL: message in DLQ but failed to commit offset",
 			Field{Key: "error", Value: commitErr},
+			Field{Key: "topic", Value: msg.Topic},
+			Field{Key: "offset", Value: msg.Offset},
 		)
+		// This is bad but message is at least in DLQ
+		return commitErr
 	}
 
-	// Clean up retry state
-	c.retryAttempts.Delete(fmt.Sprintf("%s-%d-%d", msg.Topic, msg.Partition, msg.Offset))
+	c.config.logger.Info(ctx, "message sent to DLQ successfully",
+		Field{Key: "topic", Value: msg.Topic},
+		Field{Key: "offset", Value: msg.Offset},
+		Field{Key: "attempts", Value: attempts},
+	)
 
 	return nil
 }
 
-// getOrCreateRetryState gets or creates retry state for a message.
+// getOrCreateRetryState gets or creates retry state for a message atomically.
+// Uses LoadOrStore to prevent race condition where multiple goroutines
+// could create and store different state objects for the same key.
 func (c *consumer) getOrCreateRetryState(key string) *retryState {
-	if val, ok := c.retryAttempts.Load(key); ok {
-		return val.(*retryState)
-	}
-
-	state := &retryState{
+	newState := &retryState{
 		attempts:     0,
 		firstAttempt: time.Now(),
 		retryHistory: make([]Retry, 0),
 	}
 
-	c.retryAttempts.Store(key, state)
-	return state
+	// LoadOrStore is atomic - either loads existing or stores new
+	actual, _ := c.retryAttempts.LoadOrStore(key, newState)
+	return actual.(*retryState)
 }
 
 // sleepWithContext sleeps for the specified duration while respecting context cancellation.

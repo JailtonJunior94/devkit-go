@@ -12,6 +12,7 @@ import (
 
 // recoverMiddleware recovers from panics and logs detailed error information.
 // It captures the stack trace and logs it via observability for debugging.
+// SECURITY: Prevents double write by checking if headers were already sent.
 func recoverMiddleware(o11y observability.Observability) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		defer func() {
@@ -22,7 +23,6 @@ func recoverMiddleware(o11y observability.Observability) fiber.Handler {
 					observability.String("ip", c.IP()),
 					observability.String("path", c.Path()),
 					observability.String("method", c.Method()),
-					observability.Int("status", c.Response().StatusCode()),
 					observability.String("stack", stack),
 					observability.Any("panic", r),
 				}
@@ -32,10 +32,25 @@ func recoverMiddleware(o11y observability.Observability) fiber.Handler {
 				}
 
 				o11y.Logger().Error(c.UserContext(), "recovered from panic in HTTP handler", fields...)
-				_ = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"code":    fiber.StatusInternalServerError,
-					"message": "Internal Server Error",
-				})
+
+				// Check if response was already sent (status code != 0 means headers sent)
+				// In Fiber, if status is 0, headers haven't been sent yet
+				if c.Response().StatusCode() == 0 {
+					_ = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+						"code":    fiber.StatusInternalServerError,
+						"message": "Internal Server Error",
+					})
+				} else {
+					// Headers already sent, cannot send error response
+					var reqID string
+					if rid, ok := c.Locals("requestID").(string); ok {
+						reqID = rid
+					}
+					o11y.Logger().Warn(c.UserContext(),
+						"cannot send panic error response: headers already sent",
+						observability.String("request_id", reqID),
+					)
+				}
 			}
 		}()
 
@@ -70,17 +85,33 @@ func timeoutMiddleware(globalTimeout time.Duration, routeTimeouts map[string]tim
 		ctx, cancel := context.WithTimeout(c.UserContext(), timeout)
 		defer cancel()
 
+		// Set context with timeout so handlers can check ctx.Done()
 		c.SetUserContext(ctx)
 
-		errChan := make(chan error, 1)
+		type result struct {
+			err error
+		}
+
+		resultChan := make(chan result, 1)
+
 		go func() {
-			errChan <- c.Next()
+			err := c.Next()
+			// Only send result if context is still active
+			select {
+			case resultChan <- result{err: err}:
+				// Result sent successfully
+			case <-ctx.Done():
+				// Context cancelled, don't send (prevents blocking)
+			}
 		}()
 
 		select {
-		case err := <-errChan:
-			return err
+		case res := <-resultChan:
+			// Handler completed within timeout
+			return res.err
 		case <-ctx.Done():
+			// Timeout exceeded
+			// Handler should detect ctx.Done() and stop processing
 			return fiber.NewError(fiber.StatusRequestTimeout, "request timeout exceeded")
 		}
 	}
@@ -99,8 +130,34 @@ func securityHeadersMiddleware() fiber.Handler {
 }
 
 func corsMiddleware(origins string) fiber.Handler {
+	// Parse allowed origins
+	allowedOrigins := parseOrigins(origins)
+
 	return func(c *fiber.Ctx) error {
-		c.Set("Access-Control-Allow-Origin", origins)
+		origin := c.Get("Origin")
+
+		// If no Origin header, skip CORS
+		if origin == "" {
+			return c.Next()
+		}
+
+		// Validate if origin is allowed
+		if !isOriginAllowed(origin, allowedOrigins) {
+			return fiber.NewError(fiber.StatusForbidden, "origin not allowed")
+		}
+
+		// SECURITY: Never use wildcard (*) with credentials
+		// If wildcard is needed, it must be set explicitly and credentials disabled
+		if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+			c.Set("Access-Control-Allow-Origin", "*")
+			// Do NOT set Access-Control-Allow-Credentials with wildcard
+		} else {
+			// Set specific origin (not wildcard)
+			c.Set("Access-Control-Allow-Origin", origin)
+			// Credentials can be allowed with specific origins
+			c.Set("Access-Control-Allow-Credentials", "true")
+		}
+
 		c.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID")
 		c.Set("Access-Control-Max-Age", "3600")
@@ -111,4 +168,96 @@ func corsMiddleware(origins string) fiber.Handler {
 
 		return c.Next()
 	}
+}
+
+// parseOrigins splits comma-separated origins
+func parseOrigins(origins string) []string {
+	if origins == "" {
+		return []string{}
+	}
+
+	// Handle wildcard
+	if origins == "*" {
+		return []string{"*"}
+	}
+
+	// Split by comma and trim spaces
+	var result []string
+	for _, origin := range splitAndTrim(origins, ",") {
+		if origin != "" {
+			result = append(result, origin)
+		}
+	}
+
+	return result
+}
+
+// isOriginAllowed checks if the origin is in the allowed list
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	if len(allowedOrigins) == 0 {
+		return false
+	}
+
+	// Check for wildcard
+	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+		return true
+	}
+
+	// Check exact match
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+
+	return false
+}
+
+// splitAndTrim splits a string by delimiter and trims each part
+func splitAndTrim(s, sep string) []string {
+	parts := []string{}
+	for _, part := range splitString(s, sep) {
+		trimmed := trimSpace(part)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
+}
+
+func splitString(s, sep string) []string {
+	if s == "" {
+		return []string{}
+	}
+
+	var result []string
+	current := ""
+
+	for i := 0; i < len(s); i++ {
+		if i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
+			result = append(result, current)
+			current = ""
+			i += len(sep) - 1
+		} else {
+			current += string(s[i])
+		}
+	}
+
+	result = append(result, current)
+	return result
+}
+
+func trimSpace(s string) string {
+	start := 0
+	end := len(s)
+
+	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
+		start++
+	}
+
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+		end--
+	}
+
+	return s[start:end]
 }

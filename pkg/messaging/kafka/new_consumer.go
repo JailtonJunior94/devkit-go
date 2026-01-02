@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/messaging"
 	"github.com/segmentio/kafka-go"
@@ -37,6 +38,10 @@ type consumer struct {
 	dlqPublisher  messaging.Publisher
 	dlqStrategy   DLQStrategy
 	retryAttempts sync.Map // map[string]*retryState
+
+	// Shutdown coordination
+	shutdownOnce sync.Once
+	wg           sync.WaitGroup
 }
 
 // WithGroupID sets the consumer group ID.
@@ -130,20 +135,42 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 
 	messageCh := make(chan kafka.Message, workerCount*2)
 
-	for range workerCount {
-		go c.worker(ctx, messageCh)
+	// Cancelable context for workers
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	defer workerCancel()
+
+	// Start workers with WaitGroup
+	for i := range workerCount {
+		c.wg.Add(1)
+		go func(id int) {
+			defer c.wg.Done()
+			c.worker(workerCtx, id, messageCh)
+		}(i)
 	}
 
+	// Fetcher goroutine
+	c.wg.Add(1)
+	fetcherDone := make(chan struct{})
 	go func() {
+		defer c.wg.Done()
 		defer close(messageCh)
+		defer close(fetcherDone)
+
 		for {
+			// Check shutdown
+			select {
+			case <-workerCtx.Done():
+				return
+			default:
+			}
+
 			if c.closed.Load() {
 				return
 			}
 
-			msg, err := c.reader.FetchMessage(ctx)
+			msg, err := c.reader.FetchMessage(workerCtx)
 			if err != nil {
-				if ctx.Err() != nil {
+				if workerCtx.Err() != nil {
 					return
 				}
 				c.sendError(err)
@@ -152,13 +179,23 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 
 			select {
 			case messageCh <- msg:
-			case <-ctx.Done():
+			case <-workerCtx.Done():
 				return
 			}
 		}
 	}()
 
-	return nil
+	// Wait for shutdown signal
+	<-fetcherDone
+
+	c.config.logger.Info(ctx, "fetcher stopped, waiting for workers to finish")
+
+	// Wait for all workers to finish processing
+	c.wg.Wait()
+
+	c.config.logger.Info(ctx, "all workers finished")
+
+	return workerCtx.Err()
 }
 
 // RegisterHandler registers a handler for a specific event type.
@@ -175,18 +212,46 @@ func (c *consumer) Errors() <-chan error {
 
 // Close closes the consumer.
 func (c *consumer) Close() error {
-	if c.closed.Swap(true) {
-		return nil
-	}
+	var closeErr error
 
-	close(c.errorCh)
+	c.shutdownOnce.Do(func() {
+		if c.closed.Swap(true) {
+			return // Already closed
+		}
 
-	if err := c.reader.Close(); err != nil {
-		return fmt.Errorf("failed to close consumer: %w", err)
-	}
+		c.config.logger.Info(context.Background(), "closing consumer, waiting for in-flight messages")
 
-	c.config.logger.Info(context.Background(), "consumer closed")
-	return nil
+		// Wait for workers to finish (with timeout)
+		done := make(chan struct{})
+		go func() {
+			c.wg.Wait()
+			close(done)
+		}()
+
+		timeout := time.NewTimer(30 * time.Second)
+		defer timeout.Stop()
+
+		select {
+		case <-done:
+			c.config.logger.Info(context.Background(), "all workers finished gracefully")
+		case <-timeout.C:
+			c.config.logger.Warn(context.Background(), "timeout waiting for workers, forcing shutdown")
+		}
+
+		// Close error channel
+		close(c.errorCh)
+
+		// Close reader
+		if err := c.reader.Close(); err != nil {
+			c.config.logger.Error(context.Background(), "error closing reader",
+				Field{Key: "error", Value: err})
+			closeErr = err
+		}
+
+		c.config.logger.Info(context.Background(), "consumer closed")
+	})
+
+	return closeErr
 }
 
 // consumeLoop is the main consumption loop.
@@ -210,7 +275,15 @@ func (c *consumer) consumeLoop(ctx context.Context) {
 }
 
 // worker processes messages from the channel.
-func (c *consumer) worker(ctx context.Context, messageCh <-chan kafka.Message) {
+func (c *consumer) worker(ctx context.Context, id int, messageCh <-chan kafka.Message) {
+	c.config.logger.Debug(ctx, "worker started",
+		Field{Key: "worker_id", Value: id})
+
+	defer func() {
+		c.config.logger.Debug(ctx, "worker stopped",
+			Field{Key: "worker_id", Value: id})
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -219,13 +292,61 @@ func (c *consumer) worker(ctx context.Context, messageCh <-chan kafka.Message) {
 			if !ok {
 				return
 			}
-			c.processMessage(ctx, msg)
+
+			// Panic recovery per message
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						c.handlePanic(ctx, id, msg, r)
+					}
+				}()
+
+				c.processMessage(ctx, msg)
+			}()
 		}
 	}
 }
 
+// handlePanic handles panics that occur during message processing.
+func (c *consumer) handlePanic(ctx context.Context, workerID int, msg kafka.Message, panicValue interface{}) {
+	c.config.logger.Error(ctx, "PANIC in message handler",
+		Field{Key: "worker_id", Value: workerID},
+		Field{Key: "panic", Value: panicValue},
+		Field{Key: "topic", Value: msg.Topic},
+		Field{Key: "partition", Value: msg.Partition},
+		Field{Key: "offset", Value: msg.Offset},
+	)
+
+	// Send to DLQ if configured
+	if c.config.dlqConfig.Enabled && c.dlqStrategy != nil {
+		state := &retryState{
+			attempts:     c.config.dlqConfig.MaxRetries,
+			firstAttempt: time.Now(),
+			retryHistory: []Retry{{
+				Attempt:   1,
+				Timestamp: time.Now(),
+				Error:     fmt.Sprintf("PANIC: %v", panicValue),
+			}},
+		}
+
+		if err := c.sendToDLQ(ctx, msg, fmt.Errorf("panic: %v", panicValue), state); err != nil {
+			c.config.logger.Error(ctx, "failed to send panic message to DLQ",
+				Field{Key: "error", Value: err})
+		}
+	}
+
+	c.sendError(fmt.Errorf("panic in handler: %v", panicValue))
+}
+
 // processMessage processes a single message.
 func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
+	// Check context before processing
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	headers := extractHeaders(msg)
 	eventType := headers["event_type"]
 
@@ -238,30 +359,80 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 		return
 	}
 
-	for _, handler := range handlers {
-		// Use retry logic with DLQ if enabled
-		if c.config.dlqConfig.Enabled {
-			if err := c.handleMessageWithRetry(ctx, msg, handler); err != nil {
-				c.sendError(err)
-			}
-		} else {
-			// Original behavior without DLQ
-			if err := handler(ctx, headers, msg.Value); err != nil {
-				c.config.logger.Error(ctx, "handler error",
-					Field{Key: "event_type", Value: eventType},
-					Field{Key: "error", Value: err},
-				)
-				c.sendError(err)
-				continue
-			}
+	// Process with DLQ retry logic
+	if c.config.dlqConfig.Enabled {
+		c.processMessageWithDLQ(ctx, msg, headers, eventType, handlers)
+		return
+	}
 
-			if err := c.reader.CommitMessages(ctx, msg); err != nil {
-				c.config.logger.Error(ctx, "failed to commit message",
-					Field{Key: "error", Value: err},
-				)
-				c.sendError(err)
-			}
+	// Process without DLQ - execute all handlers first, then commit
+	c.processMessageWithoutDLQ(ctx, msg, headers, eventType, handlers)
+}
+
+// processMessageWithDLQ processes message with DLQ retry logic.
+func (c *consumer) processMessageWithDLQ(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
+	var lastError error
+
+	for _, handler := range handlers {
+		// Check context before each handler
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
+
+		if err := c.handleMessageWithRetry(ctx, msg, handler); err != nil {
+			lastError = err
+			c.sendError(err)
+			// Continue processing other handlers even if one fails
+			// Each handler gets retry logic independently
+		}
+	}
+
+	// Note: When DLQ is enabled, handleMessageWithRetry handles commit internally
+	// on success, so we don't need to commit here
+	_ = lastError
+}
+
+// processMessageWithoutDLQ processes message without DLQ - all handlers must succeed before commit.
+func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
+	var allSuccess = true
+
+	// Execute ALL handlers first
+	for _, handler := range handlers {
+		// Check context before each handler
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if err := handler(ctx, headers, msg.Value); err != nil {
+			c.config.logger.Error(ctx, "handler error",
+				Field{Key: "event_type", Value: eventType},
+				Field{Key: "error", Value: err},
+			)
+			c.sendError(err)
+			allSuccess = false
+			// Continue to try other handlers, but mark as failed
+		}
+	}
+
+	// Only commit if ALL handlers succeeded
+	if allSuccess {
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			c.config.logger.Error(ctx, "failed to commit message",
+				Field{Key: "error", Value: err},
+			)
+			c.sendError(err)
+		}
+	} else {
+		c.config.logger.Warn(ctx, "message not committed due to handler failures",
+			Field{Key: "event_type", Value: eventType},
+			Field{Key: "topic", Value: msg.Topic},
+			Field{Key: "partition", Value: msg.Partition},
+			Field{Key: "offset", Value: msg.Offset},
+		)
 	}
 }
 

@@ -26,11 +26,11 @@ type Confluent struct{}
 //
 // Parâmetros:
 //   - config: Configuração de autenticação contendo:
-//     * Username: API Key do Confluent Cloud
-//     * Password: API Secret do Confluent Cloud
-//     * Algorithm: ScramAlgorithm (SHA256 ou SHA512). Se vazio, usa SHA512.
-//     * TLSConfig: Configuração TLS customizada (opcional)
-//     * InsecureSkipVerify: NUNCA usar true em produção
+//   - Username: API Key do Confluent Cloud
+//   - Password: API Secret do Confluent Cloud
+//   - Algorithm: ScramAlgorithm (SHA256 ou SHA512). Se vazio, usa SHA512.
+//   - TLSConfig: Configuração TLS customizada (opcional)
+//   - InsecureSkipVerify: NUNCA usar true em produção
 //
 // Retorna:
 //   - *kafka.Dialer configurado para Confluent Cloud
@@ -80,7 +80,7 @@ func (cf *Confluent) Configure(config *Config) (*kafka.Dialer, error) {
 	return &kafka.Dialer{
 		SASLMechanism: mechanism,
 		TLS:           tlsConfig,
-		Timeout:       10 * time.Second,  // Timeout adequado para conexões cloud
+		Timeout:       10 * time.Second,   // Timeout adequado para conexões cloud
 		DualStack:     true,               // Suporta IPv4 e IPv6
 		ClientID:      "devkit-go-client", // Identificação do cliente
 	}, nil

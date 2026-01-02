@@ -2,6 +2,7 @@ package chiserver
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -13,18 +14,18 @@ import (
 
 // Server represents an HTTP server using Chi router.
 type Server struct {
-	router             chi.Router
-	httpServer         *http.Server
-	config             Config
-	observability      observability.Observability
-	healthChecks       map[string]HealthCheckFunc
-	routeTimeouts      map[string]time.Duration
-	customMiddlewares  []func(http.Handler) http.Handler
-	shutdownOnce       sync.Once
+	router            chi.Router
+	httpServer        *http.Server
+	config            Config
+	observability     observability.Observability
+	healthChecks      map[string]HealthCheckFunc
+	routeTimeouts     map[string]time.Duration
+	customMiddlewares []func(http.Handler) http.Handler
+	shutdownOnce      sync.Once
 }
 
 // New creates a new HTTP server with the given options.
-func New(o11y observability.Observability, opts ...Option) *Server {
+func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	srv := &Server{
 		config:        DefaultConfig(),
 		observability: o11y,
@@ -37,7 +38,7 @@ func New(o11y observability.Observability, opts ...Option) *Server {
 	}
 
 	if err := srv.config.Validate(); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("invalid server configuration: %w", err)
 	}
 
 	srv.router = chi.NewRouter()
@@ -52,7 +53,7 @@ func New(o11y observability.Observability, opts ...Option) *Server {
 		IdleTimeout:  srv.config.IdleTimeout,
 	}
 
-	return srv
+	return srv, nil
 }
 
 // RegisterRouters registers route handlers with the server.

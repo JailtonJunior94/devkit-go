@@ -77,14 +77,40 @@ func executeHealthChecks(
 	o11y observability.Observability,
 	status *HealthStatus,
 ) bool {
+	if len(checks) == 0 {
+		return false
+	}
+
+	// Limit concurrent goroutines to prevent goroutine bomb
+	// Maximum 10 concurrent health checks at a time
+	const maxConcurrent = 10
+	semaphore := make(chan struct{}, maxConcurrent)
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	checkErrors := false
 
 	for name, checkFunc := range checks {
 		wg.Add(1)
+
 		go func(checkName string, check HealthCheckFunc) {
 			defer wg.Done()
+
+			// Acquire semaphore (blocks if 10 goroutines already running)
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }() // Release semaphore when done
+			case <-ctx.Done():
+				// Context cancelled, abort
+				mu.Lock()
+				status.Checks[checkName] = CheckResult{
+					Status: "unhealthy",
+					Error:  "timeout",
+				}
+				checkErrors = true
+				mu.Unlock()
+				return
+			}
 
 			result := CheckResult{Status: "healthy"}
 			if err := check(ctx); err != nil {
@@ -134,6 +160,14 @@ func executeReadinessChecks(
 	checks map[string]HealthCheckFunc,
 	o11y observability.Observability,
 ) bool {
+	if len(checks) == 0 {
+		return false
+	}
+
+	// Limit concurrent goroutines to prevent goroutine bomb
+	const maxConcurrent = 10
+	semaphore := make(chan struct{}, maxConcurrent)
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	checkErrors := false
@@ -142,6 +176,17 @@ func executeReadinessChecks(
 		wg.Add(1)
 		go func(checkName string, check HealthCheckFunc) {
 			defer wg.Done()
+
+			// Acquire semaphore
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				mu.Lock()
+				checkErrors = true
+				mu.Unlock()
+				return
+			}
 
 			if err := check(ctx); err != nil {
 				mu.Lock()

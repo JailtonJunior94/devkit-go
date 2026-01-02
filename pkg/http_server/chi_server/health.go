@@ -30,6 +30,7 @@ type CheckResult struct {
 }
 
 // executeHealthChecks runs all health checks in parallel with the given timeout.
+// Limits concurrency to prevent goroutine bomb under high load.
 func executeHealthChecks(
 	ctx context.Context,
 	checks map[string]HealthCheckFunc,
@@ -43,6 +44,10 @@ func executeHealthChecks(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Limit concurrent goroutines to prevent goroutine bomb
+	const maxConcurrent = 10
+	semaphore := make(chan struct{}, maxConcurrent)
+
 	results := make(map[string]CheckResult)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -52,6 +57,20 @@ func executeHealthChecks(
 
 		go func(checkName string, fn HealthCheckFunc) {
 			defer wg.Done()
+
+			// Acquire semaphore
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				mu.Lock()
+				results[checkName] = CheckResult{
+					Status: "unhealthy",
+					Error:  "timeout",
+				}
+				mu.Unlock()
+				return
+			}
 
 			err := fn(ctx)
 

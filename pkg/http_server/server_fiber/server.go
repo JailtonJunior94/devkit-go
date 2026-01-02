@@ -2,6 +2,7 @@ package serverfiber
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -23,7 +24,7 @@ type Server struct {
 	shutdownOnce       sync.Once
 }
 
-func New(o11y observability.Observability, opts ...Option) *Server {
+func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	srv := &Server{
 		config:        DefaultConfig(),
 		observability: o11y,
@@ -36,7 +37,7 @@ func New(o11y observability.Observability, opts ...Option) *Server {
 	}
 
 	if err := srv.config.Validate(); err != nil {
-		panic("invalid server configuration: " + err.Error())
+		return nil, fmt.Errorf("invalid server configuration: %w", err)
 	}
 
 	errorHandler := srv.customErrorHandler
@@ -44,12 +45,15 @@ func New(o11y observability.Observability, opts ...Option) *Server {
 		errorHandler = defaultErrorHandler
 	}
 
+	// SECURITY: BodyLimit is enforced natively by Fiber
+	// This prevents DOS attacks via large request bodies
+	// Fiber will automatically reject requests exceeding this limit
 	srv.app = fiber.New(fiber.Config{
 		AppName:      srv.config.ServiceName,
 		ReadTimeout:  srv.config.ReadTimeout,
 		WriteTimeout: srv.config.WriteTimeout,
 		IdleTimeout:  srv.config.IdleTimeout,
-		BodyLimit:    srv.config.BodyLimit,
+		BodyLimit:    srv.config.BodyLimit, // Enforced by Fiber natively
 		ErrorHandler: errorHandler,
 	})
 
@@ -71,7 +75,7 @@ func New(o11y observability.Observability, opts ...Option) *Server {
 		)
 	}
 
-	return srv
+	return srv, nil
 }
 
 func (s *Server) registerMiddlewares() {
