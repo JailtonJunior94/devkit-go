@@ -101,10 +101,10 @@ func WithConnMaxIdleTime(d time.Duration) Option {
 //
 //	postgres.WithPoolConfig(25, 10, 5*time.Minute, 2*time.Minute)
 func WithPoolConfig(maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) Option {
-	return func(db *Database) {
-		db.db.SetMaxOpenConns(maxOpen)
-		db.db.SetMaxIdleConns(maxIdle)
-		db.db.SetConnMaxLifetime(maxLifetime)
-		db.db.SetConnMaxIdleTime(maxIdleTime)
+	return func(sql *Database) {
+		sql.db.SetMaxOpenConns(maxOpen)
+		sql.db.SetMaxIdleConns(maxIdle)
+		sql.db.SetConnMaxLifetime(maxLifetime)
+		sql.db.SetConnMaxIdleTime(maxIdleTime)
 	}
 }
