@@ -359,6 +359,30 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 		return
 	}
 
+	// If instrumentation is enabled, wrap the consumption
+	if c.config.instrumentation != nil {
+		_ = c.config.instrumentation.InstrumentConsume(
+			ctx,
+			msg.Topic,
+			msg.Partition,
+			msg.Offset,
+			string(msg.Key),
+			headers,
+			c.consumerCfg.groupID,
+			func(ctx context.Context) error {
+				c.processMessageInternal(ctx, msg, headers, eventType, handlers)
+				return nil
+			},
+		)
+		return
+	}
+
+	// Fallback: execute directly without tracing
+	c.processMessageInternal(ctx, msg, headers, eventType, handlers)
+}
+
+// processMessageInternal contains the core message processing logic without instrumentation.
+func (c *consumer) processMessageInternal(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
 	// Process with DLQ retry logic
 	if c.config.dlqConfig.Enabled {
 		c.processMessageWithDLQ(ctx, msg, headers, eventType, handlers)
@@ -407,7 +431,18 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 		default:
 		}
 
-		if err := handler(ctx, headers, msg.Value); err != nil {
+		var err error
+
+		// If instrumentation is enabled, wrap the handler execution
+		if c.config.instrumentation != nil {
+			err = c.config.instrumentation.InstrumentHandler(ctx, eventType, func(ctx context.Context) error {
+				return handler(ctx, headers, msg.Value)
+			})
+		} else {
+			err = handler(ctx, headers, msg.Value)
+		}
+
+		if err != nil {
 			c.config.logger.Error(ctx, "handler error",
 				Field{Key: "event_type", Value: eventType},
 				Field{Key: "error", Value: err},

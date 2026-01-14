@@ -132,7 +132,7 @@ func NewDBManager(ctx context.Context, config *Config) (*DBManager, error) {
 	return manager, nil
 }
 
-// validateConfig validates required configuration fields.
+// validateConfig validates required configuration fields and warns about suboptimal settings.
 func validateConfig(config *Config) error {
 	if config == nil {
 		return fmt.Errorf("config cannot be nil")
@@ -165,6 +165,42 @@ func validateConfig(config *Config) error {
 
 	if config.ConnMaxIdleTime < 30*time.Second {
 		return fmt.Errorf("ConnMaxIdleTime too short (minimum 30 seconds), got %v", config.ConnMaxIdleTime)
+	}
+
+	// Performance warnings (non-fatal)
+	// These indicate potential misconfigurations that may cause issues in production
+
+	// Warn if MaxOpenConns is very high - may exceed PostgreSQL max_connections
+	if config.MaxOpenConns > 100 {
+		fmt.Printf("WARNING: MaxOpenConns=%d is high. Ensure PostgreSQL max_connections is sufficient (typically 100-200). "+
+			"Recommended: Keep MaxOpenConns at 60-80%% of PostgreSQL max_connections.\n", config.MaxOpenConns)
+	}
+
+	// Warn if MaxIdleConns is too low - may cause latency due to frequent reconnections
+	if config.MaxIdleConns < config.MaxOpenConns/4 {
+		fmt.Printf("WARNING: MaxIdleConns=%d is low (<25%% of MaxOpenConns=%d). "+
+			"This may cause latency due to frequent connection establishment. "+
+			"Recommended: Set to 25-50%% of MaxOpenConns for better performance.\n",
+			config.MaxIdleConns, config.MaxOpenConns)
+	}
+
+	// Warn if ConnMaxLifetime is too short - causes excessive connection churn
+	if config.ConnMaxLifetime < 3*time.Minute {
+		fmt.Printf("WARNING: ConnMaxLifetime=%v is short. "+
+			"This may cause excessive connection churn and overhead. "+
+			"Recommended: 5-10 minutes for most workloads.\n", config.ConnMaxLifetime)
+	}
+
+	// Warn if ConnMaxIdleTime is too short - may not effectively reduce resource usage
+	if config.ConnMaxIdleTime < time.Minute {
+		fmt.Printf("WARNING: ConnMaxIdleTime=%v is short. "+
+			"Recommended: 2-3 minutes to balance resource usage and connection availability.\n", config.ConnMaxIdleTime)
+	}
+
+	// Warn if query logging is enabled (potential security and performance issue)
+	if config.EnableQueryLogging {
+		fmt.Printf("WARNING: EnableQueryLogging=true. This should NEVER be enabled in production. "+
+			"It logs all SQL queries (including sensitive data) and significantly impacts performance.\n")
 	}
 
 	return nil

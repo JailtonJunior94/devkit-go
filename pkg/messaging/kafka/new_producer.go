@@ -50,6 +50,19 @@ func (p *producer) Publish(ctx context.Context, topicOrQueue, key string, header
 		return ErrProducerClosed
 	}
 
+	// If instrumentation is enabled, wrap the publish operation
+	if p.config.instrumentation != nil {
+		return p.config.instrumentation.InstrumentPublish(ctx, topicOrQueue, key, headers, func(ctx context.Context) error {
+			return p.publishInternal(ctx, topicOrQueue, key, headers, message)
+		})
+	}
+
+	// Fallback: execute directly without tracing
+	return p.publishInternal(ctx, topicOrQueue, key, headers, message)
+}
+
+// publishInternal contains the core publish logic without instrumentation.
+func (p *producer) publishInternal(ctx context.Context, topicOrQueue, key string, headers map[string]string, message *messaging.Message) error {
 	kafkaMessage := kafka.Message{
 		Topic: topicOrQueue,
 		Key:   []byte(key),

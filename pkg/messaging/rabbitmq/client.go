@@ -39,6 +39,9 @@ type Client struct {
 	observability observability.Observability
 	connMgr       *connectionManager
 
+	// OpenTelemetry instrumentation (optional).
+	instrumentation *Instrumentation
+
 	mu           sync.RWMutex
 	closed       bool
 	shutdownOnce sync.Once

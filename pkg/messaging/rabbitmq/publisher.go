@@ -55,6 +55,47 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 		return ErrClientClosed
 	}
 
+	// Build message first to extract headers for instrumentation
+	msg := amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Timestamp:    time.Now(),
+		Body:         body,
+	}
+
+	// Initialize headers if nil
+	if msg.Headers == nil {
+		msg.Headers = make(amqp.Table)
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		opt(&msg)
+	}
+
+	// If instrumentation is enabled, wrap the publish operation
+	if p.client.instrumentation != nil {
+		// Convert amqp.Table to map[string]interface{} for instrumentation
+		headers := make(map[string]interface{})
+		for k, v := range msg.Headers {
+			headers[k] = v
+		}
+
+		return p.client.instrumentation.InstrumentPublish(ctx, exchange, routingKey, headers, func(ctx context.Context) error {
+			// Copy back the headers with trace context
+			for k, v := range headers {
+				msg.Headers[k] = v
+			}
+			return p.publishInternal(ctx, exchange, routingKey, msg)
+		})
+	}
+
+	// Fallback: execute directly without tracing
+	return p.publishInternal(ctx, exchange, routingKey, msg)
+}
+
+// publishInternal contains the core publish logic without instrumentation.
+func (p *Publisher) publishInternal(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) error {
 	pool, err := p.client.connMgr.getChannelPool()
 	if err != nil {
 		return fmt.Errorf("failed to get channel pool: %w", err)
@@ -63,17 +104,6 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	pubCh, err := pool.GetPublisherChannel()
 	if err != nil {
 		return fmt.Errorf("failed to get publisher channel: %w", err)
-	}
-
-	msg := amqp.Publishing{
-		ContentType:  "application/json",
-		DeliveryMode: amqp.Persistent,
-		Timestamp:    time.Now(),
-		Body:         body,
-	}
-
-	for _, opt := range opts {
-		opt(&msg)
 	}
 
 	publishCtx, cancel := context.WithTimeout(ctx, p.client.config.PublishTimeout)
@@ -88,7 +118,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 		p.observability.Logger().Debug(ctx, "message published (no confirms)",
 			observability.String("exchange", exchange),
 			observability.String("routing_key", routingKey),
-			observability.Int("body_size", len(body)),
+			observability.Int("body_size", len(msg.Body)),
 		)
 
 		return nil
@@ -102,7 +132,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	p.observability.Logger().Debug(ctx, "message published with confirm",
 		observability.String("exchange", exchange),
 		observability.String("routing_key", routingKey),
-		observability.Int("body_size", len(body)),
+		observability.Int("body_size", len(msg.Body)),
 	)
 
 	return nil

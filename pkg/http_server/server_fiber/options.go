@@ -105,3 +105,15 @@ func WithServiceVersion(version string) Option {
 		s.config.ServiceVersion = version
 	}
 }
+
+func WithTracing() Option {
+	return func(s *Server) {
+		s.config.EnableTracing = true
+	}
+}
+
+func WithOTelMetrics() Option {
+	return func(s *Server) {
+		s.config.EnableOTelMetrics = true
+	}
+}

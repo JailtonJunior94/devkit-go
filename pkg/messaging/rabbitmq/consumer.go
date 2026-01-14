@@ -416,20 +416,51 @@ func (c *Consumer) processMessageLogic(ctx context.Context, delivery amqp.Delive
 		return
 	}
 
+	// If instrumentation is enabled, wrap the consumption
+	if c.client.instrumentation != nil {
+		_ = c.client.instrumentation.InstrumentConsume(
+			ctx,
+			delivery.Exchange,
+			delivery.RoutingKey,
+			c.queue,
+			msg.Headers,
+			func(ctx context.Context) error {
+				return c.processMessageWithHandler(ctx, msg, delivery, handler, retryCount)
+			},
+		)
+		return
+	}
+
+	// Fallback: execute directly without tracing
+	c.processMessageWithHandler(ctx, msg, delivery, handler, retryCount)
+}
+
+// processMessageWithHandler executes the handler and handles success/error.
+func (c *Consumer) processMessageWithHandler(ctx context.Context, msg Message, delivery amqp.Delivery, handler MessageHandler, retryCount int) error {
 	// Timeout no handler
 	handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	err := handler(handlerCtx, msg)
+	var err error
+
+	// If instrumentation is enabled, wrap the handler execution
+	if c.client.instrumentation != nil {
+		err = c.client.instrumentation.InstrumentHandler(handlerCtx, delivery.RoutingKey, func(ctx context.Context) error {
+			return handler(ctx, msg)
+		})
+	} else {
+		err = handler(handlerCtx, msg)
+	}
 
 	// Guard clause: sucesso
 	if err == nil {
 		c.handleSuccess(ctx, delivery)
-		return
+		return nil
 	}
 
 	// Tratamento de erro com retry logic
 	c.handleError(ctx, delivery, err, retryCount)
+	return err
 }
 
 // buildMessage constrói Message a partir de Delivery.
@@ -538,6 +569,13 @@ func (c *Consumer) sendToDLQ(ctx context.Context, delivery amqp.Delivery, retryC
 		observability.Int("max_retries", c.getMaxRetries()),
 	)
 
+	// Record DLQ metric if instrumentation is enabled
+	if c.client.instrumentation != nil {
+		// Extract DLQ queue name from x-dead-letter-exchange header if available
+		dlqQueue := c.queue + ".dlq" // Default DLQ naming convention
+		c.client.instrumentation.RecordDLQPublish(ctx, c.queue, dlqQueue)
+	}
+
 	// NACK sem requeue (vai para DLQ se configurado)
 	if err := delivery.Nack(false, false); err != nil {
 		c.observability.Logger().Error(ctx, "failed to nack to DLQ",
@@ -558,6 +596,11 @@ func (c *Consumer) requeueMessage(ctx context.Context, delivery amqp.Delivery, r
 		observability.Int("retry_count", retryCount),
 		observability.String("backoff", backoff.String()),
 	)
+
+	// Record retry metric if instrumentation is enabled
+	if c.client.instrumentation != nil {
+		c.client.instrumentation.RecordRetryAttempt(ctx, c.queue, retryCount)
+	}
 
 	// Wait before requeue to prevent retry storm
 	timer := time.NewTimer(backoff)

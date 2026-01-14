@@ -8,6 +8,9 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // recoverMiddleware recovers from panics and logs detailed error information.
@@ -260,4 +263,69 @@ func trimSpace(s string) string {
 	}
 
 	return s[start:end]
+}
+
+// otelMetricsMiddleware creates OpenTelemetry HTTP metrics for the server.
+// It records request duration, request count, and active requests.
+// Metrics follow OpenTelemetry Semantic Conventions for HTTP metrics.
+//
+// PERFORMANCE: Instruments are created once and reused for all requests.
+// Uses the global MeterProvider configured by the observability package.
+func otelMetricsMiddleware(serviceName string) fiber.Handler {
+	// Get global MeterProvider (already configured by otel.Provider)
+	meter := otel.GetMeterProvider().Meter(serviceName)
+
+	// Create instruments once (reuse for all requests to avoid overhead)
+	durationHistogram, _ := meter.Float64Histogram(
+		"http.server.duration",
+		metric.WithDescription("Duration of HTTP server requests in seconds"),
+		metric.WithUnit("s"),
+	)
+
+	requestCounter, _ := meter.Int64Counter(
+		"http.server.request.count",
+		metric.WithDescription("Total number of HTTP requests"),
+		metric.WithUnit("{request}"),
+	)
+
+	activeRequests, _ := meter.Int64UpDownCounter(
+		"http.server.active_requests",
+		metric.WithDescription("Number of active HTTP requests"),
+		metric.WithUnit("{request}"),
+	)
+
+	return func(c *fiber.Ctx) error {
+		start := time.Now()
+		ctx := c.UserContext()
+
+		// Increment active requests
+		activeRequests.Add(ctx, 1)
+		defer activeRequests.Add(ctx, -1)
+
+		// Process request
+		err := c.Next()
+
+		// Calculate duration in seconds
+		duration := time.Since(start).Seconds()
+
+		// Get route path (use template, not actual path to avoid cardinality explosion)
+		// Example: /users/:id instead of /users/123
+		route := c.Route().Path
+		if route == "" {
+			route = "unknown"
+		}
+
+		// Prepare attributes following OpenTelemetry Semantic Conventions
+		attrs := metric.WithAttributes(
+			attribute.String("http.method", c.Method()),
+			attribute.String("http.route", route),
+			attribute.Int("http.status_code", c.Response().StatusCode()),
+		)
+
+		// Record metrics
+		durationHistogram.Record(ctx, duration, attrs)
+		requestCounter.Add(ctx, 1, attrs)
+
+		return err
+	}
 }

@@ -18,6 +18,8 @@ type Config struct {
 	EnableCORS         bool
 	EnableMetrics      bool
 	EnableHealthChecks bool
+	EnableTracing      bool // Enable OpenTelemetry distributed tracing
+	EnableOTelMetrics  bool // Enable OpenTelemetry HTTP metrics
 }
 
 func DefaultConfig() Config {
@@ -34,6 +36,8 @@ func DefaultConfig() Config {
 		EnableCORS:         false,
 		EnableMetrics:      false,
 		EnableHealthChecks: true, // Health checks enabled by default
+		EnableTracing:      false,
+		EnableOTelMetrics:  false,
 	}
 }
 

@@ -64,6 +64,9 @@ type config struct {
 
 	// DLQ settings.
 	dlqConfig *DLQConfig
+
+	// OpenTelemetry instrumentation (optional).
+	instrumentation *Instrumentation
 }
 
 // defaultConfig returns a config instance with sensible production-ready defaults.
