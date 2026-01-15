@@ -149,10 +149,8 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 }
 
 func rollbackTx(tx *sql.Tx) error {
-	if tx == nil {
-		// Se tx for nil aqui, indica um bug no código
-		panic("rollbackTx called with nil transaction - this is a bug")
-	}
+	// Assume tx nunca é nil (garantido pelos callers)
+	// Se alguém passar nil, panic nativo de nil pointer é mais claro
 
 	if err := tx.Rollback(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {

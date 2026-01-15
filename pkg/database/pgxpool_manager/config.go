@@ -2,6 +2,10 @@ package pgxpool_manager
 
 import "time"
 
+// LogFunc is a function type for logging SQL queries and warnings.
+// Implementations should handle formatting via fmt.Sprintf(format, args...).
+type LogFunc func(format string, args ...any)
+
 // Config holds the configuration for pgxpool with OpenTelemetry instrumentation.
 type Config struct {
 	// DSN is the PostgreSQL connection string.
@@ -77,6 +81,23 @@ type Config struct {
 	// - Degraded performance
 	// Default: false
 	EnableQueryLogging bool
+
+	// Logger is an optional function for capturing SQL query logs.
+	// Only used when EnableQueryLogging=true.
+	// If nil (default), query logs are silenced.
+	//
+	// Example - Log to stdout:
+	//   cfg.Logger = func(format string, args ...any) {
+	//       log.Printf("[DB-QUERY] " + format, args...)
+	//   }
+	//
+	// Example - Structured logging with slog:
+	//   cfg.Logger = func(format string, args ...any) {
+	//       slog.Debug(fmt.Sprintf(format, args...))
+	//   }
+	//
+	// Default: nil (silent)
+	Logger LogFunc
 }
 
 // DefaultConfig returns a Config with production-safe defaults.
@@ -92,5 +113,6 @@ func DefaultConfig(dsn, serviceName string) *Config {
 		EnableTracing:       true,
 		EnableMetrics:       true,
 		EnableQueryLogging:  false, // NEVER enable in production
+		Logger:              nil,   // Silent by default
 	}
 }

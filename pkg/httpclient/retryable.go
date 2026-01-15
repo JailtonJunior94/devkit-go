@@ -2,23 +2,10 @@ package httpclient
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
-)
-
-const (
-	// DefaultMaxRequestBodySize is the default maximum request body size for retry buffering (10MB).
-	DefaultMaxRequestBodySize int64 = 10 * 1024 * 1024
-	// DefaultMaxDrainSize is the default maximum size to drain from response body (1MB).
-	DefaultMaxDrainSize int64 = 1 * 1024 * 1024
-)
-
-var (
-	// ErrRequestBodyTooLarge is returned when the request body exceeds the maximum size for retry buffering.
-	ErrRequestBodyTooLarge = errors.New("request body exceeds maximum allowed size for retry buffering")
 )
 
 type Option func(retryableTransport *retryableTransport)

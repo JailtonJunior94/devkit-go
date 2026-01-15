@@ -155,20 +155,25 @@ func (d *Database) Ping(ctx context.Context) error {
 }
 
 // Shutdown encerra a conexão com o banco de forma graciosa.
-// Aguarda todas as conexões ativas finalizarem antes de fechar.
-// Respeita o timeout definido no contexto.
+// O context é verificado ANTES de iniciar o Close(), mas Close() em si é bloqueante.
 //
 // Comportamento:
+//   - Verifica se context já expirou ANTES de iniciar Close()
 //   - Marca a conexão como fechada para prevenir novas operações
-//   - Aguarda conexões ativas finalizarem (respeitando ctx)
-//   - Fecha a conexão apenas uma vez (idempotente)
-//   - É thread-safe e pode ser chamado concorrentemente
+//   - Executa Close() bloqueante (pode exceder deadline do ctx)
+//   - Close() NÃO pode ser interrompido uma vez iniciado
+//   - É idempotente e thread-safe
+//
+// IMPORTANTE:
+//   - Close() é bloqueante por design no database/sql
+//   - Se context expirar DURANTE Close(), a operação continua até completar
+//   - Trade-off: Preferimos fechar conexões completamente a deixá-las órfãs
 //
 // Parâmetros:
-//   - ctx: contexto com timeout/deadline para o shutdown
+//   - ctx: contexto verificado antes de iniciar shutdown
 //
 // Retorna erro se:
-//   - O contexto expirar antes de todas as conexões fecharem
+//   - O contexto já estiver expirado antes de iniciar
 //   - Ocorrer erro ao fechar a conexão
 //
 // Exemplo:
@@ -187,28 +192,19 @@ func (d *Database) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	// Verifica se context já expirou ANTES de iniciar Close()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("postgres: shutdown abortado (context expirado): %w", err)
+	}
+
 	// Marca como fechada para prevenir novas operações
 	d.closed = true
 
-	// Canal para sinalizar quando Close() terminar
-	done := make(chan error, 1)
-
-	// Executa Close() em goroutine para respeitar o contexto
-	go func() {
-		// Close() aguarda todas as conexões ativas finalizarem
-		done <- d.db.Close()
-	}()
-
-	// Aguarda Close() terminar OU contexto expirar
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("postgres: erro ao fechar conexão: %w", err)
-		}
-		return nil
-	case <-ctx.Done():
-		// Contexto expirou, mas Close() continua executando em background
-		// Isso previne deadlock e respeita o timeout do usuário
-		return fmt.Errorf("postgres: shutdown cancelado: %w", ctx.Err())
+	// Close() é bloqueante e NÃO respeita ctx.Done() após iniciar
+	// Aguarda todas as conexões ativas finalizarem naturalmente
+	if err := d.db.Close(); err != nil {
+		return fmt.Errorf("postgres: erro ao fechar conexão: %w", err)
 	}
+
+	return nil
 }

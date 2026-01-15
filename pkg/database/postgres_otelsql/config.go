@@ -2,6 +2,10 @@ package postgres_otelsql
 
 import "time"
 
+// LogFunc is a function type for logging warnings and informational messages.
+// Implementations should handle formatting via fmt.Sprintf(format, args...).
+type LogFunc func(format string, args ...any)
+
 // Config holds the configuration for PostgreSQL with otelsql instrumentation.
 // All fields are required unless explicitly marked as optional.
 type Config struct {
@@ -71,6 +75,22 @@ type Config struct {
 	// - Performance degradation
 	// Default: false
 	EnableQueryLogging bool
+
+	// Logger is an optional function for capturing logs and warnings.
+	// If nil (default), logs are silenced (recommended for production).
+	//
+	// Example - Log to stdout:
+	//   cfg.Logger = func(format string, args ...any) {
+	//       log.Printf("[DB-WARNING] " + format, args...)
+	//   }
+	//
+	// Example - Structured logging with slog:
+	//   cfg.Logger = func(format string, args ...any) {
+	//       slog.Warn(fmt.Sprintf(format, args...))
+	//   }
+	//
+	// Default: nil (silent)
+	Logger LogFunc
 }
 
 // DefaultConfig returns a Config with production-safe defaults.
@@ -85,5 +105,6 @@ func DefaultConfig(dsn, serviceName string) *Config {
 		EnableMetrics:       true,
 		EnableTracing:       true,
 		EnableQueryLogging:  false, // NEVER enable in production
+		Logger:              nil,   // Silent by default
 	}
 }

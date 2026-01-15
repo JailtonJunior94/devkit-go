@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-const (
-	DefaultTimeout = 30 * time.Second
-)
-
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }

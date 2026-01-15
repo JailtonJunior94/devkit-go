@@ -124,12 +124,18 @@ func NewDBManager(ctx context.Context, config *Config) (*DBManager, error) {
 	if config.EnableMetrics {
 		if _, err := otelsql.RegisterDBStatsMetrics(db); err != nil {
 			// Non-fatal: we can continue without metrics
-			// But we should log this in production
-			fmt.Printf("WARNING: Failed to register otelsql metrics: %v\n", err)
+			manager.logf("Failed to register otelsql metrics: %v", err)
 		}
 	}
 
 	return manager, nil
+}
+
+// logConfig is a helper to log configuration warnings during validation.
+func logConfig(config *Config, format string, args ...any) {
+	if config.Logger != nil {
+		config.Logger(format, args...)
+	}
 }
 
 // validateConfig validates required configuration fields and warns about suboptimal settings.
@@ -172,35 +178,35 @@ func validateConfig(config *Config) error {
 
 	// Warn if MaxOpenConns is very high - may exceed PostgreSQL max_connections
 	if config.MaxOpenConns > 100 {
-		fmt.Printf("WARNING: MaxOpenConns=%d is high. Ensure PostgreSQL max_connections is sufficient (typically 100-200). "+
-			"Recommended: Keep MaxOpenConns at 60-80%% of PostgreSQL max_connections.\n", config.MaxOpenConns)
+		logConfig(config, "MaxOpenConns=%d is high. Ensure PostgreSQL max_connections is sufficient (typically 100-200). "+
+			"Recommended: Keep MaxOpenConns at 60-80%% of PostgreSQL max_connections.", config.MaxOpenConns)
 	}
 
 	// Warn if MaxIdleConns is too low - may cause latency due to frequent reconnections
 	if config.MaxIdleConns < config.MaxOpenConns/4 {
-		fmt.Printf("WARNING: MaxIdleConns=%d is low (<25%% of MaxOpenConns=%d). "+
+		logConfig(config, "MaxIdleConns=%d is low (<25%% of MaxOpenConns=%d). "+
 			"This may cause latency due to frequent connection establishment. "+
-			"Recommended: Set to 25-50%% of MaxOpenConns for better performance.\n",
+			"Recommended: Set to 25-50%% of MaxOpenConns for better performance.",
 			config.MaxIdleConns, config.MaxOpenConns)
 	}
 
 	// Warn if ConnMaxLifetime is too short - causes excessive connection churn
 	if config.ConnMaxLifetime < 3*time.Minute {
-		fmt.Printf("WARNING: ConnMaxLifetime=%v is short. "+
+		logConfig(config, "ConnMaxLifetime=%v is short. "+
 			"This may cause excessive connection churn and overhead. "+
-			"Recommended: 5-10 minutes for most workloads.\n", config.ConnMaxLifetime)
+			"Recommended: 5-10 minutes for most workloads.", config.ConnMaxLifetime)
 	}
 
 	// Warn if ConnMaxIdleTime is too short - may not effectively reduce resource usage
 	if config.ConnMaxIdleTime < time.Minute {
-		fmt.Printf("WARNING: ConnMaxIdleTime=%v is short. "+
-			"Recommended: 2-3 minutes to balance resource usage and connection availability.\n", config.ConnMaxIdleTime)
+		logConfig(config, "ConnMaxIdleTime=%v is short. "+
+			"Recommended: 2-3 minutes to balance resource usage and connection availability.", config.ConnMaxIdleTime)
 	}
 
 	// Warn if query logging is enabled (potential security and performance issue)
 	if config.EnableQueryLogging {
-		fmt.Printf("WARNING: EnableQueryLogging=true. This should NEVER be enabled in production. "+
-			"It logs all SQL queries (including sensitive data) and significantly impacts performance.\n")
+		logConfig(config, "EnableQueryLogging=true. This should NEVER be enabled in production. "+
+			"It logs all SQL queries (including sensitive data) and significantly impacts performance.")
 	}
 
 	return nil
@@ -212,6 +218,13 @@ func (m *DBManager) configurePool() {
 	m.db.SetMaxIdleConns(m.config.MaxIdleConns)
 	m.db.SetConnMaxLifetime(m.config.ConnMaxLifetime)
 	m.db.SetConnMaxIdleTime(m.config.ConnMaxIdleTime)
+}
+
+// logf logs a message if Logger is configured, otherwise silent.
+func (m *DBManager) logf(format string, args ...any) {
+	if m.config.Logger != nil {
+		m.config.Logger(format, args...)
+	}
 }
 
 // DB returns the underlying *sql.DB for use in repositories.
@@ -280,12 +293,19 @@ func (m *DBManager) Ping(ctx context.Context) error {
 }
 
 // Shutdown gracefully closes the database connection pool.
-// This method is idempotent and safe to call multiple times.
+// The context is checked BEFORE starting Close(), but Close() itself is blocking.
 //
 // Behavior:
-//  - Waits for all active queries to complete (respects context timeout)
-//  - Closes all idle connections
-//  - Prevents new queries from starting
+//  - Checks if context is already expired BEFORE starting Close()
+//  - Marks connection as closed to prevent new operations
+//  - Executes blocking Close() (may exceed context deadline)
+//  - Close() CANNOT be interrupted once started
+//  - Idempotent and thread-safe
+//
+// IMPORTANT:
+//  - Close() is blocking by design in database/sql
+//  - If context expires DURING Close(), operation continues until complete
+//  - Trade-off: We prefer closing connections completely rather than leaving them orphaned
 //
 // MUST be called during application shutdown:
 //
@@ -311,25 +331,21 @@ func (m *DBManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	// Check if context is already expired BEFORE starting Close()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("shutdown aborted (context expired): %w", err)
+	}
+
 	// Mark as closed to prevent new operations
 	m.closed = true
 
-	// Close the connection pool in a goroutine to respect context timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- m.db.Close()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("failed to close database: %w", err)
-		}
-		return nil
-	case <-ctx.Done():
-		// Context expired, but Close() continues in background
-		return fmt.Errorf("shutdown timeout exceeded: %w", ctx.Err())
+	// Close() is blocking and does NOT respect ctx.Done() after starting
+	// Waits for all active connections to finish naturally
+	if err := m.db.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
 	}
+
+	return nil
 }
 
 // Stats returns database statistics for monitoring.

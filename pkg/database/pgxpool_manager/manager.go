@@ -3,6 +3,7 @@ package pgxpool_manager
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,7 +115,8 @@ func NewPgxPoolManager(ctx context.Context, config *Config) (*PgxPoolManager, er
 
 	if config.EnableQueryLogging {
 		poolConfig.ConnConfig.Tracer = &queryLogger{
-			next: poolConfig.ConnConfig.Tracer,
+			next:   poolConfig.ConnConfig.Tracer,
+			logger: config.Logger,
 		}
 	}
 
@@ -258,12 +260,19 @@ func (m *PgxPoolManager) Ping(ctx context.Context) error {
 }
 
 // Shutdown gracefully closes the connection pool.
-// This method is idempotent and safe to call multiple times.
+// The context is checked BEFORE starting Close(), but Close() itself is blocking.
 //
 // Behavior:
-//  - Prevents new connections from being acquired
-//  - Waits for active connections to be released
-//  - Closes all connections gracefully
+//  - Checks if context is already expired BEFORE starting Close()
+//  - Marks pool as closed to prevent new operations
+//  - Executes blocking Close() (may exceed context deadline)
+//  - Close() CANNOT be interrupted once started
+//  - Idempotent and thread-safe
+//
+// IMPORTANT:
+//  - Close() is blocking by design in pgxpool
+//  - If context expires DURING Close(), operation continues until complete
+//  - Trade-off: We prefer closing connections completely rather than leaving them orphaned
 //
 // MUST be called during application shutdown:
 //
@@ -290,23 +299,19 @@ func (m *PgxPoolManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	// Check if context is already expired BEFORE starting Close()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("shutdown aborted (context expired): %w", err)
+	}
+
 	// Mark as closed to prevent new operations
 	m.closed = true
 
-	// Close pool in goroutine to respect context timeout
-	done := make(chan struct{})
-	go func() {
-		m.pool.Close()
-		close(done)
-	}()
+	// Close() is blocking and does NOT respect ctx.Done() after starting
+	// Waits for all active connections to be released gracefully
+	m.pool.Close()
 
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		// Context expired, but Close() continues in background
-		return fmt.Errorf("shutdown timeout exceeded: %w", ctx.Err())
-	}
+	return nil
 }
 
 // Stats returns pool statistics for monitoring.
@@ -374,11 +379,14 @@ func (t *otelTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx
 
 // queryLogger logs SQL queries (for development only).
 type queryLogger struct {
-	next pgx.QueryTracer
+	next   pgx.QueryTracer
+	logger LogFunc
 }
 
 func (q *queryLogger) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	fmt.Printf("[SQL] %s [ARGS] %v\n", data.SQL, data.Args)
+	if q.logger != nil {
+		q.logger("[SQL] %s [ARGS] %v", data.SQL, data.Args)
+	}
 
 	if q.next != nil {
 		return q.next.TraceQueryStart(ctx, conn, data)
@@ -388,10 +396,12 @@ func (q *queryLogger) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data 
 }
 
 func (q *queryLogger) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
-	if data.Err != nil {
-		fmt.Printf("[SQL ERROR] %v\n", data.Err)
-	} else {
-		fmt.Printf("[SQL SUCCESS] [ROWS] %d\n", data.CommandTag.RowsAffected())
+	if q.logger != nil {
+		if data.Err != nil {
+			q.logger("[SQL ERROR] %v", data.Err)
+		} else {
+			q.logger("[SQL SUCCESS] [ROWS] %d", data.CommandTag.RowsAffected())
+		}
 	}
 
 	if q.next != nil {
@@ -400,21 +410,42 @@ func (q *queryLogger) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pg
 }
 
 // extractOperation extracts the SQL operation type (SELECT, INSERT, etc.).
+// Handles queries with leading whitespace and case-insensitive matching.
 func extractOperation(sql string) string {
-	if len(sql) < 6 {
+	// Trim whitespace (espaços, tabs, newlines)
+	trimmed := strings.TrimSpace(sql)
+	if len(trimmed) == 0 {
 		return "UNKNOWN"
 	}
 
-	operation := sql[:6]
+	// Pega primeira palavra (até espaço ou fim da string)
+	firstWord, _, _ := strings.Cut(trimmed, " ")
+
+	// Normaliza para uppercase
+	operation := strings.ToUpper(firstWord)
+
+	// Classifica operações conhecidas
 	switch operation {
-	case "SELECT", "select":
+	case "SELECT":
 		return "SELECT"
-	case "INSERT", "insert":
+	case "INSERT":
 		return "INSERT"
-	case "UPDATE", "update":
+	case "UPDATE":
 		return "UPDATE"
-	case "DELETE", "delete":
+	case "DELETE":
 		return "DELETE"
+	case "CREATE", "DROP", "ALTER", "TRUNCATE":
+		return "DDL"
+	case "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT":
+		return "TRANSACTION"
+	case "WITH":
+		// CTE - analisa segunda parte
+		// "WITH foo AS (...) SELECT" -> "SELECT"
+		idx := strings.Index(trimmed, ")")
+		if idx != -1 && idx+1 < len(trimmed) {
+			return extractOperation(trimmed[idx+1:])
+		}
+		return "SELECT" // CTEs normalmente terminam em SELECT
 	default:
 		return "OTHER"
 	}

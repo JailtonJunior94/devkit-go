@@ -14,6 +14,20 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// setupTestDB creates an in-memory SQLite database for testing.
+//
+// IMPORTANTE: Estes testes usam SQLite por simplicidade e velocidade.
+// SQLite tem diferenças significativas em relação a PostgreSQL:
+//   - Concurrency: SQLite usa locks, PostgreSQL usa MVCC
+//   - Isolation: Semântica de isolation levels é diferente
+//   - Errors: Tipos de erro são diferentes
+//
+// Para testes de integração completos com PostgreSQL real, use:
+//   go test -tags=integration ./pkg/database/uow
+//
+// Trade-off: SQLite é suficiente para testar a LÓGICA do Unit of Work
+// (commit, rollback, panic recovery, context), mas não comportamento
+// específico de PostgreSQL (deadlocks, serialization failures).
 func setupTestDB(t *testing.T) *sql.DB {
 	// Create a temporary file for the database
 	tmpfile, err := os.CreateTemp("", "test_*.db")

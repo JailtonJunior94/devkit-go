@@ -9,6 +9,11 @@ type Option func(*Database)
 // WithMaxOpenConns define o número máximo de conexões abertas ao banco.
 // Inclui conexões em uso + conexões idle.
 //
+// Valores especiais:
+//   - n > 0: Limita a n conexões máximas (recomendado em produção)
+//   - n = 0: Sem limite (unlimited) - NÃO RECOMENDADO em produção
+//   - n < 0: Tratado como 0 (sem limite)
+//
 // Quando usar:
 //   - Aplicações com alto throughput: aumente para 50-100
 //   - Aplicações com baixo throughput: mantenha 10-25
@@ -29,6 +34,11 @@ func WithMaxOpenConns(n int) Option {
 // WithMaxIdleConns define o número máximo de conexões idle no pool.
 // Conexões idle ficam prontas para uso imediato sem handshake.
 //
+// Valores especiais:
+//   - n > 0: Mantém até n conexões idle
+//   - n = 0: Não mantém conexões idle (fecha imediatamente após uso)
+//   - n < 0: Tratado como 0 (nenhuma conexão idle)
+//
 // Quando usar:
 //   - Alto throughput com tráfego constante: mantenha próximo de MaxOpenConns
 //   - Tráfego esporádico: reduza para liberar recursos
@@ -48,6 +58,11 @@ func WithMaxIdleConns(n int) Option {
 
 // WithConnMaxLifetime define o tempo máximo de vida de uma conexão.
 // Após este período, a conexão é fechada e recriada.
+//
+// Valores especiais:
+//   - d > 0: Conexão expira após d tempo
+//   - d = 0: Conexões são reutilizadas indefinidamente (sem expiração)
+//   - d < 0: Tratado como 0 (sem expiração)
 //
 // Quando usar:
 //   - Ambientes com proxies/load balancers: reduza para 3-5 min
@@ -72,6 +87,11 @@ func WithConnMaxLifetime(d time.Duration) Option {
 
 // WithConnMaxIdleTime define quanto tempo uma conexão idle pode ficar no pool.
 // Conexões idle por mais tempo que isso são fechadas.
+//
+// Valores especiais:
+//   - d > 0: Conexão idle expira após d tempo
+//   - d = 0: Conexões idle não expiram por tempo (podem ficar indefinidamente)
+//   - d < 0: Tratado como 0 (sem expiração)
 //
 // Quando usar:
 //   - Tráfego variável: reduza para 1-2 min (libera recursos rápido)
