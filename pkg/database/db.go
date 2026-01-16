@@ -28,8 +28,11 @@ import (
 //
 // Exemplo com transação:
 //
-//	uow := uow.NewUnitOfWork(dbManager.DB())
-//	err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
+//	uow, err := uow.NewUnitOfWork(dbManager.DB())
+//	if err != nil {
+//	    return err
+//	}
+//	err = uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
 //	    repo := NewUserRepository(tx)  // Mesmo repository, agora transacional
 //	    if err := repo.UpdateUser(ctx, user); err != nil {
 //	        return err  // Rollback automático

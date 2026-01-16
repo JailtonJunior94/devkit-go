@@ -59,7 +59,7 @@ type UnitOfWork interface {
 }
 
 // Constructor
-NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) UnitOfWork
+NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) (UnitOfWork, error)
 
 // Options
 WithIsolationLevel(level sql.IsolationLevel) UnitOfWorkOption
@@ -145,7 +145,10 @@ repo := NewUserRepository(manager.DB())
 user, _ := repo.FindByID(ctx, "123")
 
 // Usage with transaction (same repository code!)
-uow := uow.NewUnitOfWork(manager.DB())
+uow, err := uow.NewUnitOfWork(manager.DB())
+if err != nil {
+    return err
+}
 uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
     repo := NewUserRepository(tx)  // Pass transaction
     return repo.Save(ctx, user)
@@ -155,7 +158,10 @@ uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
 ### Unit of Work: Automatic Transactions
 
 ```go
-uow := uow.NewUnitOfWork(manager.DB())
+uow, err := uow.NewUnitOfWork(manager.DB())
+if err != nil {
+    return err
+}
 
 err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
     userRepo := NewUserRepository(tx)
@@ -177,12 +183,15 @@ err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
 ### Custom Isolation Level
 
 ```go
-uow := uow.NewUnitOfWork(
+uow, err := uow.NewUnitOfWork(
     manager.DB(),
     uow.WithIsolationLevel(sql.LevelSerializable),
 )
+if err != nil {
+    return err
+}
 
-err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
+err = uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
     // Operations run with Serializable isolation
     return nil
 })
@@ -191,12 +200,15 @@ err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
 ### Read-Only Transaction
 
 ```go
-uow := uow.NewUnitOfWork(
+uow, err := uow.NewUnitOfWork(
     manager.DB(),
     uow.WithReadOnly(true),
 )
+if err != nil {
+    return err
+}
 
-err := uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
+err = uow.Do(ctx, func(ctx context.Context, tx database.DBTX) error {
     // Read operations only
     users, err := userRepo.FindAll(ctx, tx)
     return err
@@ -272,7 +284,7 @@ func (r *UserRepository) FindAll(ctx context.Context) ([]*User, error) {
 
 **Connection Limits**: Set MaxOpenConns based on database capacity (default: 25).
 
-**Panic on Nil DB**: NewUnitOfWork panics if db is nil (programming error).
+**Error on Nil DB**: NewUnitOfWork returns an error if db is nil.
 
 ---
 

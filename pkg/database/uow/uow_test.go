@@ -71,10 +71,13 @@ func setupTestDB(t *testing.T) *sql.DB {
 func TestUnitOfWork_SuccessfulCommit(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
 		return err
 	})
@@ -98,12 +101,15 @@ func TestUnitOfWork_SuccessfulCommit(t *testing.T) {
 func TestUnitOfWork_RollbackOnError(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	expectedErr := errors.New("business logic error")
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
 		if err != nil {
 			return err
@@ -130,7 +136,10 @@ func TestUnitOfWork_RollbackOnError(t *testing.T) {
 func TestUnitOfWork_PanicRecovery(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	defer func() {
@@ -154,7 +163,10 @@ func TestUnitOfWork_PanicRecovery(t *testing.T) {
 func TestUnitOfWork_PanicRecoveryRollback(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	func() {
@@ -173,7 +185,7 @@ func TestUnitOfWork_PanicRecoveryRollback(t *testing.T) {
 
 	// Verify data was rolled back despite panic
 	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -191,7 +203,10 @@ func TestUnitOfWork_ConcurrentTransactions(t *testing.T) {
 	db.SetMaxIdleConns(3)
 	db.SetConnMaxLifetime(0)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	const numGoroutines = 20
@@ -235,7 +250,7 @@ func TestUnitOfWork_ConcurrentTransactions(t *testing.T) {
 
 	// Verify successful transactions were committed
 	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -264,7 +279,10 @@ func TestUnitOfWork_ConcurrentWithFailures(t *testing.T) {
 	db.SetMaxIdleConns(3)
 	db.SetConnMaxLifetime(0)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	const numGoroutines = 20
@@ -310,7 +328,7 @@ func TestUnitOfWork_ConcurrentWithFailures(t *testing.T) {
 
 	// Verify only successful transactions were committed
 	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -331,13 +349,16 @@ func TestUnitOfWork_ConcurrentWithFailures(t *testing.T) {
 func TestUnitOfWork_ContextCancellation(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 
 	// Create already cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		t.Error("function should not be executed with cancelled context")
 		return nil
 	})
@@ -350,13 +371,16 @@ func TestUnitOfWork_ContextCancellation(t *testing.T) {
 func TestUnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 
 	// Create context with timeout that will expire during execution
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		// Insert data
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
 		if err != nil {
@@ -395,10 +419,13 @@ func TestUnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
 func TestUnitOfWork_WithIsolationLevel(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+	uow, err := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
 		return err
 	})
@@ -428,7 +455,10 @@ func TestUnitOfWork_WithReadOnly(t *testing.T) {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	uow := NewUnitOfWork(db, WithReadOnly(true))
+	uow, err := NewUnitOfWork(db, WithReadOnly(true))
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
@@ -442,19 +472,19 @@ func TestUnitOfWork_WithReadOnly(t *testing.T) {
 }
 
 func TestUnitOfWork_NilDB(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic when creating UnitOfWork with nil DB")
-		}
-	}()
-
-	_ = NewUnitOfWork(nil)
+	_, err := NewUnitOfWork(nil)
+	if err == nil {
+		t.Error("expected error when creating UnitOfWork with nil DB")
+	}
 }
 
 func TestUnitOfWork_MultiplePanicsSequential(t *testing.T) {
 	db := setupTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	// Test that multiple panics in sequence are handled correctly
@@ -478,7 +508,7 @@ func TestUnitOfWork_MultiplePanicsSequential(t *testing.T) {
 
 	// Verify no data was committed due to panics
 	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -500,7 +530,10 @@ func BenchmarkUnitOfWork_Sequential(b *testing.B) {
 		}
 	}()
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -524,7 +557,10 @@ func BenchmarkUnitOfWork_Concurrent(b *testing.B) {
 
 	db.SetMaxOpenConns(20)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	b.ResetTimer()

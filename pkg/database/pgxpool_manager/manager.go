@@ -439,13 +439,9 @@ func extractOperation(sql string) string {
 	case "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT":
 		return "TRANSACTION"
 	case "WITH":
-		// CTE - analisa segunda parte
-		// "WITH foo AS (...) SELECT" -> "SELECT"
-		idx := strings.Index(trimmed, ")")
-		if idx != -1 && idx+1 < len(trimmed) {
-			return extractOperation(trimmed[idx+1:])
-		}
-		return "SELECT" // CTEs normalmente terminam em SELECT
+		// CTEs (Common Table Expressions) are almost always SELECT queries.
+		// Parsing nested parentheses correctly is complex and not worth it for tracing labels.
+		return "SELECT"
 	default:
 		return "OTHER"
 	}

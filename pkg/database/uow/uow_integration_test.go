@@ -82,10 +82,13 @@ func setupPostgresTestDB(t *testing.T) *sql.DB {
 func TestIntegration_UnitOfWork_SuccessfulCommit(t *testing.T) {
 	db := setupPostgresTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
 		return err
 	})
@@ -109,12 +112,15 @@ func TestIntegration_UnitOfWork_SuccessfulCommit(t *testing.T) {
 func TestIntegration_UnitOfWork_RollbackOnError(t *testing.T) {
 	db := setupPostgresTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	expectedErr := errors.New("business logic error")
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
 		if err != nil {
 			return err
@@ -141,7 +147,10 @@ func TestIntegration_UnitOfWork_RollbackOnError(t *testing.T) {
 func TestIntegration_UnitOfWork_PanicRecoveryRollback(t *testing.T) {
 	db := setupPostgresTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	func() {
@@ -160,7 +169,7 @@ func TestIntegration_UnitOfWork_PanicRecoveryRollback(t *testing.T) {
 
 	// Verify data was rolled back despite panic
 	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -173,13 +182,16 @@ func TestIntegration_UnitOfWork_PanicRecoveryRollback(t *testing.T) {
 func TestIntegration_UnitOfWork_ContextCancellation(t *testing.T) {
 	db := setupPostgresTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 
 	// Create already cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		t.Error("function should not be executed with cancelled context")
 		return nil
 	})
@@ -192,13 +204,16 @@ func TestIntegration_UnitOfWork_ContextCancellation(t *testing.T) {
 func TestIntegration_UnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
 	db := setupPostgresTestDB(t)
 
-	uow := NewUnitOfWork(db)
+	uow, err := NewUnitOfWork(db)
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 
 	// Create context with short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		// Insert data
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
 		if err != nil {
@@ -239,10 +254,13 @@ func TestIntegration_UnitOfWork_SerializableIsolation(t *testing.T) {
 
 	// Test with Serializable isolation level
 	// PostgreSQL implements true SSI (Serializable Snapshot Isolation)
-	uow := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+	uow, err := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
-	err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
+	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
 		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
 		return err
 	})
@@ -273,7 +291,10 @@ func TestIntegration_UnitOfWork_ReadOnly(t *testing.T) {
 	}
 
 	// Test read-only transaction
-	uow := NewUnitOfWork(db, WithReadOnly(true))
+	uow, err := NewUnitOfWork(db, WithReadOnly(true))
+	if err != nil {
+		t.Fatalf("failed to create UnitOfWork: %v", err)
+	}
 	ctx := context.Background()
 
 	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {

@@ -136,7 +136,13 @@ func (c *consumer) Consume(ctx context.Context) error {
 		return ErrConsumerClosed
 	}
 
-	go c.consumeLoop(ctx)
+	// Track consumeLoop goroutine in WaitGroup to prevent leak during shutdown
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.consumeLoop(ctx)
+	}()
+
 	return nil
 }
 

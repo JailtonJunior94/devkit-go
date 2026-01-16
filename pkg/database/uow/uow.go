@@ -70,16 +70,15 @@ func WithReadOnly(readOnly bool) UnitOfWorkOption {
 // O parâmetro db deve ser uma conexão válida de banco de dados.
 // Options podem ser fornecidas para configurar o comportamento da transação.
 //
-// Panic:
-// Esta função entra em panic se db for nil. Isso indica um erro de programação
-// e deve ser corrigido no código do chamador.
-//
 // Exemplo:
 //
-//	uow := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
-func NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) UnitOfWork {
+//	uow, err := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
+//	if err != nil {
+//	    return err
+//	}
+func NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) (UnitOfWork, error) {
 	if db == nil {
-		panic("database connection cannot be nil")
+		return nil, errors.New("database connection cannot be nil")
 	}
 
 	u := &unitOfWork{
@@ -91,7 +90,7 @@ func NewUnitOfWork(db *sql.DB, opts ...UnitOfWorkOption) UnitOfWork {
 		opt(u)
 	}
 
-	return u
+	return u, nil
 }
 
 func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db database.DBTX) error) error {
@@ -138,13 +137,18 @@ func (u *unitOfWork) Do(ctx context.Context, fn func(ctx context.Context, db dat
 		return fmt.Errorf("context cancelled during transaction: %w", err)
 	}
 
-	finished.Store(true)
+	// Commit transaction
 	if err = tx.Commit(); err != nil {
-		// Quando commit falha, a maioria dos drivers já faz rollback automático.
-		// Não tentamos rollback aqui para evitar mascarar o erro real.
+		// CRITICAL: Commit failure does NOT automatically rollback in database/sql.
+		// We MUST manually rollback to release the connection and locks.
+		// See: https://pkg.go.dev/database/sql#Tx.Commit
+		if rbErr := rollbackTx(tx); rbErr != nil {
+			return fmt.Errorf("failed to commit transaction: %w, rollback error: %v", err, rbErr)
+		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	finished.Store(true)
 	return nil
 }
 

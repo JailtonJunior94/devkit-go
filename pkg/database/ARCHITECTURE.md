@@ -318,7 +318,10 @@ func (r *userRepositorySQL) FindByID(ctx context.Context, id string) (*User, err
 import "github.com/JailtonJunior94/devkit-go/pkg/database/uow"
 
 // Create UoW
-uow := uow.NewUnitOfWork(dbManager.DB())
+uow, err := uow.NewUnitOfWork(dbManager.DB())
+if err != nil {
+    return err
+}
 
 // Execute transactional logic
 err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
