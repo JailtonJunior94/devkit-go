@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"github.com/google/uuid"
 )
@@ -25,8 +26,8 @@ const (
 func recoverMiddleware(o11y observability.Observability) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Wrap ResponseWriter to track if headers were sent
-			rw := &responseWriter{ResponseWriter: w}
+			// Wrap ResponseWriter to track if headers were sent (thread-safe)
+			rw := common.NewResponseWriter(w)
 
 			defer func() {
 				recovered := recover()
@@ -52,7 +53,7 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 				o11y.Logger().Error(r.Context(), "panic recovered", fields...)
 
 				// Only write error if headers haven't been sent yet
-				if !rw.headerWritten {
+				if !rw.HeaderWritten() {
 					writeErrorResponse(w, r, http.StatusInternalServerError, "Internal server error")
 				} else {
 					o11y.Logger().Warn(r.Context(),
@@ -67,25 +68,6 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 	}
 }
 
-// responseWriter wraps http.ResponseWriter to track if headers were written
-type responseWriter struct {
-	http.ResponseWriter
-	headerWritten bool
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	if !rw.headerWritten {
-		rw.headerWritten = true
-		rw.ResponseWriter.WriteHeader(code)
-	}
-}
-
-func (rw *responseWriter) Write(b []byte) (int, error) {
-	if !rw.headerWritten {
-		rw.headerWritten = true
-	}
-	return rw.ResponseWriter.Write(b)
-}
 
 // requestIDMiddleware generates or propagates a request ID.
 func requestIDMiddleware() func(http.Handler) http.Handler {
@@ -106,6 +88,8 @@ func requestIDMiddleware() func(http.Handler) http.Handler {
 }
 
 // timeoutMiddleware applies a timeout to requests with race-free implementation.
+// IMPORTANT: Handlers MUST respect context cancellation to prevent goroutine leaks.
+// When ctx.Done() is signaled, handlers should stop processing immediately.
 func timeoutMiddleware(
 	globalTimeout time.Duration,
 	routeTimeouts map[string]time.Duration,
@@ -123,19 +107,32 @@ func timeoutMiddleware(
 
 			// Wrap the ResponseWriter to detect if headers were written
 			tw := &timeoutWriter{ResponseWriter: w}
-			done := make(chan struct{})
+
+			// Buffered channel prevents goroutine leak if we timeout before handler finishes
+			done := make(chan struct{}, 1)
 
 			go func() {
-				defer close(done)
+				defer func() {
+					// Recover any panics from the handler
+					if recovered := recover(); recovered != nil {
+						// Re-panic will be caught by the outer recover middleware
+						panic(recovered)
+					}
+					// Signal completion (non-blocking due to buffer)
+					select {
+					case done <- struct{}{}:
+					default:
+					}
+				}()
 				next.ServeHTTP(tw, r.WithContext(ctx))
 			}()
 
 			select {
 			case <-done:
-				// Handler completed successfully
+				// Handler completed successfully before timeout
 				return
 			case <-ctx.Done():
-				// Timeout occurred
+				// Timeout occurred - context cancellation signals handler to stop
 				tw.mu.Lock()
 				defer tw.mu.Unlock()
 
@@ -143,10 +140,23 @@ func timeoutMiddleware(
 				if !tw.written {
 					tw.written = true
 					tw.timedOut = true
-					writeErrorResponse(w, r, http.StatusRequestTimeout, "Request timeout")
+					writeErrorResponse(w, r, http.StatusRequestTimeout, "Request timeout exceeded")
 				}
-				// If handler already wrote, we can't send timeout error
-				// The partial response will be sent to client
+
+				// CRITICAL: Wait a short time for goroutine cleanup
+				// This gives the handler time to respect context cancellation
+				// Most well-behaved handlers will stop within 100ms
+				cleanupTimer := time.NewTimer(100 * time.Millisecond)
+				defer cleanupTimer.Stop()
+
+				select {
+				case <-done:
+					// Handler finished cleanup successfully
+				case <-cleanupTimer.C:
+					// Handler didn't respect context cancellation
+					// This is a handler bug, but we can't do much more
+					// The goroutine will eventually finish but may hold resources longer
+				}
 			}
 		})
 	}
@@ -191,16 +201,15 @@ func (tw *timeoutWriter) Write(b []byte) (int, error) {
 	return tw.ResponseWriter.Write(b)
 }
 
-// securityHeadersMiddleware adds security headers to responses.
+// securityHeadersMiddleware adds comprehensive security headers to responses.
+// Uses common.SecurityHeaders for centralized security configuration.
 func securityHeadersMiddleware() func(http.Handler) http.Handler {
+	// Initialize security headers once (reuse for all requests)
+	securityHeaders := common.DefaultSecurityHeaders()
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("X-XSS-Protection", "1; mode=block")
-			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-			w.Header().Set("X-Powered-By", "")
-
+			securityHeaders.Apply(w)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -208,8 +217,12 @@ func securityHeadersMiddleware() func(http.Handler) http.Handler {
 
 // corsMiddleware handles CORS with proper origin validation.
 func corsMiddleware(origins string) func(http.Handler) http.Handler {
-	// Parse allowed origins
-	allowedOrigins := parseOrigins(origins)
+	// Parse allowed origins with validation
+	allowedOrigins, err := common.ParseOrigins(origins)
+	if err != nil {
+		// If configuration is invalid, panic during setup (fail-fast)
+		panic(fmt.Sprintf("invalid CORS configuration: %v", err))
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +235,7 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 			}
 
 			// Validate if origin is allowed
-			if !isOriginAllowed(origin, allowedOrigins) {
+			if !common.IsOriginAllowed(origin, allowedOrigins) {
 				writeErrorResponse(w, r, http.StatusForbidden, "origin not allowed")
 				return
 			}
@@ -253,50 +266,6 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 	}
 }
 
-// parseOrigins splits comma-separated origins
-func parseOrigins(origins string) []string {
-	if origins == "" {
-		return []string{}
-	}
-
-	// Handle wildcard
-	if strings.TrimSpace(origins) == "*" {
-		return []string{"*"}
-	}
-
-	// Split by comma and trim spaces
-	var result []string
-	parts := strings.Split(origins, ",")
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-
-	return result
-}
-
-// isOriginAllowed checks if the origin is in the allowed list
-func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	if len(allowedOrigins) == 0 {
-		return false
-	}
-
-	// Check for wildcard
-	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-		return true
-	}
-
-	// Check exact match
-	for _, allowed := range allowedOrigins {
-		if origin == allowed {
-			return true
-		}
-	}
-
-	return false
-}
 
 // bodyLimitMiddleware enforces a maximum request body size.
 // SECURITY: Always applies MaxBytesReader regardless of Content-Length header

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 
 	"github.com/gofiber/contrib/otelfiber"
@@ -16,7 +17,7 @@ import (
 
 type Server struct {
 	app                *fiber.App
-	config             Config
+	config             common.Config
 	observability      observability.Observability
 	healthChecks       map[string]HealthCheckFunc
 	routeTimeouts      map[string]time.Duration
@@ -27,7 +28,7 @@ type Server struct {
 
 func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	srv := &Server{
-		config:        DefaultConfig(),
+		config:        common.DefaultConfig(),
 		observability: o11y,
 		healthChecks:  make(map[string]HealthCheckFunc),
 		routeTimeouts: make(map[string]time.Duration),

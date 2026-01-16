@@ -11,6 +11,13 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const (
+	// Error channel configuration
+	defaultErrorChannelSize    = 1000 // Increased from 100 to reduce dropped errors
+	errorChannelWarnThreshold  = 800  // Warn when 80% full
+	errorChannelMonitoringTick = 10 * time.Second
+)
+
 // ConsumerOption is a functional option for configuring consumers.
 type ConsumerOption func(*consumerConfig)
 
@@ -39,9 +46,15 @@ type consumer struct {
 	dlqStrategy   DLQStrategy
 	retryAttempts sync.Map // map[string]*retryState
 
+	// Error channel monitoring
+	droppedErrors     atomic.Uint64 // Count of errors dropped due to full channel
+	lastDroppedErrLog atomic.Int64  // Unix timestamp of last dropped error log (rate limiting)
+
 	// Shutdown coordination
-	shutdownOnce sync.Once
-	wg           sync.WaitGroup
+	shutdownOnce       sync.Once
+	wg                 sync.WaitGroup
+	monitoringCancel   context.CancelFunc
+	monitoringShutdown chan struct{}
 }
 
 // WithGroupID sets the consumer group ID.
@@ -97,17 +110,22 @@ func newConsumer(cfg *config, dialer *kafka.Dialer, opts ...ConsumerOption) (mes
 	})
 
 	c := &consumer{
-		reader:      reader,
-		config:      cfg,
-		consumerCfg: consumerCfg,
-		handlers:    make(map[string][]messaging.ConsumeHandler),
-		errorCh:     make(chan error, 100),
+		reader:             reader,
+		config:             cfg,
+		consumerCfg:        consumerCfg,
+		handlers:           make(map[string][]messaging.ConsumeHandler),
+		errorCh:            make(chan error, defaultErrorChannelSize),
+		monitoringShutdown: make(chan struct{}),
 	}
 
 	// Initialize DLQ if enabled
 	if err := c.initializeDLQ(); err != nil {
 		return nil, fmt.Errorf("failed to initialize DLQ: %w", err)
 	}
+
+	// Start error channel monitoring goroutine
+	// This prevents memory leaks by monitoring channel fullness and logging warnings
+	c.startErrorChannelMonitoring()
 
 	return c, nil
 }
@@ -221,6 +239,9 @@ func (c *consumer) Close() error {
 
 		c.config.logger.Info(context.Background(), "closing consumer, waiting for in-flight messages")
 
+		// Stop error channel monitoring
+		c.stopErrorChannelMonitoring()
+
 		// Wait for workers to finish (with timeout)
 		done := make(chan struct{})
 		go func() {
@@ -236,6 +257,14 @@ func (c *consumer) Close() error {
 			c.config.logger.Info(context.Background(), "all workers finished gracefully")
 		case <-timeout.C:
 			c.config.logger.Warn(context.Background(), "timeout waiting for workers, forcing shutdown")
+		}
+
+		// Log final dropped error count if any
+		if dropped := c.droppedErrors.Load(); dropped > 0 {
+			c.config.logger.Warn(context.Background(),
+				"consumer closed with dropped errors - configure error consumption to prevent loss",
+				Field{Key: "total_dropped", Value: dropped},
+			)
 		}
 
 		// Close error channel
@@ -350,14 +379,21 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 	headers := extractHeaders(msg)
 	eventType := headers["event_type"]
 
+	// RACE CONDITION FIX: Make defensive copy of handlers slice while holding lock
+	// This prevents concurrent modification by RegisterHandler() during iteration
 	c.mu.RLock()
-	handlers, ok := c.handlers[eventType]
-	c.mu.RUnlock()
-
+	handlersInMap, ok := c.handlers[eventType]
 	if !ok {
+		c.mu.RUnlock()
 		c.config.logger.Warn(ctx, "no handler for event type", Field{Key: "event_type", Value: eventType})
 		return
 	}
+
+	// Create a defensive copy to avoid holding lock during message processing
+	// This is critical for performance and prevents potential deadlocks
+	handlersCopy := make([]messaging.ConsumeHandler, len(handlersInMap))
+	copy(handlersCopy, handlersInMap)
+	c.mu.RUnlock()
 
 	// If instrumentation is enabled, wrap the consumption
 	if c.config.instrumentation != nil {
@@ -370,7 +406,7 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 			headers,
 			c.consumerCfg.groupID,
 			func(ctx context.Context) error {
-				c.processMessageInternal(ctx, msg, headers, eventType, handlers)
+				c.processMessageInternal(ctx, msg, headers, eventType, handlersCopy)
 				return nil
 			},
 		)
@@ -378,7 +414,7 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 	}
 
 	// Fallback: execute directly without tracing
-	c.processMessageInternal(ctx, msg, headers, eventType, handlers)
+	c.processMessageInternal(ctx, msg, headers, eventType, handlersCopy)
 }
 
 // processMessageInternal contains the core message processing logic without instrumentation.
@@ -455,11 +491,14 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 
 	// Only commit if ALL handlers succeeded
 	if allSuccess {
-		if err := c.reader.CommitMessages(ctx, msg); err != nil {
-			c.config.logger.Error(ctx, "failed to commit message",
-				Field{Key: "error", Value: err},
-			)
-			c.sendError(err)
+		// Check if reader is initialized (nil in unit tests)
+		if c.reader != nil {
+			if err := c.reader.CommitMessages(ctx, msg); err != nil {
+				c.config.logger.Error(ctx, "failed to commit message",
+					Field{Key: "error", Value: err},
+				)
+				c.sendError(err)
+			}
 		}
 	} else {
 		c.config.logger.Warn(ctx, "message not committed due to handler failures",
@@ -472,10 +511,107 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 }
 
 // sendError sends an error to the error channel (non-blocking).
+// If the channel is full, the error is dropped and logged to prevent memory leaks.
+// This is a fail-safe mechanism when consumers don't read from Errors() channel.
 func (c *consumer) sendError(err error) {
 	select {
 	case c.errorCh <- err:
+		// Successfully sent to channel
 	default:
+		// Channel is full - drop error to prevent goroutine blocking
+		// MEMORY LEAK PREVENTION: Do NOT block here or goroutines will leak
+		dropped := c.droppedErrors.Add(1)
+
+		// Rate-limited logging: only log every 10 seconds to prevent log spam
+		now := time.Now().Unix()
+		lastLog := c.lastDroppedErrLog.Load()
+		if now-lastLog >= 10 {
+			if c.lastDroppedErrLog.CompareAndSwap(lastLog, now) {
+				c.config.logger.Warn(context.Background(),
+					"error channel full, dropping errors - consume from Errors() channel to prevent loss",
+					Field{Key: "dropped_total", Value: dropped},
+					Field{Key: "channel_size", Value: cap(c.errorCh)},
+					Field{Key: "latest_dropped_error", Value: err.Error()},
+				)
+			}
+		}
+	}
+}
+
+// DroppedErrors returns the count of errors dropped due to full channel.
+// This is useful for monitoring and alerting.
+func (c *consumer) DroppedErrors() uint64 {
+	return c.droppedErrors.Load()
+}
+
+// startErrorChannelMonitoring starts a background goroutine that monitors
+// the error channel fullness and logs warnings to prevent silent data loss.
+//
+// Memory Leak Prevention:
+// Without monitoring, if users don't consume from Errors() channel, the buffer
+// fills up and errors are silently dropped. This goroutine:
+// 1. Monitors channel fullness every 10 seconds
+// 2. Warns when channel is 80% full
+// 3. Helps operators detect misconfiguration before errors are lost
+func (c *consumer) startErrorChannelMonitoring() {
+	monitoringCtx, cancel := context.WithCancel(context.Background())
+	c.monitoringCancel = cancel
+
+	go func() {
+		ticker := time.NewTicker(errorChannelMonitoringTick)
+		defer ticker.Stop()
+		defer close(c.monitoringShutdown)
+
+		for {
+			select {
+			case <-monitoringCtx.Done():
+				return
+			case <-ticker.C:
+				c.checkErrorChannelHealth()
+			}
+		}
+	}()
+}
+
+// stopErrorChannelMonitoring stops the error channel monitoring goroutine.
+func (c *consumer) stopErrorChannelMonitoring() {
+	if c.monitoringCancel != nil {
+		c.monitoringCancel()
+		// Wait for monitoring goroutine to finish (with timeout)
+		select {
+		case <-c.monitoringShutdown:
+			// Monitoring stopped gracefully
+		case <-time.After(5 * time.Second):
+			// Timeout - monitoring goroutine didn't stop, but we continue shutdown
+		}
+	}
+}
+
+// checkErrorChannelHealth checks if the error channel is becoming full
+// and logs warnings to help operators detect issues early.
+func (c *consumer) checkErrorChannelHealth() {
+	channelLen := len(c.errorCh)
+	channelCap := cap(c.errorCh)
+
+	// Warn when channel is 80% full
+	if channelLen >= errorChannelWarnThreshold {
+		droppedCount := c.droppedErrors.Load()
+		c.config.logger.Warn(context.Background(),
+			"error channel approaching capacity - consume from Errors() to prevent data loss",
+			Field{Key: "current_length", Value: channelLen},
+			Field{Key: "capacity", Value: channelCap},
+			Field{Key: "fullness_percent", Value: (channelLen * 100) / channelCap},
+			Field{Key: "dropped_so_far", Value: droppedCount},
+		)
+	}
+
+	// Info log if channel has items but isn't critical (for debugging)
+	if channelLen > 0 && channelLen < errorChannelWarnThreshold {
+		c.config.logger.Debug(context.Background(),
+			"error channel has buffered errors",
+			Field{Key: "buffered_errors", Value: channelLen},
+			Field{Key: "capacity", Value: channelCap},
+		)
 	}
 }
 

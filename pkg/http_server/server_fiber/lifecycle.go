@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
@@ -67,10 +68,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.observability.Logger().Info(ctx, "HTTP server shutdown complete")
 		}
 
-		type shutdowner interface {
-			Shutdown(context.Context) error
-		}
-		if provider, ok := s.observability.(shutdowner); ok {
+		if provider, ok := s.observability.(common.Shutdowner); ok {
 			if err := provider.Shutdown(ctx); err != nil {
 				s.observability.Logger().Error(ctx, "error shutting down observability",
 					observability.Error(err),

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -16,7 +17,7 @@ import (
 type Server struct {
 	router            chi.Router
 	httpServer        *http.Server
-	config            Config
+	config            common.Config
 	observability     observability.Observability
 	healthChecks      map[string]HealthCheckFunc
 	routeTimeouts     map[string]time.Duration
@@ -27,7 +28,7 @@ type Server struct {
 // New creates a new HTTP server with the given options.
 func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 	srv := &Server{
-		config:        DefaultConfig(),
+		config:        common.DefaultConfig(),
 		observability: o11y,
 		healthChecks:  make(map[string]HealthCheckFunc),
 		routeTimeouts: make(map[string]time.Duration),

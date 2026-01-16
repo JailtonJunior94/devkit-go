@@ -4,12 +4,13 @@ import (
 	"maps"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/gofiber/fiber/v2"
 )
 
 type Option func(*Server)
 
-func WithConfig(cfg Config) Option {
+func WithConfig(cfg common.Config) Option {
 	return func(s *Server) {
 		s.config = cfg
 	}

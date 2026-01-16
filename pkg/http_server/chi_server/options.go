@@ -4,13 +4,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 )
 
 // Option is a function that configures a Server.
 type Option func(*Server)
 
 // WithConfig sets the full configuration for the server.
-func WithConfig(cfg Config) Option {
+func WithConfig(cfg common.Config) Option {
 	return func(s *Server) {
 		s.config = cfg
 	}

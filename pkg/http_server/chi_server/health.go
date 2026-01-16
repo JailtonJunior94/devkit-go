@@ -1,134 +1,58 @@
 package chiserver
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// HealthCheckFunc is a function type for health checks.
-type HealthCheckFunc func(ctx context.Context) error
+// HealthCheckFunc is an alias for common.HealthCheckFunc for backward compatibility.
+type HealthCheckFunc = common.HealthCheckFunc
 
-// HealthStatus represents the overall health status of the service.
-type HealthStatus struct {
-	Status      string                 `json:"status"`
-	Service     string                 `json:"service"`
-	Version     string                 `json:"version"`
-	Environment string                 `json:"environment"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Checks      map[string]CheckResult `json:"checks,omitempty"`
-}
-
-// CheckResult represents the result of a single health check.
-type CheckResult struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
-
-// executeHealthChecks runs all health checks in parallel with the given timeout.
-// Limits concurrency to prevent goroutine bomb under high load.
-func executeHealthChecks(
-	ctx context.Context,
-	checks map[string]HealthCheckFunc,
-	timeout time.Duration,
-	o11y observability.Observability,
-) map[string]CheckResult {
-	if len(checks) == 0 {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Limit concurrent goroutines to prevent goroutine bomb
-	const maxConcurrent = 10
-	semaphore := make(chan struct{}, maxConcurrent)
-
-	results := make(map[string]CheckResult)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for name, checkFunc := range checks {
-		wg.Add(1)
-
-		go func(checkName string, fn HealthCheckFunc) {
-			defer wg.Done()
-
-			// Acquire semaphore
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				mu.Lock()
-				results[checkName] = CheckResult{
-					Status: "unhealthy",
-					Error:  "timeout",
-				}
-				mu.Unlock()
-				return
-			}
-
-			err := fn(ctx)
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			if err != nil {
-				results[checkName] = CheckResult{
-					Status: "unhealthy",
-					Error:  err.Error(),
-				}
-				o11y.Logger().Warn(ctx, "health check failed",
-					observability.String("check", checkName),
-					observability.Error(err),
-				)
-				return
-			}
-
-			results[checkName] = CheckResult{
-				Status: "healthy",
-			}
-		}(name, checkFunc)
-	}
-
-	wg.Wait()
-
-	return results
-}
-
-// isHealthy returns true if all checks are healthy.
-func isHealthy(checks map[string]CheckResult) bool {
-	for _, result := range checks {
-		if result.Status == "unhealthy" {
-			return false
-		}
-	}
-
-	return true
-}
 
 // healthHandler returns a handler for the /health endpoint with detailed check results.
 func healthHandler(
-	config Config,
-	checks map[string]HealthCheckFunc,
+	config common.Config,
+	checks map[string]common.HealthCheckFunc,
 	o11y observability.Observability,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		checkResults := executeHealthChecks(r.Context(), checks, 5*time.Second, o11y)
+		const (
+			healthCheckTimeout = 5 * time.Second
+			maxConcurrent      = 10
+		)
+
+		checkResults, hasErrors := common.ExecuteHealthChecks(
+			r.Context(),
+			checks,
+			healthCheckTimeout,
+			maxConcurrent,
+		)
+
+		// Log failed checks for observability
+		if hasErrors {
+			for name, result := range checkResults {
+				if result.Status == "unhealthy" {
+					o11y.Logger().Warn(r.Context(), "health check failed",
+						observability.String("check", name),
+						observability.String("error", result.Error),
+					)
+				}
+			}
+		}
 
 		status := "healthy"
 		statusCode := http.StatusOK
 
-		if !isHealthy(checkResults) {
+		if hasErrors {
 			status = "unhealthy"
 			statusCode = http.StatusServiceUnavailable
 		}
 
-		health := HealthStatus{
+		health := common.HealthStatus{
 			Status:      status,
 			Service:     config.ServiceName,
 			Version:     config.ServiceVersion,
@@ -146,13 +70,23 @@ func healthHandler(
 
 // readyHandler returns a handler for the /ready endpoint.
 func readyHandler(
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 	o11y observability.Observability,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		checkResults := executeHealthChecks(r.Context(), checks, 3*time.Second, o11y)
+		const (
+			readinessCheckTimeout = 3 * time.Second
+			maxConcurrent         = 10
+		)
 
-		if !isHealthy(checkResults) {
+		_, hasErrors := common.ExecuteHealthChecks(
+			r.Context(),
+			checks,
+			readinessCheckTimeout,
+			maxConcurrent,
+		)
+
+		if hasErrors {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte("Service Unavailable"))
 			return

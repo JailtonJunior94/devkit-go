@@ -5,32 +5,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-type HealthCheckFunc func(ctx context.Context) error
-
-type HealthStatus struct {
-	Status      string                 `json:"status"`
-	Service     string                 `json:"service"`
-	Version     string                 `json:"version"`
-	Environment string                 `json:"environment"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Checks      map[string]CheckResult `json:"checks,omitempty"`
-}
-
-type CheckResult struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
+// HealthCheckFunc is an alias for common.HealthCheckFunc for backward compatibility.
+type HealthCheckFunc = common.HealthCheckFunc
 
 func registerHealthChecks(
 	app *fiber.App,
-	config Config,
+	config common.Config,
 	o11y observability.Observability,
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 ) {
 	app.Get("/health", createHealthHandler(config, o11y, checks))
 	app.Get("/ready", createReadyHandler(o11y, checks))
@@ -38,21 +26,21 @@ func registerHealthChecks(
 }
 
 func createHealthHandler(
-	config Config,
+	config common.Config,
 	o11y observability.Observability,
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 ) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
 		defer cancel()
 
-		status := HealthStatus{
+		status := common.HealthStatus{
 			Status:      "healthy",
 			Service:     config.ServiceName,
 			Version:     config.ServiceVersion,
 			Environment: config.Environment,
 			Timestamp:   time.Now(),
-			Checks:      make(map[string]CheckResult),
+			Checks:      make(map[string]common.CheckResult),
 		}
 
 		if len(checks) > 0 {
@@ -73,9 +61,9 @@ func createHealthHandler(
 
 func executeHealthChecks(
 	ctx context.Context,
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 	o11y observability.Observability,
-	status *HealthStatus,
+	status *common.HealthStatus,
 ) bool {
 	if len(checks) == 0 {
 		return false
@@ -93,7 +81,7 @@ func executeHealthChecks(
 	for name, checkFunc := range checks {
 		wg.Add(1)
 
-		go func(checkName string, check HealthCheckFunc) {
+		go func(checkName string, check common.HealthCheckFunc) {
 			defer wg.Done()
 
 			// Acquire semaphore (blocks if 10 goroutines already running)
@@ -103,7 +91,7 @@ func executeHealthChecks(
 			case <-ctx.Done():
 				// Context cancelled, abort
 				mu.Lock()
-				status.Checks[checkName] = CheckResult{
+				status.Checks[checkName] = common.CheckResult{
 					Status: "unhealthy",
 					Error:  "timeout",
 				}
@@ -112,7 +100,7 @@ func executeHealthChecks(
 				return
 			}
 
-			result := CheckResult{Status: "healthy"}
+			result := common.CheckResult{Status: "healthy"}
 			if err := check(ctx); err != nil {
 				result.Status = "unhealthy"
 				result.Error = err.Error()
@@ -139,7 +127,7 @@ func executeHealthChecks(
 
 func createReadyHandler(
 	o11y observability.Observability,
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 ) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(c.UserContext(), 3*time.Second)
@@ -157,7 +145,7 @@ func createReadyHandler(
 
 func executeReadinessChecks(
 	ctx context.Context,
-	checks map[string]HealthCheckFunc,
+	checks map[string]common.HealthCheckFunc,
 	o11y observability.Observability,
 ) bool {
 	if len(checks) == 0 {
@@ -174,7 +162,7 @@ func executeReadinessChecks(
 
 	for name, checkFunc := range checks {
 		wg.Add(1)
-		go func(checkName string, check HealthCheckFunc) {
+		go func(checkName string, check common.HealthCheckFunc) {
 			defer wg.Done()
 
 			// Acquire semaphore

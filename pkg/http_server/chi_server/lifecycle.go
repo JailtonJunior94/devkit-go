@@ -9,13 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
-
-// shutdowner is an interface for components that need graceful shutdown.
-type shutdowner interface {
-	Shutdown(context.Context) error
-}
 
 // Start starts the HTTP server and blocks until a shutdown signal is received.
 func (s *Server) Start(ctx context.Context) error {
@@ -66,7 +62,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			shutdownErr = err
 		}
 
-		provider, ok := s.observability.(shutdowner)
+		provider, ok := s.observability.(common.Shutdowner)
 		if !ok {
 			s.observability.Logger().Info(ctx, "graceful shutdown completed")
 			return

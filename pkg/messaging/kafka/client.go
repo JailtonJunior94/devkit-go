@@ -57,6 +57,10 @@ type client struct {
 	mu          sync.RWMutex
 	closeOnce   sync.Once
 	reconnectMu sync.Mutex
+
+	// Reconnect goroutine control - GOROUTINE LEAK PREVENTION
+	reconnectCancel context.CancelFunc
+	reconnectOnce   sync.Once // Ensures only one reconnect goroutine is started
 }
 
 // NewClient creates a new Kafka client with the provided options.
@@ -154,8 +158,14 @@ func (c *client) Connect(ctx context.Context) error {
 			Field{Key: "brokers", Value: c.config.brokers},
 		)
 
+		// GOROUTINE LEAK FIX: Use sync.Once to ensure only one reconnect goroutine
+		// Even if Connect() is called multiple times, only one goroutine is created
 		if c.config.reconnectEnabled {
-			go c.reconnectWorker()
+			c.reconnectOnce.Do(func() {
+				reconnectCtx, cancel := context.WithCancel(context.Background())
+				c.reconnectCancel = cancel
+				go c.reconnectWorker(reconnectCtx)
+			})
 		}
 
 		return nil
@@ -248,6 +258,17 @@ func (c *client) Close() error {
 		c.closed.Store(true)
 		c.connected.Store(false)
 
+		// GOROUTINE LEAK FIX: Cancel reconnect worker before closing
+		// This ensures the reconnect goroutine exits cleanly
+		if c.reconnectCancel != nil {
+			c.config.logger.Debug(context.Background(), "stopping reconnect worker")
+			c.reconnectCancel()
+
+			// Give reconnect worker a moment to exit gracefully
+			// This is a best-effort wait - we don't block indefinitely
+			time.Sleep(100 * time.Millisecond)
+		}
+
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
@@ -270,30 +291,44 @@ func (c *client) IsConnected() bool {
 }
 
 // reconnectWorker monitors the connection and reconnects if necessary.
-func (c *client) reconnectWorker() {
+// GOROUTINE LEAK FIX: Now accepts a context for graceful shutdown.
+// When Close() is called, the context is cancelled and this goroutine exits cleanly.
+func (c *client) reconnectWorker(ctx context.Context) {
 	ticker := time.NewTicker(c.config.reconnectInterval)
 	defer ticker.Stop()
 
+	c.config.logger.Info(context.Background(), "reconnect worker started")
+	defer c.config.logger.Info(context.Background(), "reconnect worker stopped")
+
 	for {
-		if c.closed.Load() {
+		select {
+		case <-ctx.Done():
+			// Context cancelled - graceful shutdown
+			c.config.logger.Debug(context.Background(), "reconnect worker shutting down gracefully")
 			return
-		}
 
-		<-ticker.C
+		case <-ticker.C:
+			// Check if client is closed
+			if c.closed.Load() {
+				return
+			}
 
-		if !c.config.healthCheckEnabled {
-			continue
-		}
+			// Skip if health check is disabled
+			if !c.config.healthCheckEnabled {
+				continue
+			}
 
-		ctx, cancel := context.WithTimeout(context.Background(), c.config.healthCheckTimeout)
-		if err := c.HealthCheck(ctx); err != nil {
-			c.config.logger.Warn(ctx, "health check failed, attempting reconnect",
-				Field{Key: "error", Value: err},
-			)
-			cancel()
-			c.attemptReconnect()
-		} else {
-			cancel()
+			// Perform health check with timeout
+			healthCtx, cancel := context.WithTimeout(context.Background(), c.config.healthCheckTimeout)
+			if err := c.HealthCheck(healthCtx); err != nil {
+				c.config.logger.Warn(healthCtx, "health check failed, attempting reconnect",
+					Field{Key: "error", Value: err},
+				)
+				cancel()
+				c.attemptReconnect()
+			} else {
+				cancel()
+			}
 		}
 	}
 }

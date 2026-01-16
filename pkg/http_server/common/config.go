@@ -1,4 +1,4 @@
-package chiserver
+package common
 
 import (
 	"errors"
@@ -8,19 +8,35 @@ import (
 )
 
 // Config holds the HTTP server configuration.
+// This configuration is shared between Chi and Fiber implementations.
 type Config struct {
-	Address            string
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	IdleTimeout        time.Duration
-	BodyLimit          int
-	ServiceName        string
-	ServiceVersion     string
-	Environment        string
-	CORSOrigins        string
-	EnableCORS         bool
+	// Network configuration
+	Address string
+
+	// Timeout configuration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
+
+	// Security configuration
+	BodyLimit int // Maximum request body size in bytes
+
+	// Service identification
+	ServiceName    string
+	ServiceVersion string
+	Environment    string
+
+	// CORS configuration
+	CORSOrigins string
+	EnableCORS  bool
+
+	// Observability configuration
 	EnableMetrics      bool
 	EnableHealthChecks bool
+
+	// OpenTelemetry configuration (Fiber-specific, ignored by Chi)
+	EnableTracing     bool // Enable OpenTelemetry distributed tracing
+	EnableOTelMetrics bool // Enable OpenTelemetry HTTP metrics
 }
 
 // DefaultConfig returns a new Config with sensible defaults.
@@ -30,7 +46,7 @@ func DefaultConfig() Config {
 		ReadTimeout:        30 * time.Second,
 		WriteTimeout:       30 * time.Second,
 		IdleTimeout:        120 * time.Second,
-		BodyLimit:          4 * 1024 * 1024,
+		BodyLimit:          4 * 1024 * 1024, // 4MB
 		ServiceName:        "unknown-service",
 		ServiceVersion:     "unknown",
 		Environment:        "development",
@@ -38,10 +54,13 @@ func DefaultConfig() Config {
 		EnableCORS:         false,
 		EnableMetrics:      false,
 		EnableHealthChecks: true,
+		EnableTracing:      false,
+		EnableOTelMetrics:  false,
 	}
 }
 
 // Validate checks if the configuration is valid.
+// All string fields are validated with TrimSpace for consistency.
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.ServiceName) == "" {
 		return errors.New("service name is required")

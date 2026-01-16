@@ -47,10 +47,12 @@ func (c *consumer) handleMessageWithRetry(ctx context.Context, msg kafka.Message
 
 		if err == nil {
 			// Success - commit and return
-			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
-				c.config.logger.Error(ctx, "failed to commit message",
-					Field{Key: "error", Value: commitErr})
-				return commitErr
+			if c.reader != nil {
+				if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+					c.config.logger.Error(ctx, "failed to commit message",
+						Field{Key: "error", Value: commitErr})
+					return commitErr
+				}
 			}
 			return nil
 		}
@@ -142,14 +144,16 @@ func (c *consumer) sendToDLQ(ctx context.Context, msg kafka.Message, err error, 
 	}
 
 	// Only now it's safe to commit
-	if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
-		c.config.logger.Error(ctx, "CRITICAL: message in DLQ but failed to commit offset",
-			Field{Key: "error", Value: commitErr},
-			Field{Key: "topic", Value: msg.Topic},
-			Field{Key: "offset", Value: msg.Offset},
-		)
-		// This is bad but message is at least in DLQ
-		return commitErr
+	if c.reader != nil {
+		if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+			c.config.logger.Error(ctx, "CRITICAL: message in DLQ but failed to commit offset",
+				Field{Key: "error", Value: commitErr},
+				Field{Key: "topic", Value: msg.Topic},
+				Field{Key: "offset", Value: msg.Offset},
+			)
+			// This is bad but message is at least in DLQ
+			return commitErr
+		}
 	}
 
 	c.config.logger.Info(ctx, "message sent to DLQ successfully",
@@ -164,6 +168,10 @@ func (c *consumer) sendToDLQ(ctx context.Context, msg kafka.Message, err error, 
 // getOrCreateRetryState gets or creates retry state for a message atomically.
 // Uses LoadOrStore to prevent race condition where multiple goroutines
 // could create and store different state objects for the same key.
+//
+// PANIC PREVENTION: Type assertion is checked to prevent runtime panics.
+// If an invalid type is stored in the map (programming error), it returns
+// a new state instead of panicking, and logs a critical error.
 func (c *consumer) getOrCreateRetryState(key string) *retryState {
 	newState := &retryState{
 		attempts:     0,
@@ -173,7 +181,26 @@ func (c *consumer) getOrCreateRetryState(key string) *retryState {
 
 	// LoadOrStore is atomic - either loads existing or stores new
 	actual, _ := c.retryAttempts.LoadOrStore(key, newState)
-	return actual.(*retryState)
+
+	// CRITICAL FIX: Checked type assertion to prevent panic
+	// This should NEVER fail in normal operation, but prevents crashes
+	// if there's a programming error or memory corruption
+	state, ok := actual.(*retryState)
+	if !ok {
+		// CRITICAL ERROR: Wrong type in map - this indicates a severe bug
+		c.config.logger.Error(context.Background(),
+			"CRITICAL: invalid type in retryAttempts map - returning new state to prevent panic",
+			Field{Key: "key", Value: key},
+			Field{Key: "actual_type", Value: fmt.Sprintf("%T", actual)},
+			Field{Key: "expected_type", Value: "*retryState"},
+		)
+
+		// Return new state to prevent panic and allow processing to continue
+		// This is fail-safe behavior - better to lose retry history than crash
+		return newState
+	}
+
+	return state
 }
 
 // sleepWithContext sleeps for the specified duration while respecting context cancellation.

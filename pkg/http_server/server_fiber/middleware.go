@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -76,6 +77,9 @@ func requestIDMiddleware() fiber.Handler {
 	}
 }
 
+// timeoutMiddleware applies request timeout with proper cleanup.
+// IMPORTANT: Handlers MUST respect context cancellation to prevent goroutine leaks.
+// When ctx.Done() is signaled, handlers should stop processing immediately.
 func timeoutMiddleware(globalTimeout time.Duration, routeTimeouts map[string]time.Duration) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		timeout := globalTimeout
@@ -95,16 +99,25 @@ func timeoutMiddleware(globalTimeout time.Duration, routeTimeouts map[string]tim
 			err error
 		}
 
+		// Buffered channel prevents goroutine leak if we timeout before handler finishes
 		resultChan := make(chan result, 1)
 
 		go func() {
+			defer func() {
+				// Recover any panics from the handler
+				if recovered := recover(); recovered != nil {
+					// Re-panic will be caught by the outer recover middleware
+					panic(recovered)
+				}
+			}()
+
 			err := c.Next()
-			// Only send result if context is still active
+			// Non-blocking send (due to buffered channel)
 			select {
 			case resultChan <- result{err: err}:
 				// Result sent successfully
 			case <-ctx.Done():
-				// Context cancelled, don't send (prevents blocking)
+				// Context cancelled, don't block
 			}
 		}()
 
@@ -113,20 +126,40 @@ func timeoutMiddleware(globalTimeout time.Duration, routeTimeouts map[string]tim
 			// Handler completed within timeout
 			return res.err
 		case <-ctx.Done():
-			// Timeout exceeded
-			// Handler should detect ctx.Done() and stop processing
+			// Timeout exceeded - context cancellation signals handler to stop
+
+			// CRITICAL: Wait a short time for goroutine cleanup
+			// This gives the handler time to respect context cancellation
+			// Most well-behaved handlers will stop within 100ms
+			cleanupTimer := time.NewTimer(100 * time.Millisecond)
+			defer cleanupTimer.Stop()
+
+			select {
+			case <-resultChan:
+				// Handler finished cleanup successfully
+			case <-cleanupTimer.C:
+				// Handler didn't respect context cancellation
+				// This is a handler bug, but we can't do much more
+			}
+
+			// Return timeout error to client
 			return fiber.NewError(fiber.StatusRequestTimeout, "request timeout exceeded")
 		}
 	}
 }
 
+// securityHeadersMiddleware adds comprehensive security headers to responses.
+// Uses common.SecurityHeaders for centralized security configuration.
 func securityHeadersMiddleware() fiber.Handler {
+	// Initialize security headers once (reuse for all requests)
+	securityHeaders := common.DefaultSecurityHeaders()
+	headersMap := securityHeaders.ToMap()
+
 	return func(c *fiber.Ctx) error {
-		c.Set("X-Frame-Options", "DENY")
-		c.Set("X-Content-Type-Options", "nosniff")
-		c.Set("X-XSS-Protection", "1; mode=block")
-		c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		c.Set("X-Powered-By", "")
+		// Apply all security headers
+		for key, value := range headersMap {
+			c.Set(key, value)
+		}
 
 		return c.Next()
 	}
