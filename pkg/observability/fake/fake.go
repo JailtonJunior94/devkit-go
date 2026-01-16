@@ -49,7 +49,7 @@ type FakeTracer struct {
 // NewFakeTracer creates a new fake tracer.
 func NewFakeTracer() *FakeTracer {
 	return &FakeTracer{
-		spans: make([]*FakeSpan, 0),
+		spans: nil,
 	}
 }
 
@@ -61,7 +61,7 @@ func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observa
 		Name:       spanName,
 		StartTime:  time.Now(),
 		Attributes: config.Attributes(),
-		Events:     make([]FakeEvent, 0),
+		Events:     nil,
 	}
 
 	t.mu.Lock()
@@ -94,7 +94,7 @@ func (t *FakeTracer) GetSpans() []*FakeSpan {
 func (t *FakeTracer) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.spans = make([]*FakeSpan, 0)
+	t.spans = nil
 }
 
 // FakeSpan captures span operations for test assertions.
@@ -199,68 +199,88 @@ type FakeLogger struct {
 
 // NewFakeLogger creates a new fake logger.
 func NewFakeLogger() *FakeLogger {
-	entries := make([]LogEntry, 0)
+	var entries []LogEntry
 	return &FakeLogger{
 		mu:      &sync.RWMutex{},
 		entries: &entries,
-		fields:  make([]observability.Field, 0),
+		fields:  nil,
 	}
 }
 
 // Debug captures a debug log entry.
 func (l *FakeLogger) Debug(ctx context.Context, msg string, fields ...observability.Field) {
+	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
+	allFields = append(allFields, l.fields...)
+	allFields = append(allFields, fields...)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	*l.entries = append(*l.entries, LogEntry{
 		Level:     observability.LogLevelDebug,
 		Message:   msg,
-		Fields:    append(l.fields, fields...),
+		Fields:    allFields,
 		Timestamp: time.Now(),
 	})
 }
 
 // Info captures an info log entry.
 func (l *FakeLogger) Info(ctx context.Context, msg string, fields ...observability.Field) {
+	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
+	allFields = append(allFields, l.fields...)
+	allFields = append(allFields, fields...)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	*l.entries = append(*l.entries, LogEntry{
 		Level:     observability.LogLevelInfo,
 		Message:   msg,
-		Fields:    append(l.fields, fields...),
+		Fields:    allFields,
 		Timestamp: time.Now(),
 	})
 }
 
 // Warn captures a warn log entry.
 func (l *FakeLogger) Warn(ctx context.Context, msg string, fields ...observability.Field) {
+	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
+	allFields = append(allFields, l.fields...)
+	allFields = append(allFields, fields...)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	*l.entries = append(*l.entries, LogEntry{
 		Level:     observability.LogLevelWarn,
 		Message:   msg,
-		Fields:    append(l.fields, fields...),
+		Fields:    allFields,
 		Timestamp: time.Now(),
 	})
 }
 
 // Error captures an error log entry.
 func (l *FakeLogger) Error(ctx context.Context, msg string, fields ...observability.Field) {
+	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
+	allFields = append(allFields, l.fields...)
+	allFields = append(allFields, fields...)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	*l.entries = append(*l.entries, LogEntry{
 		Level:     observability.LogLevelError,
 		Message:   msg,
-		Fields:    append(l.fields, fields...),
+		Fields:    allFields,
 		Timestamp: time.Now(),
 	})
 }
 
 // With creates a child logger with additional fields.
 func (l *FakeLogger) With(fields ...observability.Field) observability.Logger {
+	newFields := make([]observability.Field, len(l.fields)+len(fields))
+	copy(newFields, l.fields)
+	copy(newFields[len(l.fields):], fields)
+
 	return &FakeLogger{
 		mu:      l.mu,
 		entries: l.entries,
-		fields:  append(l.fields, fields...),
+		fields:  newFields,
 	}
 }
 
@@ -277,7 +297,7 @@ func (l *FakeLogger) GetEntries() []LogEntry {
 func (l *FakeLogger) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	*l.entries = make([]LogEntry, 0)
+	*l.entries = nil
 }
 
 // LogEntry represents a captured log entry.
@@ -318,7 +338,7 @@ func (m *FakeMetrics) Counter(name, description, unit string) observability.Coun
 		Name:        name,
 		Description: description,
 		Unit:        unit,
-		values:      make([]CounterValue, 0),
+		values:      nil,
 	}
 	m.counters[name] = c
 	return c
@@ -337,7 +357,7 @@ func (m *FakeMetrics) Histogram(name, description, unit string) observability.Hi
 		Name:        name,
 		Description: description,
 		Unit:        unit,
-		values:      make([]HistogramValue, 0),
+		values:      nil,
 	}
 	m.histograms[name] = h
 	return h
@@ -356,7 +376,7 @@ func (m *FakeMetrics) UpDownCounter(name, description, unit string) observabilit
 		Name:        name,
 		Description: description,
 		Unit:        unit,
-		values:      make([]CounterValue, 0),
+		values:      nil,
 	}
 	m.upDowns[name] = u
 	return u

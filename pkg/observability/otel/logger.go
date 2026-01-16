@@ -65,7 +65,7 @@ func newOtelLogger(
 		level:       level,
 		format:      format,
 		serviceName: serviceName,
-		fields:      make([]observability.Field, 0),
+		fields:      nil,
 	}
 }
 
@@ -209,64 +209,22 @@ func convertSlogLevelToOTel(level slog.Level) otellog.Severity {
 
 // convertFieldToOTelAttr converts an observability.Field to an OTel log KeyValue.
 func convertFieldToOTelAttr(field observability.Field) otellog.KeyValue {
-	converters := []func(observability.Field) (otellog.KeyValue, bool){
-		tryConvertString,
-		tryConvertInt,
-		tryConvertInt64,
-		tryConvertFloat64,
-		tryConvertBool,
-		tryConvertError,
+	switch v := field.Value.(type) {
+	case string:
+		return otellog.String(field.Key, v)
+	case int:
+		return otellog.Int(field.Key, v)
+	case int64:
+		return otellog.Int64(field.Key, v)
+	case float64:
+		return otellog.Float64(field.Key, v)
+	case bool:
+		return otellog.Bool(field.Key, v)
+	case error:
+		return otellog.String(field.Key, v.Error())
+	default:
+		return otellog.String(field.Key, fmt.Sprint(field.Value))
 	}
-
-	for _, converter := range converters {
-		if kv, ok := converter(field); ok {
-			return kv
-		}
-	}
-
-	return otellog.String(field.Key, fmt.Sprint(field.Value))
-}
-
-func tryConvertString(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(string); ok {
-		return otellog.String(field.Key, v), true
-	}
-	return otellog.KeyValue{}, false
-}
-
-func tryConvertInt(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(int); ok {
-		return otellog.Int(field.Key, v), true
-	}
-	return otellog.KeyValue{}, false
-}
-
-func tryConvertInt64(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(int64); ok {
-		return otellog.Int64(field.Key, v), true
-	}
-	return otellog.KeyValue{}, false
-}
-
-func tryConvertFloat64(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(float64); ok {
-		return otellog.Float64(field.Key, v), true
-	}
-	return otellog.KeyValue{}, false
-}
-
-func tryConvertBool(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(bool); ok {
-		return otellog.Bool(field.Key, v), true
-	}
-	return otellog.KeyValue{}, false
-}
-
-func tryConvertError(field observability.Field) (otellog.KeyValue, bool) {
-	if v, ok := field.Value.(error); ok {
-		return otellog.String(field.Key, v.Error()), true
-	}
-	return otellog.KeyValue{}, false
 }
 
 // With creates a child logger with additional fields.
@@ -291,64 +249,22 @@ func (l *otelLogger) With(fields ...observability.Field) observability.Logger {
 
 // convertFieldToSlogAttr converts an observability.Field to a slog.Attr.
 func convertFieldToSlogAttr(field observability.Field) slog.Attr {
-	converters := []func(observability.Field) (slog.Attr, bool){
-		tryConvertSlogString,
-		tryConvertSlogInt,
-		tryConvertSlogInt64,
-		tryConvertSlogFloat64,
-		tryConvertSlogBool,
-		tryConvertSlogError,
+	switch v := field.Value.(type) {
+	case string:
+		return slog.String(field.Key, v)
+	case int:
+		return slog.Int(field.Key, v)
+	case int64:
+		return slog.Int64(field.Key, v)
+	case float64:
+		return slog.Float64(field.Key, v)
+	case bool:
+		return slog.Bool(field.Key, v)
+	case error:
+		return slog.String(field.Key, v.Error())
+	default:
+		return slog.Any(field.Key, field.Value)
 	}
-
-	for _, converter := range converters {
-		if attr, ok := converter(field); ok {
-			return attr
-		}
-	}
-
-	return slog.Any(field.Key, field.Value)
-}
-
-func tryConvertSlogString(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(string); ok {
-		return slog.String(field.Key, v), true
-	}
-	return slog.Attr{}, false
-}
-
-func tryConvertSlogInt(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(int); ok {
-		return slog.Int(field.Key, v), true
-	}
-	return slog.Attr{}, false
-}
-
-func tryConvertSlogInt64(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(int64); ok {
-		return slog.Int64(field.Key, v), true
-	}
-	return slog.Attr{}, false
-}
-
-func tryConvertSlogFloat64(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(float64); ok {
-		return slog.Float64(field.Key, v), true
-	}
-	return slog.Attr{}, false
-}
-
-func tryConvertSlogBool(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(bool); ok {
-		return slog.Bool(field.Key, v), true
-	}
-	return slog.Attr{}, false
-}
-
-func tryConvertSlogError(field observability.Field) (slog.Attr, bool) {
-	if v, ok := field.Value.(error); ok {
-		return slog.String(field.Key, v.Error()), true
-	}
-	return slog.Attr{}, false
 }
 
 // sanitizeFields sanitizes, validates, and redacts sensitive data from fields.

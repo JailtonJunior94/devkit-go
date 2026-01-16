@@ -2,7 +2,6 @@ package otel
 
 import (
 	"context"
-	"log"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"go.opentelemetry.io/otel/metric"
@@ -26,7 +25,6 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 		metric.WithUnit(unit),
 	)
 	if err != nil {
-		log.Printf("ERROR: Failed to create counter %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopCounter{}
 	}
 
@@ -41,7 +39,6 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 		metric.WithUnit(unit),
 	)
 	if err != nil {
-		log.Printf("ERROR: Failed to create histogram %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopHistogram{}
 	}
 
@@ -56,7 +53,6 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 		metric.WithUnit(unit),
 	)
 	if err != nil {
-		log.Printf("ERROR: Failed to create up-down counter %q: %v. Metrics will be lost. Check metric name, description, and unit for invalid characters.", name, err)
 		return &noopUpDownCounter{}
 	}
 

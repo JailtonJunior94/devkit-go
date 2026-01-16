@@ -131,7 +131,7 @@ func WithAttributes(fields ...Field) SpanOption {
 func NewSpanConfig(opts []SpanOption) SpanConfig {
 	cfg := &spanConfig{
 		kind:       SpanKindInternal,
-		attributes: make([]Field, 0),
+		attributes: nil,
 	}
 	for _, opt := range opts {
 		opt.apply(cfg)

@@ -38,15 +38,23 @@ func (p *Provider) Metrics() observability.Metrics {
 	return p.metrics
 }
 
+var (
+	globalNoopSpan        = noopSpan{}
+	globalNoopSpanContext = noopSpanContext{}
+	globalNoopCounter     = noopCounter{}
+	globalNoopHistogram   = noopHistogram{}
+	globalNoopUpDown      = noopUpDownCounter{}
+)
+
 // noopTracer implements observability.Tracer with no-op operations.
 type noopTracer struct{}
 
 func (t *noopTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
-	return ctx, noopSpan{}
+	return ctx, globalNoopSpan
 }
 
 func (t *noopTracer) SpanFromContext(ctx context.Context) observability.Span {
-	return noopSpan{}
+	return globalNoopSpan
 }
 
 func (t *noopTracer) ContextWithSpan(ctx context.Context, span observability.Span) context.Context {
@@ -67,7 +75,7 @@ func (s noopSpan) RecordError(err error, fields ...observability.Field) {}
 func (s noopSpan) AddEvent(name string, fields ...observability.Field) {}
 
 func (s noopSpan) Context() observability.SpanContext {
-	return noopSpanContext{}
+	return globalNoopSpanContext
 }
 
 // noopSpanContext implements observability.SpanContext with no-op operations.
@@ -104,15 +112,15 @@ func (l *noopLogger) With(fields ...observability.Field) observability.Logger {
 type noopMetrics struct{}
 
 func (m *noopMetrics) Counter(name, description, unit string) observability.Counter {
-	return noopCounter{}
+	return globalNoopCounter
 }
 
 func (m *noopMetrics) Histogram(name, description, unit string) observability.Histogram {
-	return noopHistogram{}
+	return globalNoopHistogram
 }
 
 func (m *noopMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
-	return noopUpDownCounter{}
+	return globalNoopUpDown
 }
 
 func (m *noopMetrics) Gauge(name, description, unit string, callback observability.GaugeCallback) error {

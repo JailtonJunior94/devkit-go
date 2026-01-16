@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -118,19 +117,14 @@ func validateConfig(config *Config) error {
 func validateSecurityConfig(config *Config) error {
 	// Prevent insecure connections in production
 	if config.Insecure {
-		if strings.ToLower(config.Environment) == "production" || strings.ToLower(config.Environment) == "prod" {
+		env := strings.ToLower(config.Environment)
+		if env == "production" || env == "prod" {
 			return fmt.Errorf("insecure connections are not allowed in production environment")
 		}
-		log.Printf("WARNING: Using insecure OTLP connection to %s (environment: %s). This should only be used in development/testing.",
-			config.OTLPEndpoint, config.Environment)
 	}
 
 	// Validate TLS configuration if provided
 	if config.TLSConfig != nil {
-		if config.TLSConfig.InsecureSkipVerify {
-			log.Printf("WARNING: TLS verification is disabled. This is insecure and should not be used in production.")
-		}
-
 		// Check minimum TLS version
 		if config.TLSConfig.MinVersion > 0 && config.TLSConfig.MinVersion < tls.VersionTLS12 {
 			return fmt.Errorf("minimum TLS version must be 1.2 or higher for security compliance")
@@ -161,11 +155,11 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 
 	provider := &Provider{
 		config:        config,
-		shutdownFuncs: make([]func(context.Context) error, 0),
+		shutdownFuncs: nil,
 	}
 
 	// Create resource with service information
-	res, err := provider.createResource()
+	res, err := provider.createResource(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
@@ -205,7 +199,7 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 }
 
 // createResource creates an OTLP resource with service information.
-func (p *Provider) createResource() (*resource.Resource, error) {
+func (p *Provider) createResource(ctx context.Context) (*resource.Resource, error) {
 	attrs := []resource.Option{
 		resource.WithAttributes(
 			semconv.ServiceName(p.config.ServiceName),
@@ -224,7 +218,7 @@ func (p *Provider) createResource() (*resource.Resource, error) {
 	}
 
 	return resource.New(
-		context.Background(),
+		ctx,
 		attrs...,
 	)
 }
@@ -235,16 +229,6 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 	if err != nil {
 		return fmt.Errorf("failed to create trace exporter: %w", err)
 	}
-
-	// Ensure cleanup in case of failure
-	var cleanupExporter = true
-	defer func() {
-		if cleanupExporter {
-			if shutdownErr := exporter.Shutdown(ctx); shutdownErr != nil {
-				log.Printf("failed to shutdown trace exporter after initialization failure: %v", shutdownErr)
-			}
-		}
-	}()
 
 	sampler := p.createTraceSampler()
 
@@ -257,8 +241,6 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 	otel.SetTracerProvider(p.tracerProvider)
 	p.shutdownFuncs = append(p.shutdownFuncs, p.tracerProvider.Shutdown)
 
-	// Success - don't cleanup exporter
-	cleanupExporter = false
 	return nil
 }
 
@@ -269,12 +251,12 @@ func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 			otlptracehttp.WithEndpoint(p.config.OTLPEndpoint),
 		}
 
-		if p.config.Insecure {
+		switch {
+		case p.config.Insecure:
 			opts = append(opts, otlptracehttp.WithInsecure())
-		} else if p.config.TLSConfig != nil {
+		case p.config.TLSConfig != nil:
 			opts = append(opts, otlptracehttp.WithTLSClientConfig(p.config.TLSConfig))
 		}
-		// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 		return otlptracehttp.New(ctx, opts...)
 	}
@@ -284,12 +266,12 @@ func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 		otlptracegrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
 
-	if p.config.Insecure {
+	switch {
+	case p.config.Insecure:
 		opts = append(opts, otlptracegrpc.WithInsecure())
-	} else if p.config.TLSConfig != nil {
+	case p.config.TLSConfig != nil:
 		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
 	}
-	// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 	return otlptracegrpc.New(ctx, opts...)
 }
@@ -332,12 +314,12 @@ func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter
 			otlpmetrichttp.WithEndpoint(p.config.OTLPEndpoint),
 		}
 
-		if p.config.Insecure {
+		switch {
+		case p.config.Insecure:
 			opts = append(opts, otlpmetrichttp.WithInsecure())
-		} else if p.config.TLSConfig != nil {
+		case p.config.TLSConfig != nil:
 			opts = append(opts, otlpmetrichttp.WithTLSClientConfig(p.config.TLSConfig))
 		}
-		// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 		return otlpmetrichttp.New(ctx, opts...)
 	}
@@ -347,12 +329,12 @@ func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter
 		otlpmetricgrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
 
-	if p.config.Insecure {
+	switch {
+	case p.config.Insecure:
 		opts = append(opts, otlpmetricgrpc.WithInsecure())
-	} else if p.config.TLSConfig != nil {
+	case p.config.TLSConfig != nil:
 		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
 	}
-	// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 	return otlpmetricgrpc.New(ctx, opts...)
 }
@@ -381,12 +363,12 @@ func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 			otlploghttp.WithEndpoint(p.config.OTLPEndpoint),
 		}
 
-		if p.config.Insecure {
+		switch {
+		case p.config.Insecure:
 			opts = append(opts, otlploghttp.WithInsecure())
-		} else if p.config.TLSConfig != nil {
+		case p.config.TLSConfig != nil:
 			opts = append(opts, otlploghttp.WithTLSClientConfig(p.config.TLSConfig))
 		}
-		// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 		return otlploghttp.New(ctx, opts...)
 	}
@@ -396,12 +378,12 @@ func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 		otlploggrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
 
-	if p.config.Insecure {
+	switch {
+	case p.config.Insecure:
 		opts = append(opts, otlploggrpc.WithInsecure())
-	} else if p.config.TLSConfig != nil {
+	case p.config.TLSConfig != nil:
 		opts = append(opts, otlploggrpc.WithTLSCredentials(credentials.NewTLS(p.config.TLSConfig)))
 	}
-	// If neither Insecure nor TLSConfig is set, uses system default TLS
 
 	return otlploggrpc.New(ctx, opts...)
 }

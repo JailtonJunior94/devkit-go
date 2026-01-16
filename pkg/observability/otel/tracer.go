@@ -22,12 +22,7 @@ func newOtelTracer(tracer oteltrace.Tracer) *otelTracer {
 func (t *otelTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
 	cfg := observability.NewSpanConfig(opts)
 
-	initialCap := 1
-	if len(cfg.Attributes()) > 0 {
-		initialCap++
-	}
-
-	otelOpts := make([]oteltrace.SpanStartOption, 0, initialCap)
+	otelOpts := make([]oteltrace.SpanStartOption, 0, 2)
 	otelOpts = append(otelOpts, oteltrace.WithSpanKind(convertSpanKind(cfg.Kind())))
 
 	attrs := convertFieldsToAttributes(cfg.Attributes())
