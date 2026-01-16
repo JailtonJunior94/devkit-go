@@ -190,6 +190,13 @@ func (c *ObservableClient) Delete(ctx context.Context, url string, opts ...Reque
 func (c *ObservableClient) Do(ctx context.Context, req *http.Request, opts ...RequestOption) (*http.Response, error) {
 	cfg := c.buildRequestConfig(opts)
 
+	// Validate retry configuration if enabled
+	if cfg.retryEnabled {
+		if err := validateRetryConfig(cfg); err != nil {
+			return nil, err
+		}
+	}
+
 	c.applyHeaders(req, cfg.headers)
 	transport := c.buildTransportChain(cfg)
 

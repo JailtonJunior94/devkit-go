@@ -514,111 +514,110 @@ func TestWithRetryValidation(t *testing.T) {
 		maxAttempts int
 		backoff     time.Duration
 		policy      NewRetryPolicy
-		shouldPanic bool
-		panicMsg    string
+		shouldError bool
+		errorMsg    string
 	}{
 		{
 			name:        "valid configuration",
 			maxAttempts: 3,
 			backoff:     time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: false,
+			shouldError: false,
 		},
 		{
 			name:        "max attempts at limit",
 			maxAttempts: MaxRetryAttempts,
 			backoff:     time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: false,
+			shouldError: false,
 		},
 		{
 			name:        "max attempts exceeds limit",
 			maxAttempts: MaxRetryAttempts + 1,
 			backoff:     time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: true,
-			panicMsg:    "maxAttempts",
+			shouldError: true,
+			errorMsg:    "maxAttempts",
 		},
 		{
 			name:        "max attempts way too high",
 			maxAttempts: 1000,
 			backoff:     time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: true,
-			panicMsg:    "maxAttempts",
+			shouldError: true,
+			errorMsg:    "maxAttempts",
 		},
 		{
 			name:        "negative backoff",
 			maxAttempts: 3,
 			backoff:     -1 * time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: true,
-			panicMsg:    "negative",
+			shouldError: true,
+			errorMsg:    "negative",
 		},
 		{
 			name:        "backoff exceeds limit",
 			maxAttempts: 3,
 			backoff:     MaxRetryBackoff + time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: true,
-			panicMsg:    "backoff",
+			shouldError: true,
+			errorMsg:    "backoff",
 		},
 		{
 			name:        "nil policy",
 			maxAttempts: 3,
 			backoff:     time.Second,
 			policy:      nil,
-			shouldPanic: true,
-			panicMsg:    "policy cannot be nil",
+			shouldError: true,
+			errorMsg:    "policy cannot be nil",
 		},
 		{
 			name:        "zero attempts (disabled)",
 			maxAttempts: 0,
 			backoff:     time.Second,
 			policy:      DefaultNewRetryPolicy,
-			shouldPanic: false,
+			shouldError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if tt.shouldPanic {
-					if r == nil {
-						t.Errorf("expected panic but didn't panic")
-					} else {
-						panicMsg := fmt.Sprint(r)
-						if !strings.Contains(panicMsg, tt.panicMsg) {
-							t.Errorf("expected panic message to contain %q, got %q", tt.panicMsg, panicMsg)
-						}
-					}
-				} else {
-					if r != nil {
-						t.Errorf("unexpected panic: %v", r)
-					}
+			// Setup fake observability and client
+			obs := fake.NewProvider()
+			client, err := NewObservableClient(obs)
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+
+			// Create test server (not important for validation test)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			ctx := context.Background()
+
+			// Try to make request with retry option
+			_, err = client.Get(ctx, server.URL,
+				WithRetry(tt.maxAttempts, tt.backoff, tt.policy),
+			)
+
+			// Check error expectation
+			if tt.shouldError {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
 				}
-			}()
-
-			// Create option
-			opt := WithRetry(tt.maxAttempts, tt.backoff, tt.policy)
-
-			// Apply to config
-			cfg := &requestConfig{}
-			opt(cfg)
-
-			// Validate if not panicking
-			if !tt.shouldPanic && tt.maxAttempts > 0 {
-				if !cfg.retryEnabled {
-					t.Error("expected retry to be enabled")
-				}
-				if cfg.retryMaxAttempts != tt.maxAttempts {
-					t.Errorf("expected maxAttempts %d, got %d", tt.maxAttempts, cfg.retryMaxAttempts)
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
 				}
 			}
 		})
 	}
 }
+
 
 func TestClassifyError(t *testing.T) {
 	tests := []struct {

@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -35,11 +36,8 @@ type requestConfig struct {
 //   - backoff: Initial delay between retry attempts (must be positive, max 10s)
 //   - policy: Function that determines if retry should occur (required)
 //
-// Panics if:
-//   - maxAttempts > 10 (risk of cascading failures)
-//   - backoff is negative
-//   - backoff > 10s (with exponential backoff, this is excessive)
-//   - policy is nil
+// Invalid configurations will cause Do() to return an error instead of panicking.
+// This allows callers to handle configuration errors gracefully.
 //
 // The retry mechanism:
 // - Buffers request body up to maxBodySize (configured in client)
@@ -61,25 +59,8 @@ type requestConfig struct {
 //	resp, err := client.Post(ctx, "https://api.example.com/transaction", body)
 func WithRetry(maxAttempts int, backoff time.Duration, policy NewRetryPolicy) RequestOption {
 	return func(cfg *requestConfig) {
-		// Validate maxAttempts
 		if maxAttempts <= 0 {
 			return // Disabled
-		}
-		if maxAttempts > MaxRetryAttempts {
-			panic(fmt.Sprintf("httpclient: maxAttempts %d exceeds maximum %d (risk of cascading failures)", maxAttempts, MaxRetryAttempts))
-		}
-
-		// Validate backoff
-		if backoff < 0 {
-			panic(fmt.Sprintf("httpclient: backoff %v cannot be negative", backoff))
-		}
-		if backoff > MaxRetryBackoff {
-			panic(fmt.Sprintf("httpclient: backoff %v exceeds maximum %v (exponential backoff caps at 30s)", backoff, MaxRetryBackoff))
-		}
-
-		// Validate policy
-		if policy == nil {
-			panic("httpclient: retry policy cannot be nil")
 		}
 
 		cfg.retryEnabled = true
@@ -87,6 +68,24 @@ func WithRetry(maxAttempts int, backoff time.Duration, policy NewRetryPolicy) Re
 		cfg.retryBackoff = backoff
 		cfg.retryPolicy = policy
 	}
+}
+
+// validateRetryConfig validates retry configuration and returns error if invalid.
+// Called by ObservableClient.Do() before executing the request.
+func validateRetryConfig(cfg *requestConfig) error {
+	if cfg.retryMaxAttempts > MaxRetryAttempts {
+		return fmt.Errorf("httpclient: maxAttempts %d exceeds maximum %d (risk of cascading failures)", cfg.retryMaxAttempts, MaxRetryAttempts)
+	}
+	if cfg.retryBackoff < 0 {
+		return fmt.Errorf("httpclient: backoff cannot be negative: %v", cfg.retryBackoff)
+	}
+	if cfg.retryBackoff > MaxRetryBackoff {
+		return fmt.Errorf("httpclient: backoff %v exceeds maximum %v (exponential backoff caps at 30s)", cfg.retryBackoff, MaxRetryBackoff)
+	}
+	if cfg.retryPolicy == nil {
+		return fmt.Errorf("httpclient: retry policy cannot be nil")
+	}
+	return nil
 }
 
 // WithHeaders adds multiple headers to the request.
@@ -106,9 +105,7 @@ func WithHeaders(headers map[string]string) RequestOption {
 		if cfg.headers == nil {
 			cfg.headers = make(map[string]string)
 		}
-		for k, v := range headers {
-			cfg.headers[k] = v
-		}
+		maps.Copy(cfg.headers, headers)
 	}
 }
 
