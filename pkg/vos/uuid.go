@@ -85,8 +85,5 @@ func (vo *UUID) SafeUUID() *uuid.UUID {
 		return nil
 	}
 
-	if vo.Value == uuid.Nil {
-		return nil
-	}
 	return &vo.Value
 }

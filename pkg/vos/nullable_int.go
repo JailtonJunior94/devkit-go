@@ -106,7 +106,7 @@ func (n NullableInt) IntOr(defaultValue int) int {
 }
 
 // Scan implementa sql.Scanner para leitura do banco de dados.
-func (n *NullableInt) Scan(value interface{}) error {
+func (n *NullableInt) Scan(value any) error {
 	var sqlInt sql.NullInt64
 	if err := sqlInt.Scan(value); err != nil {
 		return err
@@ -144,42 +144,4 @@ func (n *NullableInt) UnmarshalJSON(data []byte) error {
 	}
 	n.value = &v
 	return nil
-}
-
-// --- Funções Utilitárias Globais ---
-
-// IntToNullable converte *int64 para NullableInt de forma segura.
-func IntToNullable(v *int64) NullableInt {
-	return NewNullableIntFromPointer(v)
-}
-
-// SQLIntToNullable converte sql.NullInt64 para NullableInt de forma segura.
-func SQLIntToNullable(n sql.NullInt64) NullableInt {
-	return NewNullableIntFromSQL(n)
-}
-
-// NullableToInt converte NullableInt para *int64 de forma segura.
-func NullableToInt(n NullableInt) *int64 {
-	return n.Ptr()
-}
-
-// NullableToSQLInt converte NullableInt para sql.NullInt64 de forma segura.
-func NullableToSQLInt(n NullableInt) sql.NullInt64 {
-	return n.ToSQL()
-}
-
-// SafeIntToString converte *int64 para string de forma segura, retornando string vazia se nil.
-func SafeIntToString(v *int64) string {
-	if v == nil {
-		return ""
-	}
-	return strconv.FormatInt(*v, 10)
-}
-
-// SafeIntToStringOr converte *int64 para string de forma segura, retornando defaultValue se nil.
-func SafeIntToStringOr(v *int64, defaultValue string) string {
-	if v == nil {
-		return defaultValue
-	}
-	return strconv.FormatInt(*v, 10)
 }

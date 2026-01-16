@@ -72,15 +72,6 @@ func (n NullableBool) ToSQL() sql.NullBool {
 	return sql.NullBool{Bool: *n.value, Valid: true}
 }
 
-// Bool retorna o valor como bool, ou false se inválido.
-// IMPORTANTE: Use Get() se precisar distinguir entre false e inválido.
-func (n NullableBool) Bool() bool {
-	if n.value == nil {
-		return false
-	}
-	return *n.value
-}
-
 // IsTrue retorna true se o valor é válido E true.
 // Retorna false se o valor é inválido ou false.
 func (n NullableBool) IsTrue() bool {
@@ -116,7 +107,7 @@ func (n NullableBool) StringOr(defaultValue string) string {
 }
 
 // Scan implementa sql.Scanner para leitura do banco de dados.
-func (n *NullableBool) Scan(value interface{}) error {
+func (n *NullableBool) Scan(value any) error {
 	var nb sql.NullBool
 	if err := nb.Scan(value); err != nil {
 		return err
@@ -154,42 +145,4 @@ func (n *NullableBool) UnmarshalJSON(data []byte) error {
 	}
 	n.value = &b
 	return nil
-}
-
-// --- Funções Utilitárias Globais ---
-
-// BoolToNullable converte *bool para NullableBool de forma segura.
-func BoolToNullable(b *bool) NullableBool {
-	return NewNullableBoolFromPointer(b)
-}
-
-// SQLBoolToNullable converte sql.NullBool para NullableBool de forma segura.
-func SQLBoolToNullable(nb sql.NullBool) NullableBool {
-	return NewNullableBoolFromSQL(nb)
-}
-
-// NullableToBool converte NullableBool para *bool de forma segura.
-func NullableToBool(n NullableBool) *bool {
-	return n.Ptr()
-}
-
-// NullableToSQLBool converte NullableBool para sql.NullBool de forma segura.
-func NullableToSQLBool(n NullableBool) sql.NullBool {
-	return n.ToSQL()
-}
-
-// SafeBoolToString converte *bool para string de forma segura, retornando string vazia se nil.
-func SafeBoolToString(b *bool) string {
-	if b == nil {
-		return ""
-	}
-	return strconv.FormatBool(*b)
-}
-
-// SafeBoolToStringOr converte *bool para string de forma segura, retornando defaultValue se nil.
-func SafeBoolToStringOr(b *bool, defaultValue string) string {
-	if b == nil {
-		return defaultValue
-	}
-	return strconv.FormatBool(*b)
 }

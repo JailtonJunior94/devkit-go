@@ -139,7 +139,7 @@ func (n NullableString) Contains(substr string) bool {
 }
 
 // Scan implementa sql.Scanner para leitura do banco de dados.
-func (n *NullableString) Scan(value interface{}) error {
+func (n *NullableString) Scan(value any) error {
 	var ns sql.NullString
 	if err := ns.Scan(value); err != nil {
 		return err
@@ -177,42 +177,4 @@ func (n *NullableString) UnmarshalJSON(data []byte) error {
 	}
 	n.value = &s
 	return nil
-}
-
-// --- Funções Utilitárias Globais ---
-
-// StringToNullable converte *string para NullableString de forma segura.
-func StringToNullable(s *string) NullableString {
-	return NewNullableStringFromPointer(s)
-}
-
-// SQLStringToNullable converte sql.NullString para NullableString de forma segura.
-func SQLStringToNullable(ns sql.NullString) NullableString {
-	return NewNullableStringFromSQL(ns)
-}
-
-// NullableToString converte NullableString para *string de forma segura.
-func NullableToString(n NullableString) *string {
-	return n.Ptr()
-}
-
-// NullableToSQLString converte NullableString para sql.NullString de forma segura.
-func NullableToSQLString(n NullableString) sql.NullString {
-	return n.ToSQL()
-}
-
-// SafeStringValue retorna o valor da string ou string vazia se nil.
-func SafeStringValue(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-// SafeStringValueOr retorna o valor da string ou defaultValue se nil.
-func SafeStringValueOr(s *string, defaultValue string) string {
-	if s == nil {
-		return defaultValue
-	}
-	return *s
 }

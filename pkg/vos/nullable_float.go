@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 )
@@ -183,7 +182,7 @@ func (n NullableFloat) Round(decimals int) float64 {
 }
 
 // Scan implementa sql.Scanner para leitura do banco de dados.
-func (n *NullableFloat) Scan(value interface{}) error {
+func (n *NullableFloat) Scan(value any) error {
 	var nf sql.NullFloat64
 	if err := nf.Scan(value); err != nil {
 		return err
@@ -221,58 +220,4 @@ func (n *NullableFloat) UnmarshalJSON(data []byte) error {
 	}
 	n.value = &f
 	return nil
-}
-
-// --- Funções Utilitárias Globais ---
-
-// FloatToNullable converte *float64 para NullableFloat de forma segura.
-func FloatToNullable(f *float64) NullableFloat {
-	return NewNullableFloatFromPointer(f)
-}
-
-// SQLFloatToNullable converte sql.NullFloat64 para NullableFloat de forma segura.
-func SQLFloatToNullable(nf sql.NullFloat64) NullableFloat {
-	return NewNullableFloatFromSQL(nf)
-}
-
-// NullableToFloat converte NullableFloat para *float64 de forma segura.
-func NullableToFloat(n NullableFloat) *float64 {
-	return n.Ptr()
-}
-
-// NullableToSQLFloat converte NullableFloat para sql.NullFloat64 de forma segura.
-func NullableToSQLFloat(n NullableFloat) sql.NullFloat64 {
-	return n.ToSQL()
-}
-
-// SafeFloatToString converte *float64 para string de forma segura.
-func SafeFloatToString(f *float64, precision int) string {
-	if f == nil {
-		return ""
-	}
-	return strconv.FormatFloat(*f, 'f', precision, 64)
-}
-
-// SafeFloatToStringOr converte *float64 para string de forma segura, retornando defaultValue se nil.
-func SafeFloatToStringOr(f *float64, precision int, defaultValue string) string {
-	if f == nil {
-		return defaultValue
-	}
-	return strconv.FormatFloat(*f, 'f', precision, 64)
-}
-
-// FormatCurrency formata um NullableFloat como moeda (2 casas decimais).
-func (n NullableFloat) FormatCurrency(symbol string) string {
-	if n.value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%s%.2f", symbol, *n.value)
-}
-
-// FormatPercentage formata um NullableFloat como percentual.
-func (n NullableFloat) FormatPercentage() string {
-	if n.value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%.2f%%", *n.value)
 }

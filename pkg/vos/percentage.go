@@ -97,9 +97,9 @@ func NewPercentageFromString(value string) (Percentage, error) {
 	return NewPercentageFromFloat(floatValue)
 }
 
-// Value returns the raw scaled value (value * 1000).
+// ScaledValue returns the raw scaled value (value * 1000).
 // Useful for database storage and precise calculations.
-func (p Percentage) Value() int64 {
+func (p Percentage) ScaledValue() int64 {
 	return p.value
 }
 
@@ -188,8 +188,8 @@ func (p Percentage) Apply(money Money) (Money, error) {
 		}
 
 		// Check if multiplication would overflow
-		// We compare: absCents > maxPercentageValue / absPercentage
-		if absPercentage > 0 && absCents > maxPercentageValue/absPercentage {
+		// We compare: absCents > math.MaxInt64 / absPercentage
+		if absPercentage > 0 && absCents > math.MaxInt64/absPercentage {
 			return Money{}, ErrOverflow
 		}
 	}
@@ -262,7 +262,10 @@ func (p Percentage) String() string {
 // MarshalJSON implements json.Marshaler.
 // Serializes as string with 3 decimal places: "12.345".
 func (p Percentage) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`"%.3f"`, p.Float())), nil
+	buf := []byte{'"'}
+	buf = fmt.Appendf(buf, "%.3f", p.Float())
+	buf = append(buf, '"')
+	return buf, nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -296,13 +299,13 @@ func (p *Percentage) UnmarshalJSON(data []byte) error {
 
 // Value implements driver.Valuer for database persistence.
 // Stores as integer (scaled by 1000) for precision.
-func (p Percentage) ValuerValue() (driver.Value, error) {
+func (p Percentage) Value() (driver.Value, error) {
 	return p.value, nil
 }
 
 // Scan implements sql.Scanner for database retrieval.
 // Reads from INTEGER or NUMERIC database column.
-func (p *Percentage) Scan(value interface{}) error {
+func (p *Percentage) Scan(value any) error {
 	if value == nil {
 		return ErrNullValue
 	}

@@ -29,7 +29,7 @@ func Filter[T any](items []T, fn PredicateFunc[T]) []T {
 		return nil
 	}
 
-	result := make([]T, 0, len(items))
+	var result []T
 	for _, item := range items {
 		if fn(item) {
 			result = append(result, item)
@@ -77,7 +77,7 @@ func Remove[T any](items []T, fn PredicateFunc[T]) []T {
 		return nil
 	}
 
-	result := make([]T, 0, len(items))
+	var result []T
 	for _, item := range items {
 		if !fn(item) {
 			result = append(result, item)
