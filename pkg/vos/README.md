@@ -1,2012 +1,671 @@
-# Value Objects (VOs)
+# vos (Value Objects)
 
-## Índice
+Domain-Driven Design value objects for Money, Percentage, identifiers (UUID, ULID), and nullable types with precision guarantees and type safety.
 
-1. [Introdução](#introdução)
-2. [O que são Value Objects](#o-que-são-value-objects)
-3. [Convenções e Princípios](#convenções-e-princípios)
-4. [Value Objects Disponíveis](#value-objects-disponíveis)
-   - [UUID](#uuid)
-   - [ULID](#ulid)
-   - [Currency](#currency)
-   - [Money](#money)
-   - [Percentage](#percentage)
-   - [NullableInt](#nullableint)
-   - [NullableString](#nullablestring)
-   - [NullableBool](#nullablebool)
-   - [NullableFloat](#nullablefloat)
-   - [NullableTime](#nullabletime)
-5. [Boas Práticas Gerais](#boas-práticas-gerais)
-6. [Erros Comuns](#erros-comuns)
-7. [Uso com Banco de Dados](#uso-com-banco-de-dados)
-8. [Uso em APIs](#uso-em-apis)
+## Introduction
 
----
+### Problem It Solves
 
-## Introdução
+**Primitive Obsession**: Using basic types (`string`, `int64`, `float64`) for domain concepts leads to:
+- Lost business rules and invariants
+- Precision errors in financial calculations
+- Type confusion (is this value in cents or dollars?)
+- Currency mismatch bugs (adding USD to BRL)
+- Null handling boilerplate
 
-Este pacote contém a implementação de **Value Objects** (VOs) seguindo os princípios de **Domain-Driven Design (DDD)** e **Clean Architecture**. Os Value Objects são componentes fundamentais do domínio da aplicação que representam conceitos de negócio com regras e validações específicas.
+Value Objects solve this by:
+- **Encapsulating business logic** (Money knows how to add/subtract with currency validation)
+- **Ensuring precision** (no floating-point errors in financial calculations)
+- **Type safety** (can't accidentally pass a string where UUID is expected)
+- **Immutability** (thread-safe by design)
 
-## O que são Value Objects
+### When to Use
 
-**Value Objects** são objetos imutáveis que representam conceitos do domínio através de seus valores, não de sua identidade. Diferentemente de Entidades, dois Value Objects são considerados iguais se todos os seus atributos forem iguais.
+✅ **Use Value Objects when:**
+- Working with money or financial calculations
+- Need precise percentage calculations
+- Domain concepts have business rules (currency, scale, validation)
+- Need nullable types with clear semantics
+- Building DDD-based applications
+- Require database persistence with type safety
 
-### Por que utilizá-los?
-
-1. **Expressividade**: `Money` é mais expressivo que `float64`
-2. **Segurança de Tipo**: Evita misturar conceitos diferentes (ex: somar `Percentage` com `Money` por engano)
-3. **Validação Centralizada**: Regras de negócio ficam encapsuladas no próprio objeto
-4. **Imutabilidade**: Uma vez criados, não podem ser modificados, evitando efeitos colaterais
-5. **Precisão**: Evita problemas de arredondamento com tipos primitivos (ex: `float64` para dinheiro)
-
-### Benefícios
-
-- **Precisão matemática**: Operações financeiras sem perda de precisão
-- **Imutabilidade garantida**: Thread-safe por padrão
-- **Validação em tempo de construção**: Impossível criar objetos inválidos
-- **Expressividade no domínio**: Código autodocumentado e alinhado com o negócio
-- **Integração nativa**: Suporte completo para database/sql e encoding/json
+❌ **Don't use when:**
+- Simple data transfer without business logic
+- Performance is absolutely critical (though overhead is minimal)
+- Working with external APIs that require primitives (convert at boundary)
 
 ---
 
-## Convenções e Princípios
+## Architecture
 
-Todos os Value Objects deste pacote seguem os seguintes princípios:
+### Value Object Principles
 
-### 1. Imutabilidade
-- Uma vez criado, o valor não pode ser modificado
-- Operações retornam novos Value Objects ao invés de modificar o existente
+All VOs in this package follow DDD principles:
 
-### 2. Validação
-- Validação ocorre no construtor
-- Impossível criar um Value Object inválido
-- Construtores retornam `(VO, error)` ao invés de usar `panic`
+1. **Immutable**: Once created, values cannot be changed
+2. **Thread-Safe**: Can be safely shared across goroutines
+3. **Self-Validating**: Invalid states are impossible to construct
+4. **Equality by Value**: Two VOs with same value are equal
+5. **No Identity**: VOs don't have IDs, only their value matters
 
-### 3. Go Idiomático
-- Compatível com `go vet`, `go fmt` e `golangci-lint`
-- Não usa `panic` para controle de fluxo
-- Thread-safe e nil-safe
+### Package Structure
 
-### 4. Integração com Infraestrutura
-- Implementa `driver.Valuer` para escrita no banco de dados
-- Implementa `sql.Scanner` para leitura do banco de dados
-- Implementa `json.Marshaler` e `json.Unmarshaler` para APIs JSON
+```
+vos/
+├── uuid.go           # UUID v7 identifiers
+├── ulid.go           # ULID identifiers (lexicographically sortable)
+├── money.go          # Money with currency (precision: 2 decimals)
+├── percentage.go     # Percentage (precision: 3 decimals)
+├── currency.go       # ISO 4217 currency codes
+├── nullable_int.go   # Nullable int64
+├── nullable_string.go  # Nullable string
+├── nullable_bool.go    # Nullable bool
+├── nullable_float.go   # Nullable float64
+├── nulable_time.go     # Nullable time.Time (note: typo in filename)
+└── errors.go         # Common errors
+```
 
-### 5. Precisão Numérica
-- Value Objects financeiros (`Money`, `Percentage`) usam inteiros internamente
-- Evita problemas de arredondamento de ponto flutuante
-- Representação decimal precisa para cálculos financeiros
+### Design Decisions
+
+1. **Integer-Based Precision**: Money and Percentage use `int64` internally to avoid floating-point errors
+2. **Scale Factors**: Money (scale 2 = cents), Percentage (scale 3 = thousandths)
+3. **Pointer-Based Nullables**: Use `*T` internally for true three-state (null, false, true for bool)
+4. **Immutable Operations**: All operations return new instances instead of mutating
 
 ---
 
-## Value Objects Disponíveis
-
-### UUID
-
-#### Descrição
-Representa um **Universally Unique Identifier (UUID)** versão 7. UUIDs são identificadores únicos globalmente que não requerem coordenação central. Este Value Object garante que apenas UUIDs válidos sejam utilizados no domínio.
-
-**Por que não usar `string`?**
-- Validação automática
-- Impossível criar UUIDs inválidos
-- Garante formato correto
-- Type safety: evita misturar UUIDs com outras strings
-
-#### Estrutura Interna
-```go
-type UUID struct {
-    Value uuid.UUID  // github.com/google/uuid
-}
-```
-
-**Garantias:**
-- Imutável
-- Validação automática (não aceita UUID nil)
-- Thread-safe
-
-#### Criação / Construtor
-
-```go
-// Gerar novo UUID V7
-uuid, err := vos.NewUUID()
-if err != nil {
-    log.Fatal(err)
-}
-
-// A partir de string
-uuid, err := vos.NewUUIDFromString("0191d8e8-7f3f-7000-8000-123456789012")
-if err != nil {
-    log.Fatal(err)
-}
-
-// A partir de uuid.UUID existente
-existingUUID := uuid.New()
-uuid, err := vos.NewFromUUID(existingUUID)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-#### Operações Disponíveis
-
-```go
-// Verificar se está vazio
-if uuid.IsEmpty() {
-    // UUID é nil
-}
-
-// Converter para string
-str := uuid.String()  // "0191d8e8-7f3f-7000-8000-123456789012"
-
-// Obter UUID subjacente
-rawUUID := uuid.UUID()
-
-// Obter ponteiro seguro (nil-safe)
-ptr := uuid.SafeUUID()  // Retorna nil se UUID for inválido
-```
-
-#### Uso com Banco de Dados
-
-O Value Object UUID **implementa** `sql.Scanner` e pode ser usado diretamente em consultas, mas não implementa `driver.Valuer`. Para armazenar no banco, utilize o método `String()` ou `UUID()`:
-
-```go
-// INSERT
-_, err := db.Exec(
-    "INSERT INTO users (id, name) VALUES ($1, $2)",
-    uuid.String(),  // ou uuid.UUID()
-    "John Doe",
-)
-
-// SELECT
-var id string
-var name string
-err := db.QueryRow("SELECT id, name FROM users WHERE id = $1", uuid.String()).
-    Scan(&id, &name)
-
-// Converter de volta
-userUUID, err := vos.NewUUIDFromString(id)
-```
-
-#### Uso em APIs (Input / Output)
-
-```go
-// Estrutura de Request/Response
-type CreateUserRequest struct {
-    ID   vos.UUID `json:"id"`
-    Name string   `json:"name"`
-}
-
-// Serialização JSON
-user := CreateUserRequest{
-    ID:   uuid,
-    Name: "John Doe",
-}
-jsonData, _ := json.Marshal(user)
-// {"id":"0191d8e8-7f3f-7000-8000-123456789012","name":"John Doe"}
-
-// Deserialização JSON
-var req CreateUserRequest
-json.Unmarshal(jsonData, &req)
-```
-
-#### Boas Práticas
-- Use UUIDs para identificadores de entidades que precisam ser únicos globalmente
-- Prefira UUIDv7 para melhor performance em índices de banco de dados (ordenáveis)
-- Sempre trate erros de criação de UUID
-
-#### Erros Comuns
-- ❌ Ignorar erro de criação: `uuid, _ := vos.NewUUID()`
-- ❌ Usar string diretamente no domínio: `userID string`
-- ✅ Sempre usar o Value Object: `userID vos.UUID`
-
----
-
-### ULID
-
-#### Descrição
-Representa um **Universally Unique Lexicographically Sortable Identifier**. ULIDs combinam as vantagens de UUIDs (unicidade global) com ordenação lexicográfica baseada em timestamp, sendo ideais para chaves primárias ordenáveis por tempo.
-
-**Por que não usar `string`?**
-- Garante formato válido
-- Ordenação temporal automática
-- Thread-safe com crypto/rand
-- Type safety
-
-#### Estrutura Interna
-```go
-type ULID struct {
-    Value ulid.ULID  // github.com/oklog/ulid/v2
-}
-```
-
-**Garantias:**
-- Imutável
-- Thread-safe (usa crypto/rand)
-- Lexicograficamente ordenável
-- Não aceita zero value
-
-#### Criação / Construtor
-
-```go
-// Gerar novo ULID
-ulid, err := vos.NewULID()
-if err != nil {
-    log.Fatal(err)
-}
-
-// A partir de string
-ulid, err := vos.NewULIDFromString("01ARZ3NDEKTSV4RRFFQ69G5FAV")
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-#### Operações Disponíveis
-
-```go
-// Converter para string
-str := ulid.String()  // "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-
-// Validar
-err := ulid.Validate()
-```
-
-#### Uso com Banco de Dados
-
-ULID **não implementa** `driver.Valuer` nem `sql.Scanner`. Use o método `String()` para persistência:
-
-```go
-// INSERT
-_, err := db.Exec(
-    "INSERT INTO orders (id, amount) VALUES ($1, $2)",
-    ulid.String(),
-    1000,
-)
-
-// SELECT
-var id string
-err := db.QueryRow("SELECT id FROM orders WHERE id = $1", ulid.String()).
-    Scan(&id)
-
-// Converter de volta
-orderULID, err := vos.NewULIDFromString(id)
-```
-
-#### Uso em APIs (Input / Output)
-
-```go
-type Order struct {
-    ID     vos.ULID `json:"id"`
-    Amount int64    `json:"amount"`
-}
-
-// Serialização - usar String() explicitamente ou implementar MarshalJSON
-type OrderResponse struct {
-    ID     string `json:"id"`
-    Amount int64  `json:"amount"`
-}
-
-func toResponse(order Order) OrderResponse {
-    return OrderResponse{
-        ID:     order.ID.String(),
-        Amount: order.Amount,
-    }
-}
-```
-
-#### Boas Práticas
-- Use ULIDs quando precisar de IDs ordenáveis por tempo de criação
-- Ideal para chaves primárias em bancos de dados (melhor performance que UUIDv4)
-- Sempre valide ULIDs recebidos de fontes externas
-
-#### Erros Comuns
-- ❌ Usar ULIDs de fontes não thread-safe em ambiente concorrente
-- ❌ Confundir ULID com UUID
-- ✅ Preferir ULID para novos projetos que precisam de ordenação temporal
-
----
-
-### Currency
-
-#### Descrição
-Representa um **código de moeda ISO 4217**. Este Value Object garante que apenas códigos de moeda válidos sejam utilizados, evitando erros de digitação e garantindo consistência em operações monetárias.
-
-**Por que não usar `string`?**
-- Validação automática contra ISO 4217
-- Evita typos ("BLR" ao invés de "BRL")
-- Type safety: evita passar moedas onde deveria ser outras strings
-- Conjunto limitado e conhecido de valores
-
-#### Estrutura Interna
-```go
-type Currency string
-
-const (
-    CurrencyBRL Currency = "BRL"  // Real Brasileiro
-    CurrencyUSD Currency = "USD"  // Dólar Americano
-    CurrencyEUR Currency = "EUR"  // Euro
-    CurrencyGBP Currency = "GBP"  // Libra Esterlina
-    CurrencyJPY Currency = "JPY"  // Iene Japonês
-    // ... outras moedas
-)
-```
-
-**Moedas suportadas:**
-- BRL (Brazilian Real)
-- USD (United States Dollar)
-- EUR (Euro)
-- GBP (British Pound Sterling)
-- JPY (Japanese Yen)
-- CAD (Canadian Dollar)
-- AUD (Australian Dollar)
-- CHF (Swiss Franc)
-- CNY (Chinese Yuan)
-- INR (Indian Rupee)
-- MXN (Mexican Peso)
-- ARS (Argentine Peso)
-
-#### Criação / Construtor
-
-```go
-// A partir de string
-currency, err := vos.NewCurrency("BRL")
-if err != nil {
-    log.Fatal(err)  // ErrInvalidCurrency
-}
-
-// Usar constantes (recomendado)
-currency := vos.CurrencyBRL
-
-// Case insensitive
-currency, err := vos.NewCurrency("brl")  // OK, converte para "BRL"
-```
-
-#### Operações Disponíveis
-
-```go
-// Validar
-if currency.IsValid() {
-    // Moeda válida
-}
-
-// Converter para string
-str := currency.String()  // "BRL"
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-currency := vos.CurrencyBRL
-_, err := db.Exec(
-    "INSERT INTO accounts (id, currency) VALUES ($1, $2)",
-    1,
-    currency,  // Armazena como "BRL"
-)
-
-// SELECT
-var currency vos.Currency
-err := db.QueryRow("SELECT currency FROM accounts WHERE id = $1", 1).
-    Scan(&currency)
-// currency é validado automaticamente
-```
-
-**Schema recomendado:**
-```sql
-CREATE TABLE accounts (
-    id SERIAL PRIMARY KEY,
-    currency VARCHAR(3) NOT NULL CHECK (currency IN ('BRL', 'USD', 'EUR', ...))
-);
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-```go
-type Account struct {
-    ID       int          `json:"id"`
-    Currency vos.Currency `json:"currency"`
-}
-
-// Serialização JSON
-acc := Account{
-    ID:       1,
-    Currency: vos.CurrencyBRL,
-}
-jsonData, _ := json.Marshal(acc)
-// {"id":1,"currency":"BRL"}
-
-// Deserialização JSON (com validação)
-var acc Account
-err := json.Unmarshal(jsonData, &acc)
-if err != nil {
-    // Moeda inválida retorna erro
-}
-```
-
-#### Boas Práticas
-- Use constantes ao invés de strings literais
-- Sempre valide moedas vindas de entrada de usuário
-- Use Currency em conjunto com Money para garantir consistência
-
-#### Erros Comuns
-- ❌ Usar strings no domínio: `currency := "BRL"`
-- ❌ Ignorar validação: `currency, _ := vos.NewCurrency(input)`
-- ❌ Criar moedas personalizadas sem adicionar à validação
-- ✅ Sempre usar o construtor ou constantes: `currency := vos.CurrencyBRL`
-
----
+## API Reference
 
 ### Money
 
-#### Descrição
-Representa um **valor monetário** com precisão fixa e moeda associada. Este é um dos Value Objects mais críticos em sistemas financeiros, garantindo cálculos precisos sem erros de arredondamento de ponto flutuante.
-
-**Por que não usar `float64`?**
-- `float64` tem problemas de precisão: `0.1 + 0.2 != 0.3`
-- Impossível representar valores decimais com precisão exata
-- Operações financeiras exigem precisão matemática absoluta
-- Money usa inteiros internamente (centavos) para precisão total
-
-#### Estrutura Interna
 ```go
 type Money struct {
-    cents    int64     // Valor em centavos (imutável)
-    currency Currency  // Moeda ISO 4217 (imutável)
+    cents    int64    // Internal: scaled by 100
+    currency Currency // ISO 4217 code
 }
+
+// Constructors
+NewMoney(cents int64, currency Currency) (Money, error)
+NewMoneyFromFloat(value float64, currency Currency) (Money, error)
+NewMoneyFromString(value string, currency Currency) (Money, error)
+
+// Accessors
+Cents() int64
+Currency() Currency
+Float() float64  // ⚠️ For display only, not calculations
+
+// Operations
+Add(other Money) (Money, error)
+Subtract(other Money) (Money, error)
+Multiply(factor int64) (Money, error)
+Divide(divisor int64) (Money, error)
+
+// Comparisons
+Equals(other Money) bool
+GreaterThan(other Money) bool
+LessThan(other Money) bool
+IsZero() bool
+IsPositive() bool
+IsNegative() bool
+
+// Utilities
+Abs() Money
+Negate() Money
+String() string  // "10.50 BRL"
+
+// Persistence
+MarshalJSON() ([]byte, error)
+UnmarshalJSON(data []byte) error
+Value() (driver.Value, error)  // Database
+Scan(value any) error           // Database
 ```
-
-**Características:**
-- Escala fixa: 2 casas decimais (100 = R$ 1,00)
-- Limite seguro: ~90 trilhões (int64)
-- Imutável e thread-safe
-- Validação de moeda obrigatória
-
-#### Criação / Construtor
-
-```go
-// RECOMENDADO: A partir de centavos (máxima precisão)
-money, err := vos.NewMoney(1050, vos.CurrencyBRL)  // R$ 10,50
-if err != nil {
-    log.Fatal(err)
-}
-
-// A partir de float (menos preciso, evite se possível)
-money, err := vos.NewMoneyFromFloat(10.50, vos.CurrencyUSD)  // $10.50
-if err != nil {
-    log.Fatal(err)
-}
-
-// A partir de string
-money, err := vos.NewMoneyFromString("10.50", vos.CurrencyEUR)  // €10.50
-// Aceita: "10.50", "10,50", "10.5", "10"
-```
-
-#### Operações Disponíveis
-
-**Aritméticas:**
-```go
-m1, _ := vos.NewMoney(1000, vos.CurrencyBRL)  // R$ 10,00
-m2, _ := vos.NewMoney(500, vos.CurrencyBRL)   // R$ 5,00
-
-// Adição
-total, err := m1.Add(m2)  // R$ 15,00
-if err != nil {
-    // ErrCurrencyMismatch ou ErrOverflow
-}
-
-// Subtração
-diff, err := m1.Subtract(m2)  // R$ 5,00
-
-// Multiplicação
-doubled, err := m1.Multiply(2)  // R$ 20,00
-
-// Divisão (trunca)
-half, err := m1.Divide(2)  // R$ 5,00
-```
-
-**Comparações:**
-```go
-if m1.GreaterThan(m2) {
-    // m1 > m2
-}
-
-if m1.Equals(m2) {
-    // m1 == m2 (mesmo valor E mesma moeda)
-}
-
-if m1.LessThanOrEqual(m2) {
-    // m1 <= m2
-}
-```
-
-**Utilitários:**
-```go
-cents := money.Cents()         // 1050
-currency := money.Currency()   // CurrencyBRL
-floatVal := money.Float()      // 10.50 (apenas para display!)
-
-isZero := money.IsZero()       // false
-isPositive := money.IsPositive()  // true
-isNegative := money.IsNegative()  // false
-
-absolute := money.Abs()        // Valor absoluto
-negated := money.Negate()      // Inverte sinal
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-**Formato de armazenamento:** `"cents:currency"` (ex: `"1050:BRL"`)
-
-```go
-// INSERT
-money, _ := vos.NewMoney(1050, vos.CurrencyBRL)
-_, err := db.Exec(
-    "INSERT INTO transactions (id, amount) VALUES ($1, $2)",
-    1,
-    money,  // Salva como "1050:BRL"
-)
-
-// SELECT
-var amount vos.Money
-err := db.QueryRow("SELECT amount FROM transactions WHERE id = $1", 1).
-    Scan(&amount)
-// amount é reconstruído automaticamente
-```
-
-**Schema recomendado:**
-```sql
--- Opção 1: Coluna única (TEXT)
-CREATE TABLE transactions (
-    id SERIAL PRIMARY KEY,
-    amount TEXT NOT NULL  -- Formato: "cents:currency"
-);
-
--- Opção 2: Colunas separadas (mais comum)
-CREATE TABLE transactions (
-    id SERIAL PRIMARY KEY,
-    amount_cents BIGINT NOT NULL,
-    currency VARCHAR(3) NOT NULL
-);
-
--- Para opção 2, você precisa scanear manualmente:
-var cents int64
-var currency string
-db.QueryRow("SELECT amount_cents, currency FROM transactions WHERE id = $1", 1).
-    Scan(&cents, &currency)
-
-curr, _ := vos.NewCurrency(currency)
-money, _ := vos.NewMoney(cents, curr)
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-**Formato JSON:** `{"amount": "10.50", "currency": "BRL"}`
-
-```go
-type Transaction struct {
-    ID     int       `json:"id"`
-    Amount vos.Money `json:"amount"`
-}
-
-// Serialização
-tx := Transaction{
-    ID:     1,
-    Amount: money,
-}
-jsonData, _ := json.Marshal(tx)
-// {"id":1,"amount":{"amount":"10.50","currency":"BRL"}}
-
-// Deserialização (com validação)
-var tx Transaction
-err := json.Unmarshal(jsonData, &tx)
-if err != nil {
-    // Moeda inválida ou formato incorreto
-}
-```
-
-**Para APIs que precisam de formato simples:**
-```go
-type TransactionResponse struct {
-    ID       int    `json:"id"`
-    Amount   string `json:"amount"`    // "10.50"
-    Currency string `json:"currency"`  // "BRL"
-}
-
-func toResponse(tx Transaction) TransactionResponse {
-    return TransactionResponse{
-        ID:       tx.ID,
-        Amount:   fmt.Sprintf("%.2f", tx.Amount.Float()),
-        Currency: tx.Amount.Currency().String(),
-    }
-}
-```
-
-#### Boas Práticas
-- **SEMPRE** use `NewMoney(cents, currency)` para valores precisos
-- **NUNCA** use `Float()` para cálculos, apenas para exibição
-- Sempre trate erros de operações aritméticas (overflow, moedas diferentes)
-- Use constantes de Currency para evitar erros
-- Valide moedas em boundaries (API, input de usuário)
-
-#### Erros Comuns
-- ❌ Usar `float64` para dinheiro: `amount := 10.50`
-- ❌ Ignorar erros: `total, _ := m1.Add(m2)`
-- ❌ Somar moedas diferentes sem validação
-- ❌ Usar `Float()` em cálculos: `result := money.Float() * 1.1`
-- ✅ Usar centavos: `money, err := vos.NewMoney(1050, vos.CurrencyBRL)`
-- ✅ Validar operações: `if err != nil { return err }`
-
----
 
 ### Percentage
 
-#### Descrição
-Representa um **valor percentual** com precisão fixa de 3 casas decimais. Essencial para cálculos financeiros envolvendo juros, taxas, descontos e comissões.
-
-**Por que não usar `float64`?**
-- Precisão fixa garante cálculos exatos
-- Evita erros de arredondamento
-- Type safety: evita confundir porcentagem com outros valores numéricos
-- Semântica clara no domínio
-
-#### Estrutura Interna
 ```go
 type Percentage struct {
-    value int64  // Valor escalado por 1000 (3 casas decimais)
-}
-```
-
-**Características:**
-- Escala: 1000 (12.345% = 12345)
-- Precisão: 3 casas decimais
-- Imutável e thread-safe
-- Suporta valores negativos
-
-#### Criação / Construtor
-
-```go
-// RECOMENDADO: A partir de valor escalado (máxima precisão)
-pct, err := vos.NewPercentage(12345)  // 12.345%
-if err != nil {
-    log.Fatal(err)
+    value int64  // Internal: scaled by 1000
 }
 
-// A partir de float
-pct, err := vos.NewPercentageFromFloat(12.345)  // 12.345%
+// Constructors
+NewPercentage(value int64) (Percentage, error)  // value = 12345 means 12.345%
+NewPercentageFromFloat(value float64) (Percentage, error)
+NewPercentageFromString(value string) (Percentage, error)
 
-// A partir de string
-pct, err := vos.NewPercentageFromString("12.345")  // 12.345%
-// Aceita: "12.345", "12,345", "12.3%", "12"
+// Accessors
+ScaledValue() int64  // Returns raw scaled value
+Float() float64      // ⚠️ For display only
+
+// Operations
+Add(other Percentage) (Percentage, error)
+Subtract(other Percentage) (Percentage, error)
+Multiply(factor int64) (Percentage, error)
+Divide(divisor int64) (Percentage, error)
+Apply(money Money) (Money, error)  // Calculate percentage of Money
+
+// Comparisons (same as Money)
+
+// Utilities
+String() string  // "12.345%"
 ```
 
-#### Operações Disponíveis
-
-**Aritméticas:**
-```go
-p1, _ := vos.NewPercentageFromFloat(10.0)   // 10.000%
-p2, _ := vos.NewPercentageFromFloat(5.5)    // 5.500%
-
-// Adição
-total, err := p1.Add(p2)  // 15.500%
-
-// Subtração
-diff, err := p1.Subtract(p2)  // 4.500%
-
-// Multiplicação
-doubled, err := p1.Multiply(2)  // 20.000%
-
-// Divisão
-half, err := p1.Divide(2)  // 5.000%
-```
-
-**Aplicar a Money:**
-```go
-pct, _ := vos.NewPercentageFromFloat(10.0)      // 10%
-money, _ := vos.NewMoney(10000, vos.CurrencyBRL)  // R$ 100,00
-
-result, err := pct.Apply(money)  // R$ 10,00 (10% de R$ 100,00)
-```
-
-**Comparações:**
-```go
-if p1.GreaterThan(p2) { }
-if p1.Equals(p2) { }
-if p1.LessThanOrEqual(p2) { }
-```
-
-**Utilitários:**
-```go
-value := pct.Value()         // 12345 (escalado)
-floatVal := pct.Float()      // 12.345 (apenas para display!)
-
-isZero := pct.IsZero()       // false
-isPositive := pct.IsPositive()  // true
-isNegative := pct.IsNegative()  // false
-
-absolute := pct.Abs()        // Valor absoluto
-negated := pct.Negate()      // Inverte sinal
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `sql.Scanner` e método `ValuerValue()`:
-
-**Nota:** O método é `ValuerValue()` ao invés de `Value()` (que é usado para obter o valor escalado).
+### Currency
 
 ```go
-// INSERT - use ValuerValue()
-pct, _ := vos.NewPercentageFromFloat(12.345)
-_, err := db.Exec(
-    "INSERT INTO rates (id, interest_rate) VALUES ($1, $2)",
-    1,
-    pct,  // Salva como int64: 12345
+type Currency string
+
+// Supported Currencies
+const (
+    CurrencyBRL Currency = "BRL"  // Brazilian Real
+    CurrencyUSD Currency = "USD"  // US Dollar
+    CurrencyEUR Currency = "EUR"  // Euro
+    CurrencyGBP Currency = "GBP"  // British Pound
+    CurrencyJPY Currency = "JPY"  // Japanese Yen
+    // ... and more
 )
 
-// SELECT
-var rate vos.Percentage
-err := db.QueryRow("SELECT interest_rate FROM rates WHERE id = $1", 1).
-    Scan(&rate)
-// rate é reconstruído automaticamente
+// Constructor
+NewCurrency(code string) (Currency, error)
+
+// Methods
+IsValid() bool
+String() string
 ```
 
-**Schema recomendado:**
-```sql
-CREATE TABLE rates (
-    id SERIAL PRIMARY KEY,
-    interest_rate BIGINT NOT NULL  -- Armazena valor escalado por 1000
-);
-
--- Alternativa: NUMERIC se preferir float
-CREATE TABLE rates (
-    id SERIAL PRIMARY KEY,
-    interest_rate NUMERIC(10, 3) NOT NULL  -- Scanner suporta float64
-);
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-**Formato JSON:** String com 3 casas decimais: `"12.345"`
+### UUID
 
 ```go
-type InterestRate struct {
-    ID   int            `json:"id"`
-    Rate vos.Percentage `json:"rate"`
+type UUID struct {
+    Value uuid.UUID  // Uses google/uuid
 }
 
-// Serialização
-rate := InterestRate{
-    ID:   1,
-    Rate: pct,
-}
-jsonData, _ := json.Marshal(rate)
-// {"id":1,"rate":"12.345"}
+// Constructors
+NewUUID() (UUID, error)                      // Generates UUID v7
+NewUUIDFromString(value string) (UUID, error)
+NewFromUUID(value uuid.UUID) (UUID, error)
 
-// Deserialização (aceita string ou número)
-var rate InterestRate
-err := json.Unmarshal([]byte(`{"id":1,"rate":"12.345"}`), &rate)  // OK
-err = json.Unmarshal([]byte(`{"id":1,"rate":12.345}`), &rate)     // OK
+// Methods
+Validate() error
+String() string
+IsEmpty() bool
+UUID() uuid.UUID
+SafeUUID() *uuid.UUID  // Returns nil if empty
 ```
 
-#### Boas Práticas
-- Use `NewPercentage(value)` com valor escalado para máxima precisão
-- Sempre valide resultados de operações aritméticas
-- Use `Apply()` para calcular porcentagem de Money de forma segura
-- Evite usar `Float()` em cálculos
+### ULID
 
-#### Erros Comuns
-- ❌ Usar `float64`: `discount := 10.5`
-- ❌ Confundir valor escalado com valor real: `NewPercentage(10)` é 0.010%, não 10%
-- ❌ Usar `Float()` em cálculos: `result := pct.Float() * amount`
-- ✅ Usar construtor apropriado: `vos.NewPercentageFromFloat(10.0)` para 10%
-- ✅ Usar `Apply()`: `result, err := discount.Apply(price)`
+```go
+type ULID struct {
+    Value ulid.ULID  // Uses oklog/ulid
+}
+
+// Constructors
+NewULID() (ULID, error)                      // Generates new ULID
+NewULIDFromString(value string) (ULID, error)
+
+// Methods
+Validate() error
+String() string
+```
+
+### Nullable Types
+
+All nullable types share the same pattern:
+
+```go
+type NullableInt struct { value *int64 }
+
+// Constructors
+NewNullableInt(v int64) NullableInt
+NewNullableIntFromPointer(v *int64) NullableInt
+NewNullableIntFromSQL(n sql.NullInt64) NullableInt
+
+// Methods
+IsValid() bool
+Get() (int64, bool)  // Idiomatic Go: value, ok
+ValueOr(defaultValue int64) int64
+Ptr() *int64
+ToSQL() sql.NullInt64
+
+// Conversion
+String() string
+Int() int  // For NullableInt
+
+// Persistence
+Scan(value any) error
+Value() (driver.Value, error)
+MarshalJSON() ([]byte, error)
+UnmarshalJSON(data []byte) error
+```
+
+**Available nullable types:**
+- `NullableInt` (int64)
+- `NullableString`
+- `NullableBool`
+- `NullableFloat` (float64)
+- `NullableTime` (time.Time)
 
 ---
 
-### NullableInt
+## Examples
 
-#### Descrição
-Representa um **int64 que pode ser nulo**. Diferentemente de ponteiros (`*int64`), oferece uma API mais segura e expressiva para lidar com valores opcionais.
+### Money: Basic Operations
 
-**Por que não usar `*int64`?**
-- API mais expressiva e segura
-- Métodos utilitários (ValueOr, Get, etc.)
-- Integração nativa com JSON e SQL
-- Zero value seguro (representa nulo)
-- Evita nil pointer dereference
-
-#### Estrutura Interna
 ```go
-type NullableInt struct {
-    value *int64  // nil = valor nulo
+// Create money values
+price, _ := vos.NewMoney(1050, vos.CurrencyBRL)  // 10.50 BRL
+discount, _ := vos.NewMoney(200, vos.CurrencyBRL)  // 2.00 BRL
+
+// Arithmetic operations
+total, _ := price.Subtract(discount)  // 8.50 BRL
+doubled, _ := price.Multiply(2)       // 21.00 BRL
+half, _ := price.Divide(2)            // 5.25 BRL
+
+// Comparisons
+if price.GreaterThan(discount) {
+    fmt.Println("Price is higher than discount")
+}
+
+// Display
+fmt.Println(total.String())  // "8.50 BRL"
+fmt.Printf("%.2f", total.Float())  // 8.50
+```
+
+### Money: Currency Safety
+
+```go
+brl, _ := vos.NewMoney(1000, vos.CurrencyBRL)
+usd, _ := vos.NewMoney(1000, vos.CurrencyUSD)
+
+// ❌ This returns ErrCurrencyMismatch
+_, err := brl.Add(usd)
+if err != nil {
+    fmt.Println(err)  // "currency mismatch: cannot operate on different currencies"
+}
+
+// ✅ Only works with same currency
+discount, _ := vos.NewMoney(100, vos.CurrencyBRL)
+total, _ := brl.Subtract(discount)  // OK
+```
+
+### Money: Database Persistence
+
+```go
+type Order struct {
+    ID    string
+    Total vos.Money
+}
+
+// Saving
+order := Order{
+    ID:    "123",
+    Total: vos.NewMoney(5000, vos.CurrencyBRL),
+}
+
+// Money is stored as "5000:BRL" string in database
+db.Exec("INSERT INTO orders (id, total) VALUES ($1, $2)", order.ID, order.Total)
+
+// Loading
+var order Order
+db.QueryRow("SELECT id, total FROM orders WHERE id = $1", "123").Scan(&order.ID, &order.Total)
+
+// ✅ order.Total is correctly parsed back to Money{cents: 5000, currency: BRL}
+```
+
+### Percentage: Calculations
+
+```go
+// Create percentage
+tax, _ := vos.NewPercentageFromFloat(10.0)  // 10%
+discount, _ := vos.NewPercentageFromFloat(15.5)  // 15.5%
+
+// Apply to money
+price, _ := vos.NewMoney(10000, vos.CurrencyBRL)  // 100.00 BRL
+taxAmount, _ := tax.Apply(price)  // 10.00 BRL
+discountAmount, _ := discount.Apply(price)  // 15.50 BRL
+
+finalPrice, _ := price.Add(taxAmount)
+finalPrice, _ = finalPrice.Subtract(discountAmount)
+// finalPrice = 94.50 BRL
+
+// Percentage arithmetic
+total, _ := tax.Add(discount)  // 25.5%
+fmt.Println(total.String())  // "25.500%"
+```
+
+### Percentage: Precision
+
+```go
+// ✅ No precision loss with scaled integers
+p1, _ := vos.NewPercentage(12345)  // 12.345%
+p2, _ := vos.NewPercentage(1)      // 0.001%
+sum, _ := p1.Add(p2)  // Exactly 12.346%
+
+// ⚠️ Be careful with float constructor (precision loss)
+p3, _ := vos.NewPercentageFromFloat(12.345)  // May have rounding
+// Prefer: NewPercentage(12345) for exact values
+```
+
+### UUID and ULID
+
+```go
+// UUID v7 (timestamp-ordered)
+userID, _ := vos.NewUUID()
+fmt.Println(userID.String())  // "018d5e8b-3a3e-7890-abcd-1234567890ab"
+
+// Parse existing UUID
+id, _ := vos.NewUUIDFromString("018d5e8b-3a3e-7890-abcd-1234567890ab")
+if !id.IsEmpty() {
+    fmt.Println("Valid UUID")
+}
+
+// ULID (lexicographically sortable, timestamp-based)
+orderID, _ := vos.NewULID()
+fmt.Println(orderID.String())  // "01H4S7J9K0ABCDEFGHIJKLMNOP"
+
+// ULID from string
+ulid, _ := vos.NewULIDFromString("01H4S7J9K0ABCDEFGHIJKLMNOP")
+```
+
+### Nullable Types: Three-State Logic
+
+```go
+// Three states: null, false, true (for bool)
+unknown := vos.NullableBool{}      // null
+yes := vos.NewNullableBool(true)   // true
+no := vos.NewNullableBool(false)   // false
+
+// Check validity
+if unknown.IsValid() {
+    // Never executes, unknown is null
+}
+
+// Get with ok idiom
+if value, ok := yes.Get(); ok {
+    fmt.Println("Value is", value)  // "Value is true"
+}
+
+// Default value if null
+value := unknown.ValueOr(false)  // Returns false
+
+// Use cases
+if yes.IsTrue() {
+    fmt.Println("Definitely true")
+}
+
+if no.IsFalse() {
+    fmt.Println("Definitely false")
 }
 ```
 
-**Características:**
-- Zero value é seguro: representa valor nulo
-- Imutável
-- Nil-safe
-
-#### Criação / Construtor
+### Nullable Types: Database Integration
 
 ```go
-// Valor válido
-num := vos.NewNullableInt(42)
-
-// A partir de ponteiro
-var ptr *int64 = nil
-num := vos.NewNullableIntFromPointer(ptr)  // Nulo
-
-value := int64(42)
-num := vos.NewNullableIntFromPointer(&value)  // Válido
-
-// A partir de sql.NullInt64
-sqlInt := sql.NullInt64{Int64: 42, Valid: true}
-num := vos.NewNullableIntFromSQL(sqlInt)
-
-// Valor nulo (zero value)
-var num vos.NullableInt  // Nulo
-```
-
-#### Operações Disponíveis
-
-```go
-// Verificar validade
-if num.IsValid() {
-    // Tem valor
+type User struct {
+    ID    vos.UUID
+    Name  vos.NullableString
+    Age   vos.NullableInt
+    Email vos.NullableString
 }
 
-// Obter valor (idiomático em Go)
-value, ok := num.Get()
-if ok {
-    fmt.Println(value)  // 42
+// Insert with null values
+user := User{
+    ID:    vos.NewUUID(),
+    Name:  vos.NewNullableString("John Doe"),
+    Age:   vos.NullableInt{},  // NULL in database
+    Email: vos.NewNullableString("john@example.com"),
 }
 
-// Valor ou padrão
-value := num.ValueOr(0)  // Retorna 0 se nulo
+db.Exec(`INSERT INTO users (id, name, age, email) VALUES ($1, $2, $3, $4)`,
+    user.ID, user.Name, user.Age, user.Email)
 
-// Obter ponteiro
-ptr := num.Ptr()  // *int64 ou nil
+// Query handles NULL correctly
+var user User
+row := db.QueryRow("SELECT id, name, age, email FROM users WHERE id = $1", id)
+row.Scan(&user.ID, &user.Name, &user.Age, &user.Email)
 
-// Conversões
-sqlInt := num.ToSQL()       // sql.NullInt64
-intVal := num.Int()         // int (0 se nulo)
-intVal := num.IntOr(99)     // int (99 se nulo)
-str := num.String()         // string ("" se nulo)
-str := num.StringOr("N/A")  // string ("N/A" se nulo)
-```
-
-**Funções utilitárias globais:**
-```go
-// Conversão de/para ponteiro
-nullable := vos.IntToNullable(&value)
-ptr := vos.NullableToInt(nullable)
-
-// Conversão de/para SQL
-nullable := vos.SQLIntToNullable(sqlInt)
-sqlInt := vos.NullableToSQLInt(nullable)
-
-// String segura de ponteiro
-str := vos.SafeIntToString(&value)        // "" se nil
-str := vos.SafeIntToStringOr(&value, "0") // "0" se nil
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-age := vos.NewNullableInt(25)
-_, err := db.Exec(
-    "INSERT INTO users (id, age) VALUES ($1, $2)",
-    1,
-    age,  // Salva 25
-)
-
-// INSERT com valor nulo
-var age vos.NullableInt  // Nulo
-_, err := db.Exec(
-    "INSERT INTO users (id, age) VALUES ($1, $2)",
-    2,
-    age,  // Salva NULL
-)
-
-// SELECT
-var age vos.NullableInt
-err := db.QueryRow("SELECT age FROM users WHERE id = $1", 1).
-    Scan(&age)
-
-if age.IsValid() {
-    fmt.Printf("Age: %d\n", age.Int())
-} else {
+// Check if age was NULL
+if !user.Age.IsValid() {
     fmt.Println("Age not provided")
-}
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-```go
-type User struct {
-    ID   int              `json:"id"`
-    Age  vos.NullableInt  `json:"age"`
-}
-
-// Valor válido
-user := User{
-    ID:  1,
-    Age: vos.NewNullableInt(25),
-}
-json.Marshal(user)  // {"id":1,"age":25}
-
-// Valor nulo
-user = User{
-    ID:  2,
-    Age: vos.NullableInt{},  // Nulo
-}
-json.Marshal(user)  // {"id":2,"age":null}
-
-// Deserialização
-json.Unmarshal([]byte(`{"id":1,"age":25}`), &user)    // age válido
-json.Unmarshal([]byte(`{"id":2,"age":null}`), &user)  // age nulo
-```
-
-#### Boas Práticas
-- Use `Get()` quando precisar distinguir entre 0 e nulo
-- Use `ValueOr()` quando tiver um valor padrão razoável
-- Prefira NullableInt a `*int64` em structs de domínio
-- Sempre verifique `IsValid()` antes de usar o valor
-
-#### Erros Comuns
-- ❌ Não verificar validade: `value := num.Int()` (retorna 0 se nulo!)
-- ❌ Usar ponteiros no domínio: `Age *int64`
-- ✅ Usar `Get()`: `if value, ok := num.Get(); ok { }`
-- ✅ Usar Value Object: `Age vos.NullableInt`
-
----
-
-### NullableString
-
-#### Descrição
-Representa uma **string que pode ser nula**. Oferece API rica para manipulação de strings opcionais com segurança e expressividade.
-
-**Por que não usar `*string`?**
-- API rica com métodos utilitários
-- Distinção clara entre string vazia e nula
-- Integração nativa com JSON e SQL
-- Métodos de string convenientes (ToUpper, TrimSpace, etc.)
-
-#### Estrutura Interna
-```go
-type NullableString struct {
-    value *string  // nil = valor nulo
-}
-```
-
-#### Criação / Construtor
-
-```go
-// Valor válido
-str := vos.NewNullableString("Hello")
-
-// A partir de ponteiro
-var ptr *string = nil
-str := vos.NewNullableStringFromPointer(ptr)  // Nulo
-
-// A partir de sql.NullString
-sqlStr := sql.NullString{String: "Hello", Valid: true}
-str := vos.NewNullableStringFromSQL(sqlStr)
-
-// Valor nulo (zero value)
-var str vos.NullableString  // Nulo
-```
-
-#### Operações Disponíveis
-
-```go
-// Verificar validade
-if str.IsValid() { }
-
-// Verificar se é vazio OU nulo
-if str.IsEmpty() { }  // true se nulo ou ""
-
-// Obter valor
-value, ok := str.Get()  // ("Hello", true) ou ("", false)
-value := str.ValueOr("default")
-value := str.String()   // "" se nulo
-value := str.StringOr("N/A")
-
-// Obter ponteiro
-ptr := str.Ptr()  // *string ou nil
-
-// Operações de string
-upper := str.ToUpper()      // "HELLO" ou ""
-lower := str.ToLower()      // "hello" ou ""
-trimmed := str.TrimSpace()  // Remove espaços ou ""
-length := str.Len()         // 5 ou 0
-
-// Verificações
-hasSubstr := str.Contains("ell")  // true ou false
-
-// Conversões
-sqlStr := str.ToSQL()  // sql.NullString
-```
-
-**Funções utilitárias globais:**
-```go
-nullable := vos.StringToNullable(&value)
-ptr := vos.NullableToString(nullable)
-
-nullable := vos.SQLStringToNullable(sqlStr)
-sqlStr := vos.NullableToSQLString(nullable)
-
-str := vos.SafeStringValue(&value)           // "" se nil
-str := vos.SafeStringValueOr(&value, "N/A")  // "N/A" se nil
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-name := vos.NewNullableString("John Doe")
-_, err := db.Exec(
-    "INSERT INTO users (id, middle_name) VALUES ($1, $2)",
-    1,
-    name,
-)
-
-// INSERT nulo
-var middleName vos.NullableString
-_, err := db.Exec(
-    "INSERT INTO users (id, middle_name) VALUES ($1, $2)",
-    2,
-    middleName,  // Salva NULL
-)
-
-// SELECT
-var middleName vos.NullableString
-err := db.QueryRow("SELECT middle_name FROM users WHERE id = $1", 1).
-    Scan(&middleName)
-
-fmt.Println(middleName.StringOr("(not provided)"))
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-```go
-type User struct {
-    ID         int                 `json:"id"`
-    MiddleName vos.NullableString  `json:"middle_name"`
-}
-
-// Valor válido
-user := User{
-    ID:         1,
-    MiddleName: vos.NewNullableString("Robert"),
-}
-json.Marshal(user)  // {"id":1,"middle_name":"Robert"}
-
-// Valor nulo
-user = User{
-    ID:         2,
-    MiddleName: vos.NullableString{},
-}
-json.Marshal(user)  // {"id":2,"middle_name":null}
-
-// Deserialização
-json.Unmarshal([]byte(`{"id":1,"middle_name":"Robert"}`), &user)  // válido
-json.Unmarshal([]byte(`{"id":2,"middle_name":null}`), &user)      // nulo
-```
-
-#### Boas Práticas
-- Use `IsEmpty()` quando quiser tratar nulo e string vazia da mesma forma
-- Use `IsValid()` quando precisar distinguir entre nulo e vazio
-- Use métodos utilitários (ToUpper, TrimSpace) para evitar nil pointer
-- Prefira NullableString a `*string` em structs de domínio
-
-#### Erros Comuns
-- ❌ Confundir nulo com string vazia
-- ❌ Não verificar validade antes de usar o valor
-- ❌ Usar `*string` no domínio
-- ✅ Usar `IsEmpty()` quando apropriado
-- ✅ Usar `Get()` ou `StringOr()` para obter valor
-
----
-
-### NullableBool
-
-#### Descrição
-Representa um **bool que pode ser nulo**. Essencial para campos opcionais booleanos onde é necessário distinguir entre `true`, `false` e "não definido".
-
-**Por que não usar `*bool`?**
-- Distinção clara entre false e nulo
-- API expressiva (IsTrue, IsFalse)
-- Integração nativa com JSON e SQL
-- Semântica mais clara
-
-#### Estrutura Interna
-```go
-type NullableBool struct {
-    value *bool  // nil = valor nulo
-}
-```
-
-#### Criação / Construtor
-
-```go
-// Valor válido
-active := vos.NewNullableBool(true)
-inactive := vos.NewNullableBool(false)
-
-// A partir de ponteiro
-var ptr *bool = nil
-b := vos.NewNullableBoolFromPointer(ptr)  // Nulo
-
-// A partir de sql.NullBool
-sqlBool := sql.NullBool{Bool: true, Valid: true}
-b := vos.NewNullableBoolFromSQL(sqlBool)
-
-// Valor nulo
-var b vos.NullableBool  // Nulo
-```
-
-#### Operações Disponíveis
-
-```go
-// Verificar validade
-if b.IsValid() { }
-
-// Obter valor
-value, ok := b.Get()  // (true, true) ou (false, false)
-value := b.ValueOr(false)
-value := b.Bool()  // false se nulo (cuidado!)
-
-// Verificações específicas
-if b.IsTrue() {      // true se válido E true
-    // Ativo
-}
-
-if b.IsFalse() {     // true se válido E false
-    // Inativo
-}
-
-// Obter ponteiro
-ptr := b.Ptr()  // *bool ou nil
-
-// Conversões
-sqlBool := b.ToSQL()        // sql.NullBool
-str := b.String()           // "true", "false" ou ""
-str := b.StringOr("N/A")    // "true", "false" ou "N/A"
-```
-
-**Funções utilitárias globais:**
-```go
-nullable := vos.BoolToNullable(&value)
-ptr := vos.NullableToBool(nullable)
-
-nullable := vos.SQLBoolToNullable(sqlBool)
-sqlBool := vos.NullableToSQLBool(nullable)
-
-str := vos.SafeBoolToString(&value)           // "" se nil
-str := vos.SafeBoolToStringOr(&value, "N/A")  // "N/A" se nil
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-isVerified := vos.NewNullableBool(true)
-_, err := db.Exec(
-    "INSERT INTO users (id, is_verified) VALUES ($1, $2)",
-    1,
-    isVerified,
-)
-
-// INSERT nulo
-var emailVerified vos.NullableBool
-_, err := db.Exec(
-    "INSERT INTO users (id, email_verified) VALUES ($1, $2)",
-    2,
-    emailVerified,  // Salva NULL
-)
-
-// SELECT
-var isVerified vos.NullableBool
-err := db.QueryRow("SELECT is_verified FROM users WHERE id = $1", 1).
-    Scan(&isVerified)
-
-if isVerified.IsTrue() {
-    fmt.Println("User is verified")
-} else if isVerified.IsFalse() {
-    fmt.Println("User is not verified")
 } else {
-    fmt.Println("Verification status unknown")
+    fmt.Printf("Age: %d\n", user.Age.ValueOr(0))
 }
 ```
 
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
+### Nullable Types: JSON Serialization
 
 ```go
-type User struct {
-    ID         int               `json:"id"`
-    IsVerified vos.NullableBool  `json:"is_verified"`
+type UserProfile struct {
+    Name  vos.NullableString `json:"name"`
+    Age   vos.NullableInt    `json:"age"`
+    Email vos.NullableString `json:"email"`
 }
 
-// Verdadeiro
-user := User{
-    ID:         1,
-    IsVerified: vos.NewNullableBool(true),
+// Serialize
+profile := UserProfile{
+    Name:  vos.NewNullableString("John"),
+    Age:   vos.NullableInt{},  // Will be null in JSON
+    Email: vos.NewNullableString("john@example.com"),
 }
-json.Marshal(user)  // {"id":1,"is_verified":true}
 
-// Falso
-user = User{
-    ID:         2,
-    IsVerified: vos.NewNullableBool(false),
-}
-json.Marshal(user)  // {"id":2,"is_verified":false}
+data, _ := json.Marshal(profile)
+// {"name":"John","age":null,"email":"john@example.com"}
 
-// Nulo
-user = User{
-    ID:         3,
-    IsVerified: vos.NullableBool{},
-}
-json.Marshal(user)  // {"id":3,"is_verified":null}
+// Deserialize
+var loaded UserProfile
+json.Unmarshal(data, &loaded)
 
-// Deserialização
-json.Unmarshal([]byte(`{"id":1,"is_verified":true}`), &user)   // true
-json.Unmarshal([]byte(`{"id":2,"is_verified":false}`), &user)  // false
-json.Unmarshal([]byte(`{"id":3,"is_verified":null}`), &user)   // nulo
+// loaded.Age.IsValid() returns false
 ```
-
-#### Boas Práticas
-- Use `IsTrue()` e `IsFalse()` ao invés de `Bool()` para evitar confusão
-- Use `Get()` quando precisar de lógica ternária (true/false/null)
-- Sempre documente o significado de null no seu domínio
-- Prefira NullableBool a `*bool` em structs de domínio
-
-#### Erros Comuns
-- ❌ Usar `Bool()` e assumir que false significa "não definido"
-- ❌ Não distinguir entre false e null
-- ❌ Usar `*bool` no domínio
-- ✅ Usar `IsTrue()` / `IsFalse()`: claros e explícitos
-- ✅ Usar `Get()` quando precisar de 3 estados
 
 ---
 
-### NullableFloat
+## Best Practices
 
-#### Descrição
-Representa um **float64 que pode ser nulo**. Útil para valores numéricos opcionais não-financeiros (medições, scores, coordenadas, etc.).
-
-**Por que não usar `*float64`?**
-- API rica com métodos utilitários
-- Métodos matemáticos convenientes (Abs, Round, etc.)
-- Verificações de validez (IsNaN, IsInf)
-- Integração nativa com JSON e SQL
-
-**Nota:** Para valores financeiros, use `Money` ao invés de NullableFloat.
-
-#### Estrutura Interna
-```go
-type NullableFloat struct {
-    value *float64  // nil = valor nulo
-}
-```
-
-#### Criação / Construtor
+### 1. Use Scaled Integer Constructors for Precision
 
 ```go
-// Valor válido
-rating := vos.NewNullableFloat(4.5)
+// ✅ Good: Exact precision
+price, _ := vos.NewMoney(1099, vos.CurrencyBRL)  // Exactly 10.99 BRL
+percent, _ := vos.NewPercentage(10500)  // Exactly 10.500%
 
-// A partir de ponteiro
-var ptr *float64 = nil
-num := vos.NewNullableFloatFromPointer(ptr)  // Nulo
-
-// A partir de sql.NullFloat64
-sqlFloat := sql.NullFloat64{Float64: 4.5, Valid: true}
-num := vos.NewNullableFloatFromSQL(sqlFloat)
-
-// Valor nulo
-var num vos.NullableFloat  // Nulo
+// ⚠️ Acceptable: Float constructor (minor rounding possible)
+price, _ := vos.NewMoneyFromFloat(10.99, vos.CurrencyBRL)
+percent, _ := vos.NewPercentageFromFloat(10.5)
 ```
 
-#### Operações Disponíveis
+### 2. Always Check Errors
 
 ```go
-// Verificar validade
-if num.IsValid() { }
-
-// Obter valor
-value, ok := num.Get()  // (4.5, true) ou (0.0, false)
-value := num.ValueOr(0.0)
-value := num.Float64()       // 0 se nulo
-value := num.Float64Or(1.0)  // 1.0 se nulo
-
-// Obter ponteiro
-ptr := num.Ptr()  // *float64 ou nil
-
-// Formatação
-str := num.String()             // "" se nulo
-str := num.StringOr("N/A")      // "N/A" se nulo
-str := num.Format(2)            // "4.50" ou ""
-str := num.FormatOr(2, "N/A")   // "4.50" ou "N/A"
-
-// Verificações
-if num.IsZero() { }      // true se válido e == 0
-if num.IsPositive() { }  // true se válido e > 0
-if num.IsNegative() { }  // true se válido e < 0
-if num.IsNaN() { }       // true se válido e NaN
-if num.IsInf() { }       // true se válido e infinito
-
-// Operações matemáticas
-abs := num.Abs()          // Valor absoluto (0 se nulo)
-rounded := num.Round(2)   // Arredonda para 2 casas (0 se nulo)
-
-// Formatação especial
-currency := num.FormatCurrency("R$")  // "R$4.50" ou ""
-percent := num.FormatPercentage()     // "4.50%" ou ""
-
-// Conversões
-sqlFloat := num.ToSQL()  // sql.NullFloat64
-```
-
-**Funções utilitárias globais:**
-```go
-nullable := vos.FloatToNullable(&value)
-ptr := vos.NullableToFloat(nullable)
-
-nullable := vos.SQLFloatToNullable(sqlFloat)
-sqlFloat := vos.NullableToSQLFloat(nullable)
-
-str := vos.SafeFloatToString(&value, 2)            // "" se nil
-str := vos.SafeFloatToStringOr(&value, 2, "N/A")   // "N/A" se nil
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-rating := vos.NewNullableFloat(4.5)
-_, err := db.Exec(
-    "INSERT INTO products (id, rating) VALUES ($1, $2)",
-    1,
-    rating,
-)
-
-// INSERT nulo
-var discount vos.NullableFloat
-_, err := db.Exec(
-    "INSERT INTO products (id, discount) VALUES ($1, $2)",
-    2,
-    discount,  // Salva NULL
-)
-
-// SELECT
-var rating vos.NullableFloat
-err := db.QueryRow("SELECT rating FROM products WHERE id = $1", 1).
-    Scan(&rating)
-
-fmt.Printf("Rating: %s\n", rating.Format(1))
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-```go
-type Product struct {
-    ID     int                `json:"id"`
-    Rating vos.NullableFloat  `json:"rating"`
-}
-
-// Valor válido
-product := Product{
-    ID:     1,
-    Rating: vos.NewNullableFloat(4.5),
-}
-json.Marshal(product)  // {"id":1,"rating":4.5}
-
-// Valor nulo
-product = Product{
-    ID:     2,
-    Rating: vos.NullableFloat{},
-}
-json.Marshal(product)  // {"id":2,"rating":null}
-
-// Deserialização
-json.Unmarshal([]byte(`{"id":1,"rating":4.5}`), &product)    // válido
-json.Unmarshal([]byte(`{"id":2,"rating":null}`), &product)   // nulo
-```
-
-#### Boas Práticas
-- Use para valores opcionais não-financeiros
-- Sempre verifique `IsNaN()` e `IsInf()` se processar valores de fontes não confiáveis
-- Use `Get()` quando precisar distinguir entre 0.0 e nulo
-- Use métodos de formatação ao invés de manipular float diretamente
-
-#### Erros Comuns
-- ❌ Usar para valores financeiros (use `Money`)
-- ❌ Não verificar `IsNaN()` e `IsInf()`
-- ❌ Usar `Float64()` sem verificar validade
-- ✅ Usar `Money` para finanças
-- ✅ Usar `Get()` ou `ValueOr()` para obter valores
-
----
-
-### NullableTime
-
-#### Descrição
-Representa um **time.Time que pode ser nulo**. Essencial para campos de data/hora opcionais como "deleted_at", "last_login", etc.
-
-**Por que não usar `*time.Time`?**
-- API expressiva para formatação
-- Integração nativa com JSON (RFC3339) e SQL
-- Zero value seguro
-- Métodos de formatação convenientes
-
-#### Estrutura Interna
-```go
-type NullableTime struct {
-    time *time.Time  // nil = valor nulo
-}
-```
-
-#### Criação / Construtor
-
-```go
-// Valor válido
-now := vos.NewNullableTime(time.Now())
-
-// A partir de ponteiro
-var ptr *time.Time = nil
-t := vos.NewNullableTimeFromPointer(ptr)  // Nulo
-
-// A partir de sql.NullTime
-sqlTime := sql.NullTime{Time: time.Now(), Valid: true}
-t := vos.NewNullableTimeFromSQL(sqlTime)
-
-// Valor nulo
-var t vos.NullableTime  // Nulo
-```
-
-#### Operações Disponíveis
-
-```go
-// Verificar validade
-if t.IsValid() { }
-
-// Obter valor
-value, ok := t.Get()  // (time.Time, true) ou (time.Time{}, false)
-value := t.ValueOr(time.Now())
-
-// Obter ponteiro
-ptr := t.Ptr()  // *time.Time ou nil
-
-// Formatação
-str := t.Format(time.RFC3339)              // "" se nulo
-str := t.FormatOr(time.RFC3339, "N/A")     // "N/A" se nulo
-str := t.RFC3339()                         // "" se nulo
-
-// Exemplos de formatação
-str := t.Format("2006-01-02")              // "2024-01-15"
-str := t.Format("02/01/2006 15:04:05")     // "15/01/2024 14:30:00"
-
-// Conversões
-sqlTime := t.ToSQL()  // sql.NullTime
-```
-
-**Funções utilitárias globais:**
-```go
-nullable := vos.TimeToNullable(&value)
-ptr := vos.NullableToTime(nullable)
-
-nullable := vos.SQLTimeToNullable(sqlTime)
-sqlTime := vos.NullableToSQL(nullable)
-
-str := vos.SafeFormatTime(&value, time.RFC3339)            // "" se nil
-str := vos.SafeFormatTimeOr(&value, time.RFC3339, "N/A")   // "N/A" se nil
-```
-
-#### Uso com Banco de Dados
-
-**Implementa** `driver.Valuer` e `sql.Scanner`:
-
-```go
-// INSERT
-createdAt := vos.NewNullableTime(time.Now())
-_, err := db.Exec(
-    "INSERT INTO posts (id, created_at) VALUES ($1, $2)",
-    1,
-    createdAt,
-)
-
-// INSERT nulo (ex: deleted_at)
-var deletedAt vos.NullableTime
-_, err := db.Exec(
-    "INSERT INTO posts (id, deleted_at) VALUES ($1, $2)",
-    2,
-    deletedAt,  // Salva NULL
-)
-
-// SELECT
-var lastLogin vos.NullableTime
-err := db.QueryRow("SELECT last_login FROM users WHERE id = $1", 1).
-    Scan(&lastLogin)
-
-if lastLogin.IsValid() {
-    fmt.Printf("Last login: %s\n", lastLogin.Format("2006-01-02 15:04"))
-} else {
-    fmt.Println("Never logged in")
-}
-```
-
-**Schema recomendado:**
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    last_login TIMESTAMP NULL,
-    deleted_at TIMESTAMP NULL
-);
-```
-
-#### Uso em APIs (Input / Output)
-
-**Implementa** `json.Marshaler` e `json.Unmarshaler`:
-
-**Formato JSON:** RFC3339 (ISO 8601)
-
-```go
-type Post struct {
-    ID        int               `json:"id"`
-    CreatedAt vos.NullableTime  `json:"created_at"`
-    DeletedAt vos.NullableTime  `json:"deleted_at,omitempty"`
-}
-
-// Valor válido
-post := Post{
-    ID:        1,
-    CreatedAt: vos.NewNullableTime(time.Now()),
-}
-json.Marshal(post)
-// {"id":1,"created_at":"2024-01-15T14:30:00Z","deleted_at":null}
-
-// Valor nulo (com omitempty)
-post = Post{
-    ID:        2,
-    CreatedAt: vos.NewNullableTime(time.Now()),
-    DeletedAt: vos.NullableTime{},  // Será omitido no JSON
-}
-json.Marshal(post)
-// {"id":2,"created_at":"2024-01-15T14:30:00Z"}
-
-// Deserialização
-json.Unmarshal([]byte(`{"id":1,"created_at":"2024-01-15T14:30:00Z"}`), &post)
-json.Unmarshal([]byte(`{"id":2,"deleted_at":null}`), &post)
-```
-
-#### Boas Práticas
-- Use para timestamps opcionais (deleted_at, last_login, etc.)
-- Sempre use RFC3339 em APIs para compatibilidade internacional
-- Use `omitempty` em JSON para timestamps nulos
-- Armazene timestamps em UTC no banco de dados
-
-#### Erros Comuns
-- ❌ Não usar UTC ao armazenar no banco
-- ❌ Usar formatos de data não padronizados em APIs
-- ❌ Usar `*time.Time` no domínio
-- ✅ Sempre converter para UTC: `time.Now().UTC()`
-- ✅ Usar RFC3339 em APIs
-- ✅ Usar NullableTime para campos opcionais
-
----
-
-## Boas Práticas Gerais
-
-### 1. Sempre Use Construtores
-```go
-// ❌ ERRADO: Instanciação direta
-money := vos.Money{cents: 1000, currency: vos.CurrencyBRL}
-
-// ✅ CORRETO: Usar construtor
-money, err := vos.NewMoney(1000, vos.CurrencyBRL)
-if err != nil {
-    return err
-}
-```
-
-### 2. Nunca Ignore Erros
-```go
-// ❌ ERRADO
-money, _ := vos.NewMoney(cents, currency)
-
-// ✅ CORRETO
+// ✅ Good: Handle errors
 money, err := vos.NewMoney(cents, currency)
 if err != nil {
-    return fmt.Errorf("failed to create money: %w", err)
-}
-```
-
-### 3. Use Value Objects nas Camadas de Domínio
-```go
-// ❌ ERRADO: Tipos primitivos no domínio
-type Order struct {
-    ID          string
-    TotalAmount float64
-    Currency    string
+    return fmt.Errorf("invalid money: %w", err)
 }
 
-// ✅ CORRETO: Value Objects
-type Order struct {
-    ID          vos.UUID
-    TotalAmount vos.Money
-}
+// ❌ Bad: Ignoring errors can cause panics or bugs
+money, _ := vos.NewMoney(cents, currency)
 ```
 
-### 4. Converta Apenas nos Boundaries
+### 3. Don't Use Float() for Calculations
+
 ```go
-// API Handler (boundary)
-func CreateOrder(w http.ResponseWriter, r *http.Request) {
-    var req struct {
-        Amount   string `json:"amount"`
-        Currency string `json:"currency"`
-    }
-    json.NewDecoder(r.Body).Decode(&req)
+price, _ := vos.NewMoney(1050, vos.CurrencyBRL)
 
-    // Converter para Value Objects no boundary
-    currency, err := vos.NewCurrency(req.Currency)
-    if err != nil {
-        http.Error(w, "invalid currency", http.StatusBadRequest)
-        return
-    }
+// ❌ Bad: Float arithmetic loses precision
+floatValue := price.Float()  // 10.50
+result := floatValue * 0.1   // May be 1.0499999999
+finalMoney, _ := vos.NewMoneyFromFloat(result, vos.CurrencyBRL)
 
-    money, err := vos.NewMoneyFromString(req.Amount, currency)
-    if err != nil {
-        http.Error(w, "invalid amount", http.StatusBadRequest)
-        return
-    }
-
-    // Passar Value Objects para o domínio
-    order, err := domain.CreateOrder(money)
-    // ...
-}
+// ✅ Good: Use Money operations
+percentage, _ := vos.NewPercentageFromFloat(10.0)
+result, _ := percentage.Apply(price)  // Precise calculation
 ```
 
-### 5. Imutabilidade: Crie Novos Objetos
+### 4. Nullable: Use Get() Idiom
+
 ```go
-// Operações retornam NOVOS objetos
-original, _ := vos.NewMoney(1000, vos.CurrencyBRL)
-tax, _ := vos.NewMoney(100, vos.CurrencyBRL)
+age := vos.NewNullableInt(30)
 
-total, err := original.Add(tax)  // original NÃO é modificado
-```
-
-### 6. Use Métodos de Comparação
-```go
-// ❌ ERRADO: Comparação direta de structs
-if money1 == money2 { }  // Não compila para a maioria dos VOs
-
-// ✅ CORRETO: Usar métodos
-if money1.Equals(money2) { }
-if money1.GreaterThan(money2) { }
-```
-
-### 7. Prefira Precisão em Valores Financeiros
-```go
-// ❌ EVITE: Float para criação
-money, _ := vos.NewMoneyFromFloat(10.50, vos.CurrencyBRL)
-
-// ✅ MELHOR: Centavos para máxima precisão
-money, _ := vos.NewMoney(1050, vos.CurrencyBRL)
-```
-
-### 8. Valide Entrada de Usuário nos Boundaries
-```go
-// No handler/controller
-func CreateProduct(req CreateProductRequest) error {
-    // Validar ANTES de criar Value Objects
-    if req.Price <= 0 {
-        return errors.New("price must be positive")
-    }
-
-    price, err := vos.NewMoney(req.Price, vos.CurrencyBRL)
-    if err != nil {
-        return fmt.Errorf("invalid price: %w", err)
-    }
-
-    // Usar no domínio
-    product := domain.NewProduct(price)
-    return productRepo.Save(product)
-}
-```
-
----
-
-## Erros Comuns
-
-### 1. Usar Tipos Primitivos no Domínio
-```go
-// ❌ ANTI-PATTERN
-type Product struct {
-    Price    float64
-    Currency string
-}
-
-// ✅ CORRETO
-type Product struct {
-    Price vos.Money
-}
-```
-
-### 2. Ignorar Erros de Validação
-```go
-// ❌ PERIGOSO
-uuid, _ := vos.NewUUIDFromString(input)  // Pode falhar!
-
-// ✅ SEGURO
-uuid, err := vos.NewUUIDFromString(input)
-if err != nil {
-    return fmt.Errorf("invalid UUID: %w", err)
-}
-```
-
-### 3. Quebrar Imutabilidade
-```go
-// ❌ ERRADO: Tentar modificar (não compila)
-money.cents = 2000  // Campo privado!
-
-// ✅ CORRETO: Criar novo objeto
-newMoney, err := vos.NewMoney(2000, money.Currency())
-```
-
-### 4. Usar Float para Cálculos Financeiros
-```go
-// ❌ PERIGOSO: Perda de precisão
-price := money.Float() * 1.1  // NUNCA FAÇA ISSO!
-
-// ✅ CORRETO: Usar operações do Value Object
-tax, _ := vos.NewPercentageFromFloat(10.0)
-priceWithTax, err := tax.Apply(money)
-```
-
-### 5. Misturar Moedas sem Validação
-```go
-// ❌ PERIGOSO
-total := brl.Add(usd)  // Retorna erro!
-
-// ✅ CORRETO: Sempre tratar erro
-total, err := brl.Add(usd)
-if err != nil {
-    return fmt.Errorf("cannot add different currencies: %w", err)
-}
-```
-
-### 6. Não Distinguir Null de Zero/Empty
-```go
-// ❌ CONFUSO
-age := nullableInt.Int()  // Retorna 0 se nulo OU se realmente for 0
-
-// ✅ CLARO
-if age, ok := nullableInt.Get(); ok {
-    fmt.Printf("Age: %d\n", age)
+// ✅ Good: Idiomatic Go
+if value, ok := age.Get(); ok {
+    fmt.Printf("Age: %d\n", value)
 } else {
     fmt.Println("Age not provided")
 }
+
+// ⚠️ Acceptable but less clear
+if age.IsValid() {
+    value := age.ValueOr(0)
+    fmt.Printf("Age: %d\n", value)
+}
 ```
 
-### 7. Usar Construtores Sem Validação
-```go
-// ❌ PERIGOSO: Criar diretamente
-money := vos.Money{}  // Campo privado, não compila
+### 5. Store Money as Structured Data
 
-// ✅ SEGURO: Sempre usar construtor
-money, err := vos.NewMoney(1000, vos.CurrencyBRL)
+```go
+// ✅ Good: Use Money's Value() method (stores as "cents:currency")
+db.Exec("INSERT INTO orders (total) VALUES ($1)", order.Total)
+
+// ❌ Bad: Storing cents only loses currency information
+db.Exec("INSERT INTO orders (total_cents) VALUES ($1)", order.Total.Cents())
 ```
 
 ---
 
-## Uso com Banco de Dados
+## Caveats and Limitations
 
-### Princípios Gerais
+### Money Overflow
 
-1. **Sempre armazene com precisão**: Use tipos numéricos apropriados (BIGINT, NUMERIC)
-2. **Valide na leitura**: O scanner deve validar dados vindos do banco
-3. **Normalize na escrita**: O valuer deve garantir formato consistente
-4. **Use constraints**: Adicione CHECK constraints no banco quando possível
+**Limitation:** Money is limited to `±9 quadrillion` cents (~90 trillion dollars) due to int64 limits.
 
-### Estratégias de Armazenamento
-
-#### Money
-```sql
--- Opção 1: Coluna única (formato "cents:currency")
-CREATE TABLE transactions (
-    id SERIAL PRIMARY KEY,
-    amount TEXT NOT NULL
-);
-
--- Opção 2: Colunas separadas (recomendado)
-CREATE TABLE transactions (
-    id SERIAL PRIMARY KEY,
-    amount_cents BIGINT NOT NULL,
-    currency VARCHAR(3) NOT NULL,
-    CONSTRAINT valid_currency CHECK (currency IN ('BRL', 'USD', 'EUR', ...))
-);
+```go
+maxMoney, _ := vos.NewMoney(1<<53, vos.CurrencyUSD)  // Max safe value
+_, err := maxMoney.Multiply(2)  // Returns ErrOverflow
 ```
 
-#### Percentage
-```sql
-CREATE TABLE tax_rates (
-    id SERIAL PRIMARY KEY,
-    rate BIGINT NOT NULL  -- Armazena valor * 1000
-);
+**Workaround:** For values exceeding this limit, use `math/big` package instead.
+
+### Currency Validation
+
+**Limitation:** Only predefined ISO 4217 currencies are supported. Adding a new currency requires code changes.
+
+```go
+// ✅ Supported
+btc, err := vos.NewCurrency("BTC")  // Returns ErrInvalidCurrency
+
+// Custom currencies require adding to validCurrencies map in currency.go
 ```
 
-#### Nullable Types
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    age INT NULL,
-    middle_name VARCHAR(100) NULL,
-    is_verified BOOLEAN NULL,
-    last_login TIMESTAMP NULL
-);
+### Nullable Database NULL
+
+**Caveat:** Nullable types handle NULL correctly, but zero values may be ambiguous.
+
+```go
+// NULL in database
+age := vos.NullableInt{}  // Not valid
+
+// Zero value in database
+age := vos.NewNullableInt(0)  // Valid, value is 0
+
+// To distinguish: check IsValid()
+if !age.IsValid() {
+    // Was NULL
+} else if age.ValueOr(-1) == 0 {
+    // Was explicitly 0
+}
 ```
 
-#### UUID/ULID
-```sql
--- UUID
-CREATE TABLE orders (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid()
-);
+### Float Precision
 
--- ULID (armazenar como TEXT)
-CREATE TABLE orders (
-    id TEXT PRIMARY KEY
-);
+**Caveat:** Float constructors may have minor rounding errors.
+
+```go
+// Exact: 10.995%
+p1, _ := vos.NewPercentage(10995)
+
+// May round to 10.995 or 10.994999...
+p2, _ := vos.NewPercentageFromFloat(10.995)
+
+// For critical precision, use scaled integers
 ```
 
-### Migrations de Dados Legados
+### Immutability Performance
 
-```sql
--- Migrar de float para Money (cents)
-ALTER TABLE products ADD COLUMN price_cents BIGINT;
-UPDATE products SET price_cents = ROUND(price * 100);
-ALTER TABLE products DROP COLUMN price;
-ALTER TABLE products RENAME COLUMN price_cents TO price;
+**Consideration:** All operations return new instances. For high-frequency operations:
 
--- Migrar de string para ULID
--- Validar dados antes da migração!
+```go
+// Slight allocation overhead (negligible for most use cases)
+total := vos.NewMoney(0, vos.CurrencyBRL)
+for _, item := range items {
+    total, _ = total.Add(item.Price)  // Creates new Money each iteration
+}
+
+// If profiling shows this as a bottleneck, accumulate in cents:
+cents := int64(0)
+for _, item := range items {
+    cents += item.Price.Cents()
+}
+total, _ := vos.NewMoney(cents, vos.CurrencyBRL)
 ```
 
 ---
 
-## Uso em APIs
-
-### Serialização JSON
-
-Todos os Value Objects implementam `json.Marshaler` e `json.Unmarshaler`:
+## Common Errors
 
 ```go
-type CreateOrderRequest struct {
-    Amount   vos.Money      `json:"amount"`
-    Discount vos.Percentage `json:"discount"`
-}
-
-// Deserialização automática com validação
-var req CreateOrderRequest
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-    http.Error(w, "invalid request", http.StatusBadRequest)
-    return
-}
-// req.Amount e req.Discount já estão validados!
+// Defined in errors.go
+ErrInvalidCurrency      // Invalid or unsupported currency code
+ErrCurrencyMismatch     // Operating on different currencies
+ErrDivisionByZero       // Dividing by zero
+ErrInvalidValue         // Invalid value (NaN, Inf, negative where not allowed)
+ErrOverflow             // Numeric overflow
+ErrInvalidFormat        // Parsing error (invalid string format)
+ErrNullValue            // Scanning NULL into non-nullable type
 ```
 
-### Validação em Boundaries
+---
+
+## Thread Safety
+
+All value objects are **immutable and thread-safe**. They can be safely shared across goroutines without synchronization.
 
 ```go
-// Handler HTTP
-func CreateProductHandler(w http.ResponseWriter, r *http.Request) {
-    var input struct {
-        PriceCents int64  `json:"price_cents"`
-        Currency   string `json:"currency"`
-    }
+// Safe to share
+money := vos.NewMoney(1000, vos.CurrencyBRL)
 
-    json.NewDecoder(r.Body).Decode(&input)
+go func() {
+    discounted, _ := money.Multiply(9)  // Creates new instance
+}()
 
-    // Validar e converter no boundary
-    currency, err := vos.NewCurrency(input.Currency)
-    if err != nil {
-        http.Error(w, "invalid currency", http.StatusBadRequest)
-        return
-    }
-
-    price, err := vos.NewMoney(input.PriceCents, currency)
-    if err != nil {
-        http.Error(w, "invalid price", http.StatusBadRequest)
-        return
-    }
-
-    // Passar para camada de domínio
-    product, err := service.CreateProduct(price)
-    // ...
-}
+go func() {
+    doubled, _ := money.Multiply(2)  // Original unchanged
+}()
 ```
 
-### Formatos de Resposta
+---
+
+## Testing
+
+Value Objects are easy to test due to immutability and predictable behavior:
 
 ```go
-// Opção 1: Serialização automática
-type ProductResponse struct {
-    ID    vos.UUID  `json:"id"`
-    Price vos.Money `json:"price"`
-}
-// JSON: {"id":"...","price":{"amount":"10.50","currency":"BRL"}}
+func TestMoneyAddition(t *testing.T) {
+    m1, _ := vos.NewMoney(1000, vos.CurrencyBRL)
+    m2, _ := vos.NewMoney(500, vos.CurrencyBRL)
 
-// Opção 2: Formato customizado
-type ProductResponse struct {
-    ID       string `json:"id"`
-    Price    string `json:"price"`
-    Currency string `json:"currency"`
-}
+    result, err := m1.Add(m2)
 
-func toResponse(p Product) ProductResponse {
-    return ProductResponse{
-        ID:       p.ID.String(),
-        Price:    fmt.Sprintf("%.2f", p.Price.Float()),
-        Currency: p.Price.Currency().String(),
-    }
+    assert.NoError(t, err)
+    assert.Equal(t, int64(1500), result.Cents())
+    assert.Equal(t, vos.CurrencyBRL, result.Currency())
 }
-// JSON: {"id":"...","price":"10.50","currency":"BRL"}
 ```
 
-### Documentação OpenAPI/Swagger
+---
 
-```yaml
-components:
-  schemas:
-    Money:
-      type: object
-      required:
-        - amount
-        - currency
-      properties:
-        amount:
-          type: string
-          example: "10.50"
-        currency:
-          type: string
-          enum: [BRL, USD, EUR, GBP, JPY]
-          example: "BRL"
+## Related Packages
 
-    Percentage:
-      type: string
-      example: "12.345"
-      description: "Percentage with 3 decimal places"
-
-    UUID:
-      type: string
-      format: uuid
-      example: "0191d8e8-7f3f-7000-8000-123456789012"
+- `pkg/entity` - Uses vos.UUID for entity IDs
+- `pkg/database` - Compatible with DBTX for persistence
+- DDD patterns benefit greatly from Value Objects
