@@ -119,6 +119,10 @@ func (m *noopMetrics) Histogram(name, description, unit string) observability.Hi
 	return globalNoopHistogram
 }
 
+func (m *noopMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
+	return globalNoopHistogram
+}
+
 func (m *noopMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
 	return globalNoopUpDown
 }

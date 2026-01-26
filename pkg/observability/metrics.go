@@ -10,6 +10,11 @@ type Metrics interface {
 	// Histogram returns a histogram metric instrument.
 	Histogram(name, description, unit string) Histogram
 
+	// HistogramWithBuckets returns a histogram with custom bucket boundaries.
+	// Buckets define the boundaries for histogram buckets (e.g., [0.1, 0.5, 1.0, 5.0]).
+	// If not supported by the provider, falls back to default buckets.
+	HistogramWithBuckets(name, description, unit string, buckets []float64) Histogram
+
 	// UpDownCounter returns an up-down counter metric instrument.
 	UpDownCounter(name, description, unit string) UpDownCounter
 

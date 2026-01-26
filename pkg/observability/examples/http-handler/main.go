@@ -50,7 +50,7 @@ func (s *UserService) GetUser(ctx context.Context, userID string) (*User, error)
 		"1",
 	)
 	requestCounter.Increment(ctx,
-		observability.String("user_id", userID),
+		observability.String("operation", "get_user"),
 	)
 
 	// Record operation latency
@@ -63,7 +63,7 @@ func (s *UserService) GetUser(ctx context.Context, userID string) (*User, error)
 			"s",
 		)
 		histogram.Record(ctx, latency,
-			observability.String("user_id", userID),
+			observability.String("operation", "get_user"),
 		)
 	}()
 

@@ -308,6 +308,14 @@ func setupMetrics(metrics observability.Metrics) {
         "ms",
     )
 
+    // Histogram with custom buckets (NEW)
+    customLatencyHistogram := metrics.HistogramWithBuckets(
+        "api.latency",
+        "API latency with custom buckets",
+        "ms",
+        []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000},
+    )
+
     // UpDownCounter: Can increase/decrease
     activeConnections := metrics.UpDownCounter(
         "connections.active",
@@ -330,10 +338,89 @@ func setupMetrics(metrics observability.Metrics) {
     ctx := context.Background()
     requestCounter.Increment(ctx, observability.String("method", "GET"))
     latencyHistogram.Record(ctx, 45.2)
+    customLatencyHistogram.Record(ctx, 125.5)
     activeConnections.Add(ctx, 1)  // Connection opened
     activeConnections.Add(ctx, -1) // Connection closed
 }
 ```
+
+### Cardinality Protection (NEW)
+
+Protect your Prometheus from cardinality explosion with automatic validation:
+
+```go
+// Configure with cardinality protection
+config := &otel.Config{
+    ServiceName:            "user-api",
+    Environment:            "production",
+    EnableCardinalityCheck: true, // Auto-enabled in production
+    CustomBlockedLabels: []string{
+        "customer_id",  // Add your own high-cardinality labels
+        "order_id",
+    },
+}
+
+provider, _ := otel.NewProvider(ctx, config)
+metrics := provider.Metrics()
+
+counter := metrics.Counter("requests.total", "Total requests", "1")
+
+// ✅ Good: Low-cardinality label
+counter.Increment(ctx, observability.String("user_type", "premium"))
+
+// ❌ Bad: High-cardinality label - will be silently dropped
+counter.Increment(ctx, observability.String("user_id", "12345"))
+
+// ❌ Bad: Custom blocked label - will be silently dropped
+counter.Increment(ctx, observability.String("customer_id", "CUST-789"))
+```
+
+**Default Blocked Labels**:
+- `user_id`, `session_id`, `trace_id`, `span_id`, `request_id`
+- `transaction_id`, `correlation_id`, `ip_address`
+- `email`, `phone`, `uuid`, `guid`
+
+### Metric Namespacing (NEW)
+
+Prevent metric name collisions in multi-service environments:
+
+```go
+config := &otel.Config{
+    ServiceName:     "user-api",
+    MetricNamespace: "userapi", // Prefix all metrics
+}
+
+provider, _ := otel.NewProvider(ctx, config)
+metrics := provider.Metrics()
+
+// Creates metric named "userapi.orders.total"
+counter := metrics.Counter("orders.total", "Total orders", "1")
+
+// Creates metric named "userapi.http.duration"
+histogram := metrics.Histogram("http.duration", "HTTP duration", "s")
+```
+
+**Result in Prometheus**:
+```
+userapi_orders_total{...}
+userapi_http_duration_bucket{...}
+```
+
+### Custom Export Interval (NEW)
+
+Control how frequently metrics are pushed:
+
+```go
+config := &otel.Config{
+    ServiceName:          "user-api",
+    MetricExportInterval: 30, // Export every 30 seconds (default: 60)
+}
+```
+
+**Use Cases**:
+- **Real-time dashboards**: 10-15 seconds
+- **Production monitoring**: 30-60 seconds (default)
+- **Low-priority metrics**: 120-300 seconds
 
 ### Testing with Fake Provider
 
@@ -463,6 +550,70 @@ func (s *Service) HandleRequest(ctx context.Context, metrics observability.Metri
 }
 ```
 
+### 6. Avoid High-Cardinality Labels (NEW)
+
+```go
+// ✅ Good: Use categorical, low-cardinality labels
+counter.Increment(ctx,
+    observability.String("user_type", "premium"),     // Limited values
+    observability.String("payment_method", "card"),   // Known set
+    observability.String("region", "us-east-1"),      // Bounded
+)
+
+// ❌ Bad: High-cardinality labels cause Prometheus memory issues
+counter.Increment(ctx,
+    observability.String("user_id", "123456"),        // Millions of users
+    observability.String("email", "user@example.com"), // Unbounded
+    observability.String("ip_address", "1.2.3.4"),    // Thousands of IPs
+)
+```
+
+**Rule of thumb**: If a label can have more than ~100 unique values, it's probably too high-cardinality.
+
+### 7. Use Custom Buckets for Histograms (NEW)
+
+```go
+// ✅ Good: Use custom buckets for microsecond-precision APIs
+fastAPIHistogram := metrics.HistogramWithBuckets(
+    "fast.api.duration",
+    "Fast API latency",
+    "ms",
+    []float64{0.1, 0.5, 1, 2, 5, 10, 25, 50, 100}, // Microseconds matter
+)
+
+// ✅ Good: Use custom buckets for large file sizes
+fileSizeHistogram := metrics.HistogramWithBuckets(
+    "file.upload.size",
+    "Uploaded file size",
+    "bytes",
+    []float64{1024, 10240, 102400, 1048576, 10485760, 104857600}, // 1KB to 100MB
+)
+
+// ❌ OK but suboptimal: Default buckets may not fit your use case
+defaultHistogram := metrics.Histogram("api.duration", "API latency", "s")
+```
+
+### 8. Enable Cardinality Check in Production (NEW)
+
+```go
+// ✅ Good: Explicit configuration for each environment
+config := &otel.Config{
+    Environment:            "production",
+    EnableCardinalityCheck: true, // Protect Prometheus from explosion
+}
+
+// ✅ Also Good: Auto-enabled in production
+config := &otel.Config{
+    Environment: "production", // EnableCardinalityCheck auto-enabled
+}
+
+// ❌ Risky: Disabled in production
+config := &otel.Config{
+    Environment:            "production",
+    EnableCardinalityCheck: false, // May cause Prometheus OOM
+}
+```
+
 ---
 
 ## Caveats and Limitations
@@ -551,10 +702,39 @@ type Config struct {
     LogLevel  LogLevel  // debug/info/warn/error
     LogFormat LogFormat // text or json
 
+    // Metrics (NEW)
+    MetricExportInterval   int64    // Export interval in seconds (default: 60)
+    MetricNamespace        string   // Optional prefix for all metric names
+    EnableCardinalityCheck bool     // Enable high-cardinality label validation
+    CustomBlockedLabels    []string // Additional labels to block
+
     // Resource Attributes (optional)
     ResourceAttributes map[string]string
 }
 ```
+
+### New Metrics Configuration Options
+
+**MetricExportInterval**: Controls how frequently metrics are pushed to the OTLP collector
+- Lower values (10-30s): More real-time visibility, higher network overhead
+- Higher values (60-120s): Reduced overhead, delayed visibility
+- Default: 60 seconds
+
+**MetricNamespace**: Automatic prefix for all metric names to prevent collisions
+- Example: `MetricNamespace: "myapp"` → `myapp.http.server.duration`
+- Useful in multi-service environments sharing the same Prometheus instance
+- Default: No prefix (empty string)
+
+**EnableCardinalityCheck**: Prevents high-cardinality labels in metrics
+- Automatically enabled in production environments
+- Blocks labels like `user_id`, `session_id`, `trace_id`, `ip_address`
+- Silently drops metrics with blocked labels (doesn't crash your app)
+- Default: `true` in production, `false` in development
+
+**CustomBlockedLabels**: Add your own high-cardinality labels to the blocklist
+- Extends the default list of blocked labels
+- Example: `[]string{"customer_id", "order_id", "api_key"}`
+- Default: Empty list (uses only built-in blocked labels)
 
 ---
 

@@ -9,18 +9,33 @@ import (
 
 // otelMetrics implements observability.Metrics using OpenTelemetry.
 type otelMetrics struct {
-	meter metric.Meter
+	meter                metric.Meter
+	namespace            string
+	cardinalityValidator *observability.CardinalityValidator
 }
 
 // newOtelMetrics creates a new OpenTelemetry metrics recorder.
-func newOtelMetrics(meter metric.Meter) *otelMetrics {
-	return &otelMetrics{meter: meter}
+func newOtelMetrics(meter metric.Meter, namespace string, validator *observability.CardinalityValidator) *otelMetrics {
+	return &otelMetrics{
+		meter:                meter,
+		namespace:            namespace,
+		cardinalityValidator: validator,
+	}
+}
+
+// addNamespace adds the namespace prefix to the metric name if configured.
+func (m *otelMetrics) addNamespace(name string) string {
+	if m.namespace == "" {
+		return name
+	}
+	return m.namespace + "." + name
 }
 
 // Counter creates or returns a counter metric.
 func (m *otelMetrics) Counter(name, description, unit string) observability.Counter {
+	fullName := m.addNamespace(name)
 	counter, err := m.meter.Int64Counter(
-		name,
+		fullName,
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
 	)
@@ -28,13 +43,17 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 		return &noopCounter{}
 	}
 
-	return &otelCounter{counter: counter}
+	return &otelCounter{
+		counter:   counter,
+		validator: m.cardinalityValidator,
+	}
 }
 
 // Histogram creates or returns a histogram metric.
 func (m *otelMetrics) Histogram(name, description, unit string) observability.Histogram {
+	fullName := m.addNamespace(name)
 	histogram, err := m.meter.Float64Histogram(
-		name,
+		fullName,
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
 	)
@@ -42,13 +61,36 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 		return &noopHistogram{}
 	}
 
-	return &otelHistogram{histogram: histogram}
+	return &otelHistogram{
+		histogram: histogram,
+		validator: m.cardinalityValidator,
+	}
+}
+
+// HistogramWithBuckets creates or returns a histogram metric with custom bucket boundaries.
+func (m *otelMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
+	fullName := m.addNamespace(name)
+	histogram, err := m.meter.Float64Histogram(
+		fullName,
+		metric.WithDescription(description),
+		metric.WithUnit(unit),
+		metric.WithExplicitBucketBoundaries(buckets...),
+	)
+	if err != nil {
+		return &noopHistogram{}
+	}
+
+	return &otelHistogram{
+		histogram: histogram,
+		validator: m.cardinalityValidator,
+	}
 }
 
 // UpDownCounter creates or returns an up-down counter metric.
 func (m *otelMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
+	fullName := m.addNamespace(name)
 	upDown, err := m.meter.Int64UpDownCounter(
-		name,
+		fullName,
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
 	)
@@ -56,13 +98,17 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 		return &noopUpDownCounter{}
 	}
 
-	return &otelUpDownCounter{counter: upDown}
+	return &otelUpDownCounter{
+		counter:   upDown,
+		validator: m.cardinalityValidator,
+	}
 }
 
 // Gauge creates an asynchronous gauge metric.
 func (m *otelMetrics) Gauge(name, description, unit string, callback observability.GaugeCallback) error {
+	fullName := m.addNamespace(name)
 	_, err := m.meter.Float64ObservableGauge(
-		name,
+		fullName,
 		metric.WithDescription(description),
 		metric.WithUnit(unit),
 		metric.WithFloat64Callback(func(ctx context.Context, observer metric.Float64Observer) error {
@@ -76,11 +122,21 @@ func (m *otelMetrics) Gauge(name, description, unit string, callback observabili
 
 // otelCounter implements observability.Counter.
 type otelCounter struct {
-	counter metric.Int64Counter
+	counter   metric.Int64Counter
+	validator *observability.CardinalityValidator
 }
 
 // Add increments the counter.
 func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
+	// Validate cardinality if validator is enabled
+	if c.validator != nil {
+		if err := c.validator.Validate(fields); err != nil {
+			// Log validation error but don't fail the operation
+			// This prevents metrics from breaking the application
+			return
+		}
+	}
+
 	attrs := convertFieldsToAttributes(fields)
 	if attrs == nil {
 		c.counter.Add(ctx, value)
@@ -98,10 +154,19 @@ func (c *otelCounter) Increment(ctx context.Context, fields ...observability.Fie
 // otelHistogram implements observability.Histogram.
 type otelHistogram struct {
 	histogram metric.Float64Histogram
+	validator *observability.CardinalityValidator
 }
 
 // Record adds a value to the histogram.
 func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
+	// Validate cardinality if validator is enabled
+	if h.validator != nil {
+		if err := h.validator.Validate(fields); err != nil {
+			// Log validation error but don't fail the operation
+			return
+		}
+	}
+
 	attrs := convertFieldsToAttributes(fields)
 	if attrs == nil {
 		h.histogram.Record(ctx, value)
@@ -113,11 +178,20 @@ func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...obs
 
 // otelUpDownCounter implements observability.UpDownCounter.
 type otelUpDownCounter struct {
-	counter metric.Int64UpDownCounter
+	counter   metric.Int64UpDownCounter
+	validator *observability.CardinalityValidator
 }
 
 // Add adds a value to the up-down counter.
 func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
+	// Validate cardinality if validator is enabled
+	if u.validator != nil {
+		if err := u.validator.Validate(fields); err != nil {
+			// Log validation error but don't fail the operation
+			return
+		}
+	}
+
 	attrs := convertFieldsToAttributes(fields)
 	if attrs == nil {
 		u.counter.Add(ctx, value)

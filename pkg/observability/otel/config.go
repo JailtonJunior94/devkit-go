@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	"go.opentelemetry.io/otel"
@@ -53,6 +54,12 @@ type Config struct {
 	LogLevel  observability.LogLevel
 	LogFormat observability.LogFormat
 
+	// Metrics configuration
+	MetricExportInterval    int64    // Export interval in seconds (default: 60)
+	MetricNamespace         string   // Optional prefix for all metric names (e.g., "myapp")
+	EnableCardinalityCheck  bool     // Enable validation of high-cardinality labels (default: true in production)
+	CustomBlockedLabels     []string // Custom high-cardinality labels to block (in addition to defaults)
+
 	// Resource attributes (optional)
 	ResourceAttributes map[string]string
 }
@@ -60,14 +67,16 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig(serviceName string) *Config {
 	return &Config{
-		ServiceName:     serviceName,
-		ServiceVersion:  "unknown",
-		Environment:     "development",
-		OTLPEndpoint:    "localhost:4317",
-		OTLPProtocol:    ProtocolGRPC,
-		TraceSampleRate: 1.0,
-		LogLevel:        observability.LogLevelInfo,
-		LogFormat:       observability.LogFormatJSON,
+		ServiceName:            serviceName,
+		ServiceVersion:         "unknown",
+		Environment:            "development",
+		OTLPEndpoint:           "localhost:4317",
+		OTLPProtocol:           ProtocolGRPC,
+		TraceSampleRate:        1.0,
+		LogLevel:               observability.LogLevelInfo,
+		LogFormat:              observability.LogFormatJSON,
+		MetricExportInterval:   60, // 60 seconds
+		EnableCardinalityCheck: false, // Disabled by default in dev
 	}
 }
 
@@ -185,6 +194,19 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 		propagation.Baggage{},
 	))
 
+	// Initialize cardinality validator
+	// Auto-enable in production if not explicitly set
+	enableValidation := config.EnableCardinalityCheck
+	if !enableValidation && strings.ToLower(config.Environment) == "production" {
+		enableValidation = true
+	}
+	cardinalityValidator := observability.NewCardinalityValidator(enableValidation)
+	if len(config.CustomBlockedLabels) > 0 {
+		for _, label := range config.CustomBlockedLabels {
+			cardinalityValidator.AddBlockedLabel(label)
+		}
+	}
+
 	// Initialize components
 	provider.tracer = newOtelTracer(provider.tracerProvider.Tracer(config.ServiceName))
 	provider.logger = newOtelLogger(
@@ -193,7 +215,11 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 		config.ServiceName,
 		provider.loggerProvider.Logger(config.ServiceName),
 	)
-	provider.metrics = newOtelMetrics(provider.meterProvider.Meter(config.ServiceName))
+	provider.metrics = newOtelMetrics(
+		provider.meterProvider.Meter(config.ServiceName),
+		config.MetricNamespace,
+		cardinalityValidator,
+	)
 
 	return provider, nil
 }
@@ -296,9 +322,20 @@ func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource
 		return fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 
+	// Configure periodic reader with custom interval
+	interval := time.Duration(p.config.MetricExportInterval) * time.Second
+	if interval <= 0 {
+		interval = 60 * time.Second // Default to 60 seconds
+	}
+
+	reader := sdkmetric.NewPeriodicReader(
+		exporter,
+		sdkmetric.WithInterval(interval),
+	)
+
 	p.meterProvider = sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)),
+		sdkmetric.WithReader(reader),
 	)
 
 	otel.SetMeterProvider(p.meterProvider)

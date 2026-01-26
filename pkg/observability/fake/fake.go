@@ -363,6 +363,11 @@ func (m *FakeMetrics) Histogram(name, description, unit string) observability.Hi
 	return h
 }
 
+// HistogramWithBuckets returns or creates a fake histogram (ignores buckets in fake provider).
+func (m *FakeMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
+	return m.Histogram(name, description, unit)
+}
+
 // UpDownCounter returns or creates a fake up-down counter.
 func (m *FakeMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
 	m.mu.Lock()
