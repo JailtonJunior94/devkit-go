@@ -173,10 +173,10 @@ func TestUserServiceCreateUser_Success(t *testing.T) {
 	hasNameAttr := false
 	hasEmailAttr := false
 	for _, attr := range span.Attributes {
-		if attr.Key == "name" && attr.Value == "John Doe" {
+		if attr.Key == "name" && attr.AnyValue() == "John Doe" {
 			hasNameAttr = true
 		}
-		if attr.Key == "email" && attr.Value == "john@example.com" {
+		if attr.Key == "email" && attr.AnyValue() == "john@example.com" {
 			hasEmailAttr = true
 		}
 	}
@@ -268,7 +268,7 @@ func TestUserServiceCreateUser_ValidationError(t *testing.T) {
 	// Verify error counter has correct fields
 	var hasErrorTypeField bool
 	for _, field := range values[0].Fields {
-		if field.Key == "error_type" && field.Value == "validation" {
+		if field.Key == "error_type" && field.AnyValue() == "validation" {
 			hasErrorTypeField = true
 			break
 		}

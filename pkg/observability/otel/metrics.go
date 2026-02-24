@@ -42,7 +42,6 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 	if err != nil {
 		return &noopCounter{}
 	}
-
 	return &otelCounter{
 		counter:   counter,
 		validator: m.cardinalityValidator,
@@ -60,7 +59,6 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 	if err != nil {
 		return &noopHistogram{}
 	}
-
 	return &otelHistogram{
 		histogram: histogram,
 		validator: m.cardinalityValidator,
@@ -79,7 +77,6 @@ func (m *otelMetrics) HistogramWithBuckets(name, description, unit string, bucke
 	if err != nil {
 		return &noopHistogram{}
 	}
-
 	return &otelHistogram{
 		histogram: histogram,
 		validator: m.cardinalityValidator,
@@ -97,7 +94,6 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 	if err != nil {
 		return &noopUpDownCounter{}
 	}
-
 	return &otelUpDownCounter{
 		counter:   upDown,
 		validator: m.cardinalityValidator,
@@ -128,22 +124,20 @@ type otelCounter struct {
 
 // Add increments the counter.
 func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	// Validate cardinality if validator is enabled
 	if c.validator != nil {
 		if err := c.validator.Validate(fields); err != nil {
-			// Log validation error but don't fail the operation
-			// This prevents metrics from breaking the application
 			return
 		}
 	}
-
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		c.counter.Add(ctx, value)
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	c.counter.Add(ctx, value, metric.WithAttributes(attrs...))
+	*p = attrs
+	releaseAttrs(p)
 }
 
 // Increment increments the counter by 1.
@@ -159,21 +153,20 @@ type otelHistogram struct {
 
 // Record adds a value to the histogram.
 func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
-	// Validate cardinality if validator is enabled
 	if h.validator != nil {
 		if err := h.validator.Validate(fields); err != nil {
-			// Log validation error but don't fail the operation
 			return
 		}
 	}
-
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		h.histogram.Record(ctx, value)
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	h.histogram.Record(ctx, value, metric.WithAttributes(attrs...))
+	*p = attrs
+	releaseAttrs(p)
 }
 
 // otelUpDownCounter implements observability.UpDownCounter.
@@ -184,23 +177,21 @@ type otelUpDownCounter struct {
 
 // Add adds a value to the up-down counter.
 func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	// Validate cardinality if validator is enabled
 	if u.validator != nil {
 		if err := u.validator.Validate(fields); err != nil {
-			// Log validation error but don't fail the operation
 			return
 		}
 	}
-
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		u.counter.Add(ctx, value)
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	u.counter.Add(ctx, value, metric.WithAttributes(attrs...))
+	*p = attrs
+	releaseAttrs(p)
 }
-
 
 // No-op implementations for error cases.
 type noopCounter struct{}

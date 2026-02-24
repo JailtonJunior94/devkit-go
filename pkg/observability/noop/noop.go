@@ -38,6 +38,11 @@ func (p *Provider) Metrics() observability.Metrics {
 	return p.metrics
 }
 
+// Shutdown is a no-op for the noop provider.
+func (p *Provider) Shutdown(_ context.Context) error {
+	return nil
+}
+
 var (
 	globalNoopSpan        = noopSpan{}
 	globalNoopSpanContext = noopSpanContext{}

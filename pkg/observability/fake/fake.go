@@ -40,6 +40,14 @@ func (p *Provider) Metrics() observability.Metrics {
 	return p.metrics
 }
 
+// Shutdown is a no-op for the fake provider.
+func (p *Provider) Shutdown(_ context.Context) error {
+	return nil
+}
+
+// fakeSpanKey is the context key used to store and retrieve fake spans.
+type fakeSpanKey struct{}
+
 // FakeTracer captures all tracing operations for test assertions.
 type FakeTracer struct {
 	mu    sync.RWMutex
@@ -53,7 +61,7 @@ func NewFakeTracer() *FakeTracer {
 	}
 }
 
-// Start creates a fake span and captures it.
+// Start creates a fake span, injects it into the context, and captures it for assertions.
 func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
 	config := observability.NewSpanConfig(opts)
 
@@ -68,17 +76,20 @@ func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observa
 	t.spans = append(t.spans, span)
 	t.mu.Unlock()
 
-	return ctx, span
+	return context.WithValue(ctx, fakeSpanKey{}, span), span
 }
 
-// SpanFromContext returns a fake span (always nil for simplicity).
+// SpanFromContext returns the span stored in the context, or an empty span if none exists.
 func (t *FakeTracer) SpanFromContext(ctx context.Context) observability.Span {
+	if span, ok := ctx.Value(fakeSpanKey{}).(*FakeSpan); ok {
+		return span
+	}
 	return &FakeSpan{}
 }
 
-// ContextWithSpan returns the context unchanged.
+// ContextWithSpan returns a new context with the given span stored for later retrieval.
 func (t *FakeTracer) ContextWithSpan(ctx context.Context, span observability.Span) context.Context {
-	return ctx
+	return context.WithValue(ctx, fakeSpanKey{}, span)
 }
 
 // GetSpans returns all captured spans (for test assertions).

@@ -177,7 +177,8 @@ func main() {
 	paymentMethods := []string{"card", "paypal", "bank_transfer"}
 	amounts := []float64{25.99, 99.99, 299.99, 1500.00, 7500.00}
 
-	fmt.Println("=== Processing Orders (Best Practices Demo) ===\n")
+	fmt.Println("=== Processing Orders (Best Practices Demo) ===")
+	fmt.Println()
 
 	for i := 0; i < 10; i++ {
 		orderType := orderTypes[rand.Intn(len(orderTypes))]
@@ -194,7 +195,9 @@ func main() {
 		time.Sleep(100 * time.Millisecond) // Small delay between orders
 	}
 
-	fmt.Println("\n=== Demonstration of High-Cardinality Protection ===\n")
+	fmt.Println()
+	fmt.Println("=== Demonstration of High-Cardinality Protection ===")
+	fmt.Println()
 
 	// ❌ This will be blocked by cardinality validator
 	blockedCounter := provider.Metrics().Counter(
@@ -225,8 +228,8 @@ func main() {
 	blockedCounter.Increment(ctx,
 		observability.String("status", "success"), // ✅ Allowed
 	)
-	fmt.Println("  ✅ Succeeded: status=success (allowed)\n")
-
+	fmt.Println("  ✅ Succeeded: status=success (allowed)")
+	fmt.Println()
 	fmt.Println("=== Metrics Generated ===")
 	fmt.Println("All metrics are prefixed with 'orders.' due to MetricNamespace:")
 	fmt.Println("  - orders.orders.processed.total")

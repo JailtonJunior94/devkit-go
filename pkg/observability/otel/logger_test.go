@@ -132,13 +132,13 @@ func TestSanitizeFields(t *testing.T) {
 
 				// For redacted fields, check value is redactedValue
 				if isSensitiveKey(tt.expected[i].Key) {
-					assert.Equal(t, redactedValue, result[i].Value)
-				} else if str, ok := tt.expected[i].Value.(string); ok && len(str) > maxFieldValueLength {
+					assert.Equal(t, redactedValue, result[i].AnyValue())
+				} else if str, ok := tt.expected[i].AnyValue().(string); ok && len(str) > maxFieldValueLength {
 					// For truncated fields
-					assert.Contains(t, result[i].Value, "...[truncated]")
+					assert.Contains(t, result[i].AnyValue().(string), "...[truncated]")
 				} else {
 					// For normal fields
-					assert.Equal(t, tt.expected[i].Value, result[i].Value)
+					assert.Equal(t, tt.expected[i].AnyValue(), result[i].AnyValue())
 				}
 			}
 		})

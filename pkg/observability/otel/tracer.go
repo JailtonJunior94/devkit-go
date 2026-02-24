@@ -25,9 +25,12 @@ func (t *otelTracer) Start(ctx context.Context, spanName string, opts ...observa
 	otelOpts := make([]oteltrace.SpanStartOption, 0, 2)
 	otelOpts = append(otelOpts, oteltrace.WithSpanKind(convertSpanKind(cfg.Kind())))
 
-	attrs := convertFieldsToAttributes(cfg.Attributes())
-	if attrs != nil {
+	if cfgAttrs := cfg.Attributes(); len(cfgAttrs) > 0 {
+		p := acquireAttrs()
+		attrs := appendFieldAttrs((*p)[:0], cfgAttrs)
 		otelOpts = append(otelOpts, oteltrace.WithAttributes(attrs...))
+		*p = attrs
+		releaseAttrs(p)
 	}
 
 	ctx, otelSpan := t.tracer.Start(ctx, spanName, otelOpts...)
@@ -36,7 +39,6 @@ func (t *otelTracer) Start(ctx context.Context, spanName string, opts ...observa
 
 // SpanFromContext returns the current span from the context.
 // If no active span exists, returns a non-recording noop span.
-// Operations on the returned span are safe but will have no effect if it's non-recording.
 func (t *otelTracer) SpanFromContext(ctx context.Context) observability.Span {
 	span := oteltrace.SpanFromContext(ctx)
 	return &otelSpanImpl{span: span}
@@ -48,7 +50,6 @@ func (t *otelTracer) ContextWithSpan(ctx context.Context, span observability.Spa
 	if !ok {
 		return ctx
 	}
-
 	return oteltrace.ContextWithSpan(ctx, otelSpan.span)
 }
 
@@ -64,12 +65,14 @@ func (s *otelSpanImpl) End() {
 
 // SetAttributes sets additional attributes on the span.
 func (s *otelSpanImpl) SetAttributes(fields ...observability.Field) {
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	s.span.SetAttributes(attrs...)
+	*p = attrs
+	releaseAttrs(p)
 }
 
 // SetStatus sets the status of the span.
@@ -79,24 +82,28 @@ func (s *otelSpanImpl) SetStatus(code observability.StatusCode, description stri
 
 // RecordError records an error as an event on the span.
 func (s *otelSpanImpl) RecordError(err error, fields ...observability.Field) {
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		s.span.RecordError(err)
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	s.span.RecordError(err, oteltrace.WithAttributes(attrs...))
+	*p = attrs
+	releaseAttrs(p)
 }
 
 // AddEvent adds an event to the span.
 func (s *otelSpanImpl) AddEvent(name string, fields ...observability.Field) {
-	attrs := convertFieldsToAttributes(fields)
-	if attrs == nil {
+	if len(fields) == 0 {
 		s.span.AddEvent(name)
 		return
 	}
-
+	p := acquireAttrs()
+	attrs := appendFieldAttrs((*p)[:0], fields)
 	s.span.AddEvent(name, oteltrace.WithAttributes(attrs...))
+	*p = attrs
+	releaseAttrs(p)
 }
 
 // Context returns the span context.

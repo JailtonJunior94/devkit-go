@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -42,6 +43,13 @@ func initSensitiveKeysLower() []string {
 	return lower
 }
 
+// slogAttrPool and otlpAttrPool pool attribute slices for the logger hot path.
+// Eliminates per-call heap allocation for the two parallel attribute lists.
+var (
+	slogAttrPool = sync.Pool{New: func() any { s := make([]slog.Attr, 0, 16); return &s }}
+	otlpAttrPool = sync.Pool{New: func() any { s := make([]otellog.KeyValue, 0, 16); return &s }}
+)
+
 // otelLogger implements observability.Logger using OTel Logger API with slog fallback.
 type otelLogger struct {
 	otelLog     otellog.Logger // OTel logger for OTLP export
@@ -74,7 +82,6 @@ func createSlogLogger(level observability.LogLevel, format observability.LogForm
 	opts := &slog.HandlerOptions{
 		Level: convertLogLevel(level),
 	}
-
 	handler := createSlogHandler(format, output, opts)
 	return slog.New(handler)
 }
@@ -84,24 +91,23 @@ func createSlogHandler(format observability.LogFormat, output io.Writer, opts *s
 	if format == observability.LogFormatJSON {
 		return slog.NewJSONHandler(output, opts)
 	}
-
 	return slog.NewTextHandler(output, opts)
 }
 
 // convertLogLevel converts observability.LogLevel to slog.Level.
 func convertLogLevel(level observability.LogLevel) slog.Level {
-	levelMap := map[observability.LogLevel]slog.Level{
-		observability.LogLevelDebug: slog.LevelDebug,
-		observability.LogLevelInfo:  slog.LevelInfo,
-		observability.LogLevelWarn:  slog.LevelWarn,
-		observability.LogLevelError: slog.LevelError,
+	switch level {
+	case observability.LogLevelDebug:
+		return slog.LevelDebug
+	case observability.LogLevelInfo:
+		return slog.LevelInfo
+	case observability.LogLevelWarn:
+		return slog.LevelWarn
+	case observability.LogLevelError:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
-
-	if slogLevel, exists := levelMap[level]; exists {
-		return slogLevel
-	}
-
-	return slog.LevelInfo
 }
 
 // Debug logs a debug-level message.
@@ -124,115 +130,114 @@ func (l *otelLogger) Error(ctx context.Context, msg string, fields ...observabil
 	l.log(ctx, slog.LevelError, msg, fields...)
 }
 
-// log is the internal logging method that adds trace context and structured fields.
+// log is the internal logging method. It performs a single pass over fields to build
+// both the slog and OTLP attribute lists, using pooled slices to avoid per-call allocation.
 func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fields ...observability.Field) {
-	// Validate message
+	// Fast path: skip all work if the level is disabled.
+	if !l.slogLogger.Enabled(ctx, level) {
+		return
+	}
+
 	if msg == "" {
 		msg = "[empty message]"
 	}
 
-	// Sanitize and validate fields
 	fields = sanitizeFields(fields)
 
-	// Combine permanent fields with call-specific fields
-	allFields := make([]observability.Field, 0, len(l.fields)+len(fields)+3)
-	allFields = append(allFields, l.fields...)
-	allFields = append(allFields, fields...)
+	// Acquire pooled slices for zero-allocation single-pass conversion.
+	sp := slogAttrPool.Get().(*[]slog.Attr)
+	op := otlpAttrPool.Get().(*[]otellog.KeyValue)
+	slogAttrs := (*sp)[:0]
+	otlpAttrs := (*op)[:0]
 
-	// Extract trace context from the context
+	// Single pass: permanent fields (from With).
+	for _, f := range l.fields {
+		slogAttrs = append(slogAttrs, convertFieldToSlogAttr(f))
+		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
+	}
+
+	// Single pass: call-specific fields.
+	for _, f := range fields {
+		slogAttrs = append(slogAttrs, convertFieldToSlogAttr(f))
+		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
+	}
+
+	// Service field (always a string — skip generic conversion).
+	slogAttrs = append(slogAttrs, slog.String("service", l.serviceName))
+	otlpAttrs = append(otlpAttrs, otellog.String("service", l.serviceName))
+
+	// Inject trace context into slog output only.
+	// The OTel SDK extracts trace context from ctx automatically during Emit,
+	// so adding it manually to OTLP attrs would duplicate it in the backend.
 	span := trace.SpanFromContext(ctx)
-	spanContext := span.SpanContext()
-	if spanContext.IsValid() {
-		allFields = append(allFields,
-			observability.String("trace_id", spanContext.TraceID().String()),
-			observability.String("span_id", spanContext.SpanID().String()),
+	spanCtx := span.SpanContext()
+	if spanCtx.IsValid() {
+		slogAttrs = append(slogAttrs,
+			slog.String("trace_id", spanCtx.TraceID().String()),
+			slog.String("span_id", spanCtx.SpanID().String()),
 		)
 	}
 
-	// Add service name
-	allFields = append(allFields, observability.String("service", l.serviceName))
+	l.slogLogger.LogAttrs(ctx, level, msg, slogAttrs...)
 
-	// Convert fields to slog.Attr for console output
-	attrs := make([]slog.Attr, 0, len(allFields))
-	for _, field := range allFields {
-		attrs = append(attrs, convertFieldToSlogAttr(field))
-	}
-
-	// Log to console with slog
-	l.slogLogger.LogAttrs(ctx, level, msg, attrs...)
-
-	// Also emit to OTLP
-	l.emitOTLPLog(ctx, level, msg, allFields)
-}
-
-// emitOTLPLog emits a log record to OTLP backend.
-func (l *otelLogger) emitOTLPLog(
-	ctx context.Context,
-	level slog.Level,
-	msg string,
-
-	fields []observability.Field,
-) {
-	// Convert fields to OTel log attributes
-	attrs := make([]otellog.KeyValue, 0, len(fields))
-	for _, field := range fields {
-		attrs = append(attrs, convertFieldToOTelAttr(field))
-	}
-
-	// Create log record
 	record := otellog.Record{}
 	record.SetTimestamp(time.Now())
 	record.SetBody(otellog.StringValue(msg))
 	record.SetSeverity(convertSlogLevelToOTel(level))
 	record.SetSeverityText(level.String())
-	record.AddAttributes(attrs...)
-
-	// Emit the log record (trace context is automatically extracted from ctx by the SDK)
+	record.AddAttributes(otlpAttrs...)
 	l.otelLog.Emit(ctx, record)
+
+	// Return slices to pool. Update pointers in case append reallocated.
+	*sp = slogAttrs[:0]
+	*op = otlpAttrs[:0]
+	slogAttrPool.Put(sp)
+	otlpAttrPool.Put(op)
 }
 
 // convertSlogLevelToOTel converts slog.Level to OTel Severity.
 func convertSlogLevelToOTel(level slog.Level) otellog.Severity {
-	severityMap := map[slog.Level]otellog.Severity{
-		slog.LevelDebug: otellog.SeverityDebug,
-		slog.LevelInfo:  otellog.SeverityInfo,
-		slog.LevelWarn:  otellog.SeverityWarn,
-		slog.LevelError: otellog.SeverityError,
+	switch level {
+	case slog.LevelDebug:
+		return otellog.SeverityDebug
+	case slog.LevelInfo:
+		return otellog.SeverityInfo
+	case slog.LevelWarn:
+		return otellog.SeverityWarn
+	case slog.LevelError:
+		return otellog.SeverityError
+	default:
+		return otellog.SeverityInfo
 	}
-
-	if severity, exists := severityMap[level]; exists {
-		return severity
-	}
-
-	return otellog.SeverityInfo
 }
 
 // convertFieldToOTelAttr converts an observability.Field to an OTel log KeyValue.
+// Uses the Field discriminated union — zero boxing for common types.
 func convertFieldToOTelAttr(field observability.Field) otellog.KeyValue {
-	switch v := field.Value.(type) {
-	case string:
-		return otellog.String(field.Key, v)
-	case int:
-		return otellog.Int(field.Key, v)
-	case int64:
-		return otellog.Int64(field.Key, v)
-	case float64:
-		return otellog.Float64(field.Key, v)
-	case bool:
-		return otellog.Bool(field.Key, v)
-	case error:
-		return otellog.String(field.Key, v.Error())
+	switch field.Kind() {
+	case observability.FieldKindString:
+		return otellog.String(field.Key, field.StringValue())
+	case observability.FieldKindInt:
+		return otellog.Int(field.Key, int(field.Int64Value()))
+	case observability.FieldKindInt64:
+		return otellog.Int64(field.Key, field.Int64Value())
+	case observability.FieldKindFloat64:
+		return otellog.Float64(field.Key, field.Float64Value())
+	case observability.FieldKindBool:
+		return otellog.Bool(field.Key, field.BoolValue())
+	case observability.FieldKindError:
+		if err, ok := field.AnyValue().(error); ok {
+			return otellog.String(field.Key, err.Error())
+		}
+		return otellog.String(field.Key, "")
 	default:
-		return otellog.String(field.Key, fmt.Sprint(field.Value))
+		return otellog.String(field.Key, fmt.Sprintf("%v", field.AnyValue()))
 	}
 }
 
 // With creates a child logger with additional fields.
 // Creates a deep copy of fields to prevent race conditions.
 func (l *otelLogger) With(fields ...observability.Field) observability.Logger {
-	// Create new slice with deep copy to prevent race conditions
-	// If we used append(l.fields, fields...) and l.fields had capacity,
-	// it would modify the underlying array shared by other loggers
 	newFields := make([]observability.Field, len(l.fields)+len(fields))
 	copy(newFields, l.fields)
 	copy(newFields[len(l.fields):], fields)
@@ -248,61 +253,66 @@ func (l *otelLogger) With(fields ...observability.Field) observability.Logger {
 }
 
 // convertFieldToSlogAttr converts an observability.Field to a slog.Attr.
+// Uses the Field discriminated union — zero boxing for common types.
 func convertFieldToSlogAttr(field observability.Field) slog.Attr {
-	switch v := field.Value.(type) {
-	case string:
-		return slog.String(field.Key, v)
-	case int:
-		return slog.Int(field.Key, v)
-	case int64:
-		return slog.Int64(field.Key, v)
-	case float64:
-		return slog.Float64(field.Key, v)
-	case bool:
-		return slog.Bool(field.Key, v)
-	case error:
-		return slog.String(field.Key, v.Error())
+	switch field.Kind() {
+	case observability.FieldKindString:
+		return slog.String(field.Key, field.StringValue())
+	case observability.FieldKindInt:
+		return slog.Int(field.Key, int(field.Int64Value()))
+	case observability.FieldKindInt64:
+		return slog.Int64(field.Key, field.Int64Value())
+	case observability.FieldKindFloat64:
+		return slog.Float64(field.Key, field.Float64Value())
+	case observability.FieldKindBool:
+		return slog.Bool(field.Key, field.BoolValue())
+	case observability.FieldKindError:
+		if err, ok := field.AnyValue().(error); ok {
+			return slog.String(field.Key, err.Error())
+		}
+		return slog.String(field.Key, "")
 	default:
-		return slog.Any(field.Key, field.Value)
+		return slog.Any(field.Key, field.AnyValue())
 	}
 }
 
 // sanitizeFields sanitizes, validates, and redacts sensitive data from fields.
 func sanitizeFields(fields []observability.Field) []observability.Field {
-	// Limit number of fields to prevent cardinality explosion
+	// Limit number of fields to prevent cardinality explosion.
 	if len(fields) > maxFields {
 		fields = fields[:maxFields]
 	}
 
-	// First pass: check if sanitization is needed to avoid unnecessary allocations
+	// First pass: check if sanitization is needed to avoid unnecessary allocations.
 	needsSanitization := false
 	for _, field := range fields {
 		if isSensitiveKey(field.Key) {
 			needsSanitization = true
 			break
 		}
-		if s, ok := field.Value.(string); ok && len(s) > maxFieldValueLength {
+		if field.Kind() == observability.FieldKindString && len(field.StringValue()) > maxFieldValueLength {
 			needsSanitization = true
 			break
 		}
 	}
 
-	// If no sanitization needed, return original slice (zero allocation)
+	// If no sanitization needed, return original slice (zero allocation).
 	if !needsSanitization {
 		return fields
 	}
 
-	// Only allocate when sanitization is actually required
+	// Only allocate when sanitization is actually required.
 	sanitized := make([]observability.Field, len(fields))
 	for i, field := range fields {
-		// Redact sensitive keys
+		// Redact sensitive keys.
 		if isSensitiveKey(field.Key) {
 			sanitized[i] = observability.String(field.Key, redactedValue)
 			continue
 		}
 
-		// Truncate long string values
-		if s, ok := field.Value.(string); ok {
+		// Truncate long string values.
+		if field.Kind() == observability.FieldKindString {
+			s := field.StringValue()
 			if len(s) > maxFieldValueLength {
 				sanitized[i] = observability.String(field.Key, s[:maxFieldValueLength]+"...[truncated]")
 				continue

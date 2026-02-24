@@ -14,9 +14,9 @@ func TestStringField(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "key")
 	}
 
-	value, ok := field.Value.(string)
+	value, ok := field.AnyValue().(string)
 	if !ok {
-		t.Fatalf("field.Value is not a string, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not a string, got %T", field.AnyValue())
 	}
 
 	if value != "value" {
@@ -31,9 +31,9 @@ func TestIntField(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "count")
 	}
 
-	value, ok := field.Value.(int)
+	value, ok := field.AnyValue().(int)
 	if !ok {
-		t.Fatalf("field.Value is not an int, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not an int, got %T", field.AnyValue())
 	}
 
 	if value != 42 {
@@ -48,9 +48,9 @@ func TestInt64Field(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "count")
 	}
 
-	value, ok := field.Value.(int64)
+	value, ok := field.AnyValue().(int64)
 	if !ok {
-		t.Fatalf("field.Value is not an int64, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not an int64, got %T", field.AnyValue())
 	}
 
 	if value != 9223372036854775807 {
@@ -65,9 +65,9 @@ func TestFloat64Field(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "latency")
 	}
 
-	value, ok := field.Value.(float64)
+	value, ok := field.AnyValue().(float64)
 	if !ok {
-		t.Fatalf("field.Value is not a float64, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not a float64, got %T", field.AnyValue())
 	}
 
 	if value != 3.14159 {
@@ -82,9 +82,9 @@ func TestBoolField(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "success")
 	}
 
-	value, ok := field.Value.(bool)
+	value, ok := field.AnyValue().(bool)
 	if !ok {
-		t.Fatalf("field.Value is not a bool, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not a bool, got %T", field.AnyValue())
 	}
 
 	if value != true {
@@ -100,9 +100,9 @@ func TestErrorField(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "error")
 	}
 
-	value, ok := field.Value.(error)
+	value, ok := field.AnyValue().(error)
 	if !ok {
-		t.Fatalf("field.Value is not an error, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not an error, got %T", field.AnyValue())
 	}
 
 	if value.Error() != "test error" {
@@ -123,9 +123,9 @@ func TestAnyField(t *testing.T) {
 		t.Errorf("got key %q, want %q", field.Key, "custom")
 	}
 
-	value, ok := field.Value.(customStruct)
+	value, ok := field.AnyValue().(customStruct)
 	if !ok {
-		t.Fatalf("field.Value is not customStruct, got %T", field.Value)
+		t.Fatalf("field.AnyValue() is not customStruct, got %T", field.AnyValue())
 	}
 
 	if value.Name != "John" || value.Age != 30 {
@@ -186,9 +186,9 @@ func TestFieldHelpers(t *testing.T) {
 
 			// For error type, compare error messages
 			if wantErr, ok := tt.wantValue.(error); ok {
-				gotErr, ok := tt.field.Value.(error)
+				gotErr, ok := tt.field.AnyValue().(error)
 				if !ok {
-					t.Fatalf("field.Value is not an error, got %T", tt.field.Value)
+					t.Fatalf("field.AnyValue() is not an error, got %T", tt.field.AnyValue())
 				}
 				if gotErr.Error() != wantErr.Error() {
 					t.Errorf("got error %q, want %q", gotErr.Error(), wantErr.Error())
@@ -196,8 +196,8 @@ func TestFieldHelpers(t *testing.T) {
 				return
 			}
 
-			if tt.field.Value != tt.wantValue {
-				t.Errorf("got value %v, want %v", tt.field.Value, tt.wantValue)
+			if tt.field.AnyValue() != tt.wantValue {
+				t.Errorf("got value %v, want %v", tt.field.AnyValue(), tt.wantValue)
 			}
 		})
 	}
