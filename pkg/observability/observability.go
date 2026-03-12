@@ -152,6 +152,16 @@ type Span interface {
 	AddEvent(name string, fields ...Field)
 	// Context returns the span context.
 	Context() SpanContext
+	// TraceID returns the trace ID as a lowercase hex string.
+	// Zero-allocation fast path — prefer this over Context().TraceID() in hot paths.
+	// Returns "" for unsampled or noop spans.
+	TraceID() string
+	// SpanID returns the span ID as a lowercase hex string.
+	// Zero-allocation fast path — prefer this over Context().SpanID() in hot paths.
+	// Returns "" for unsampled or noop spans.
+	SpanID() string
+	// IsSampled reports whether the span is being sampled.
+	IsSampled() bool
 }
 
 // StatusCode represents the canonical status code of a span.
@@ -174,53 +184,60 @@ const (
 	SpanKindConsumer
 )
 
-// SpanOption configures span creation.
-type SpanOption interface {
-	apply(*spanConfig)
-}
-
-type spanConfig struct {
+// SpanConfig holds the resolved span configuration for provider implementations.
+// Concrete struct (not interface) so callers can stack-allocate via ApplySpanOptions,
+// eliminating the *spanConfig heap allocation present in the old NewSpanConfig design.
+type SpanConfig struct {
 	kind       SpanKind
 	attributes []Field
 }
 
-type spanOptionFunc func(*spanConfig)
+// Kind returns the span kind.
+func (c SpanConfig) Kind() SpanKind { return c.kind }
 
-func (f spanOptionFunc) apply(c *spanConfig) {
-	f(c)
+// Attributes returns the span attributes.
+func (c SpanConfig) Attributes() []Field { return c.attributes }
+
+// SpanOption configures span creation.
+type SpanOption interface {
+	apply(*SpanConfig)
 }
+
+// spanKindOpt is a concrete value type for WithSpanKind.
+// Replaces the previous spanOptionFunc closure: a concrete struct boxed into
+// a SpanOption interface is smaller and more inlineable than a function closure.
+type spanKindOpt struct{ kind SpanKind }
+
+func (o spanKindOpt) apply(c *SpanConfig) { c.kind = o.kind }
+
+// spanAttrsOpt is a concrete value type for WithAttributes.
+type spanAttrsOpt struct{ attrs []Field }
+
+func (o spanAttrsOpt) apply(c *SpanConfig) { c.attributes = append(c.attributes, o.attrs...) }
 
 // WithSpanKind sets the span kind.
-func WithSpanKind(kind SpanKind) SpanOption {
-	return spanOptionFunc(func(c *spanConfig) {
-		c.kind = kind
-	})
-}
+func WithSpanKind(kind SpanKind) SpanOption { return spanKindOpt{kind: kind} }
 
 // WithAttributes sets initial attributes on the span.
-func WithAttributes(fields ...Field) SpanOption {
-	return spanOptionFunc(func(c *spanConfig) {
-		c.attributes = append(c.attributes, fields...)
-	})
-}
+func WithAttributes(fields ...Field) SpanOption { return spanAttrsOpt{attrs: fields} }
 
-// NewSpanConfig creates a span configuration from options (exported for provider implementations).
-func NewSpanConfig(opts []SpanOption) SpanConfig {
-	cfg := &spanConfig{
-		kind:       SpanKindInternal,
-		attributes: nil,
-	}
+// ApplySpanOptions applies opts to a caller-allocated SpanConfig.
+// Enables stack allocation in the caller, eliminating the *SpanConfig heap
+// allocation incurred by NewSpanConfig on every traced call with options.
+//
+//	var cfg observability.SpanConfig
+//	observability.ApplySpanOptions(&cfg, opts)
+func ApplySpanOptions(cfg *SpanConfig, opts []SpanOption) {
+	cfg.kind = SpanKindInternal
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}
+}
+
+// NewSpanConfig creates a span configuration from options (exported for provider implementations).
+// For hot paths, prefer ApplySpanOptions with a stack-allocated SpanConfig.
+func NewSpanConfig(opts []SpanOption) SpanConfig {
+	var cfg SpanConfig
+	ApplySpanOptions(&cfg, opts)
 	return cfg
 }
-
-// SpanConfig provides access to span configuration (for provider implementations).
-type SpanConfig interface {
-	Kind() SpanKind
-	Attributes() []Field
-}
-
-func (c *spanConfig) Kind() SpanKind    { return c.kind }
-func (c *spanConfig) Attributes() []Field { return c.attributes }

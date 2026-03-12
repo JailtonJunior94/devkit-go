@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -53,6 +54,17 @@ type Config struct {
 	// Log configuration
 	LogLevel  observability.LogLevel
 	LogFormat observability.LogFormat
+	// Sanitize enables sensitive-field redaction (password, token, etc.) and long-value
+	// truncation in log entries. Disabled by default for performance; enable in
+	// environments where PII may appear in structured fields.
+	Sanitize bool
+	// ConsoleLog enables JSON output to stdout via slog in addition to OTLP export.
+	// Default false (production): only the async OTel batch exporter runs — no
+	// sync.Mutex, no I/O on the calling goroutine.
+	// Set true in local/development environments for human-readable log output.
+	// WARNING: slog's JSONHandler holds a sync.Mutex per write; enabling this in
+	// production under concurrent load introduces serialisation and p99 spikes.
+	ConsoleLog bool
 
 	// Metrics configuration
 	MetricExportInterval    int64    // Export interval in seconds (default: 60)
@@ -94,14 +106,15 @@ func normalizeProtocol(protocol string) OTLPProtocol {
 
 // Provider implements the observability.Observability interface using OpenTelemetry.
 type Provider struct {
-	config          *Config
-	tracerProvider  *sdktrace.TracerProvider
-	meterProvider   *sdkmetric.MeterProvider
-	loggerProvider  *sdklog.LoggerProvider
-	tracer          *otelTracer
-	logger          *otelLogger
-	metrics         *otelMetrics
-	shutdownFuncs   []func(context.Context) error
+	config         *Config
+	tracerProvider *sdktrace.TracerProvider
+	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *sdklog.LoggerProvider
+	tracer         *otelTracer
+	logger         *otelLogger
+	metrics        *otelMetrics
+	shutdownFuncs  []func(context.Context) error
+	shutdownOnce   sync.Once // guards idempotent Shutdown
 }
 
 // validateConfig validates required configuration fields.
@@ -194,19 +207,6 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 		propagation.Baggage{},
 	))
 
-	// Initialize cardinality validator
-	// Auto-enable in production if not explicitly set
-	enableValidation := config.EnableCardinalityCheck
-	if !enableValidation && strings.ToLower(config.Environment) == "production" {
-		enableValidation = true
-	}
-	cardinalityValidator := observability.NewCardinalityValidator(enableValidation)
-	if len(config.CustomBlockedLabels) > 0 {
-		for _, label := range config.CustomBlockedLabels {
-			cardinalityValidator.AddBlockedLabel(label)
-		}
-	}
-
 	// Initialize components
 	provider.tracer = newOtelTracer(provider.tracerProvider.Tracer(config.ServiceName))
 	provider.logger = newOtelLogger(
@@ -214,11 +214,12 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 		config.LogFormat,
 		config.ServiceName,
 		provider.loggerProvider.Logger(config.ServiceName),
+		config.Sanitize,
+		config.ConsoleLog,
 	)
 	provider.metrics = newOtelMetrics(
 		provider.meterProvider.Meter(config.ServiceName),
 		config.MetricNamespace,
-		cardinalityValidator,
 	)
 
 	return provider, nil
@@ -441,17 +442,20 @@ func (p *Provider) Metrics() observability.Metrics {
 }
 
 // Shutdown gracefully shuts down the provider, flushing any pending telemetry.
+// Idempotent: concurrent or repeated calls are safe — only the first execution
+// runs the shutdown functions; subsequent calls return nil immediately.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	var errs []error
-	for _, shutdown := range p.shutdownFuncs {
-		if err := shutdown(ctx); err != nil {
-			errs = append(errs, err)
+	var shutdownErr error
+	p.shutdownOnce.Do(func() {
+		var errs []error
+		for _, fn := range p.shutdownFuncs {
+			if err := fn(ctx); err != nil {
+				errs = append(errs, err)
+			}
 		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors during shutdown: %v", errs)
-	}
-
-	return nil
+		if len(errs) > 0 {
+			shutdownErr = fmt.Errorf("errors during shutdown: %v", errs)
+		}
+	})
+	return shutdownErr
 }

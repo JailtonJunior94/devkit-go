@@ -43,6 +43,45 @@ func initSensitiveKeysLower() []string {
 	return lower
 }
 
+// hexTable is used by encodeHex to avoid an import of encoding/hex.
+const hexTable = "0123456789abcdef"
+
+// encodeHex encodes src bytes as lowercase hex into dst.
+// dst must have length >= 2*len(src). No allocations.
+func encodeHex(dst, src []byte) {
+	for i, b := range src {
+		dst[i*2] = hexTable[b>>4]
+		dst[i*2+1] = hexTable[b&0xf]
+	}
+}
+
+// asciiContainsFold reports whether s contains substr using ASCII case-insensitive
+// comparison. substr must already be lowercase (as stored in sensitiveKeysLower).
+// Zero allocations — avoids strings.ToLower(s) which heap-allocates a new string.
+func asciiContainsFold(s, substr string) bool {
+	ls, lsub := len(s), len(substr)
+	if lsub == 0 {
+		return true
+	}
+	if lsub > ls {
+		return false
+	}
+outer:
+	for i := 0; i <= ls-lsub; i++ {
+		for j := 0; j < lsub; j++ {
+			c := s[i+j]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A' // toLower for ASCII only — no alloc
+			}
+			if c != substr[j] {
+				continue outer
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // slogAttrPool and otlpAttrPool pool attribute slices for the logger hot path.
 // Eliminates per-call heap allocation for the two parallel attribute lists.
 var (
@@ -50,30 +89,59 @@ var (
 	otlpAttrPool = sync.Pool{New: func() any { s := make([]otellog.KeyValue, 0, 16); return &s }}
 )
 
-// otelLogger implements observability.Logger using OTel Logger API with slog fallback.
+// otelLogger implements observability.Logger using OTel Logger API.
+//
+// Field ordering is optimised for cache-line locality on 64-bit systems (8-byte words):
+//
+//	CL0 (bytes 0–63):  otelLog(16) + slogLogger(8) + serviceName(16) + fields(24) = 64 B
+//	CL1 (bytes 64–…):  sanitize(1) + console(1) + pad(6) + level(16) + format(16)
+//
+// All fields touched on every log call (otelLog, slogLogger, serviceName, fields) fit in a
+// single cache line, avoiding a second L1/L2 fetch on the hot path.
+//
+// Hot path (console=false, default):
+//   - No slog mutex, no I/O, no JSON encoding on the calling goroutine
+//   - Only the OTel BatchProcessor channel send (async, lock-free on the write side)
+//   - OTel SDK automatically extracts TraceID/SpanID from ctx during Emit
+//
+// Development path (console=true):
+//   - slog JSON → stdout (sync, mutex), then OTLP emit
+//   - TraceID/SpanID injected into slog output (human readable)
 type otelLogger struct {
-	otelLog     otellog.Logger // OTel logger for OTLP export
-	slogLogger  *slog.Logger   // Slog logger for console output
-	level       observability.LogLevel
-	format      observability.LogFormat
-	serviceName string
-	fields      []observability.Field
+	otelLog     otellog.Logger        // CL0: 0–15   (interface: type ptr + data ptr)
+	slogLogger  *slog.Logger          // CL0: 16–23  (pointer; always non-nil for Enabled() check)
+	serviceName string                // CL0: 24–39  (string header: ptr + len)
+	fields      []observability.Field // CL0: 40–63  (slice header: ptr + len + cap)
+	sanitize    bool                  // CL1: 64     (opt-in sensitive-field redaction)
+	console     bool                  // CL1: 65     (enable slog stdout — development only)
+	level       observability.LogLevel  // CL1: 72–87 (padded to align 8)
+	format      observability.LogFormat // CL1: 88–103
 }
 
-// newOtelLogger creates a new logger with the specified level and format.
+// newOtelLogger creates a new logger.
+//
+//   - sanitize: redact sensitive fields + truncate long values (Config.Sanitize)
+//   - console:  also write JSON to stdout via slog (Config.ConsoleLog, development only)
+//
+// When console=false (default) the slog logger is still created — its Enabled() method
+// provides the level check via a plain integer comparison with no lock.
 func newOtelLogger(
 	level observability.LogLevel,
 	format observability.LogFormat,
 	serviceName string,
 	otelLog otellog.Logger,
+	sanitize bool,
+	console bool,
 ) *otelLogger {
 	return &otelLogger{
 		otelLog:     otelLog,
 		slogLogger:  createSlogLogger(level, format, os.Stdout),
-		level:       level,
-		format:      format,
 		serviceName: serviceName,
 		fields:      nil,
+		sanitize:    sanitize,
+		console:     console,
+		level:       level,
+		format:      format,
 	}
 }
 
@@ -130,10 +198,24 @@ func (l *otelLogger) Error(ctx context.Context, msg string, fields ...observabil
 	l.log(ctx, slog.LevelError, msg, fields...)
 }
 
-// log is the internal logging method. It performs a single pass over fields to build
-// both the slog and OTLP attribute lists, using pooled slices to avoid per-call allocation.
+// log is the internal dispatch method.
+//
+// Level check: slogLogger.Enabled() delegates to commonHandler.Enabled() which is
+// a plain integer comparison — no mutex, no allocation, always in-cache (CL0).
+//
+// console=false (default, production):
+//
+//	Only the OTel OTLP path runs. No slog JSON encoding, no sync.Mutex, no I/O
+//	on the calling goroutine. OTel SDK BatchProcessor sends to an async channel.
+//	OTel SDK automatically extracts TraceID/SpanID from ctx during Emit —
+//	no manual hex encoding needed here.
+//
+// console=true (development):
+//
+//	Calls logConsole(), which writes JSON to stdout (acquires slog mutex) then
+//	emits to OTLP. TraceID/SpanID injected into the slog attrs for human readability.
 func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fields ...observability.Field) {
-	// Fast path: skip all work if the level is disabled.
+	// Level check: integer comparison, no lock.
 	if !l.slogLogger.Enabled(ctx, level) {
 		return
 	}
@@ -142,43 +224,87 @@ func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fiel
 		msg = "[empty message]"
 	}
 
-	fields = sanitizeFields(fields)
+	// sanitizeFields is O(n×m) — only pay the cost when explicitly opted in.
+	if l.sanitize {
+		fields = sanitizeFields(fields)
+	}
 
-	// Acquire pooled slices for zero-allocation single-pass conversion.
+	if l.console {
+		l.logConsole(ctx, level, msg, fields)
+		return
+	}
+
+	// ── Production fast path: OTLP only ─────────────────────────────────────
+	// One pool acquire, one pass over fields, one async channel send.
+	// No mutex, no JSON encoding, no TraceID hex, no I/O on this goroutine.
+	op := otlpAttrPool.Get().(*[]otellog.KeyValue)
+	otlpAttrs := (*op)[:0]
+
+	for _, f := range l.fields {
+		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
+	}
+	for _, f := range fields {
+		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
+	}
+	otlpAttrs = append(otlpAttrs, otellog.String("service", l.serviceName))
+
+	record := otellog.Record{}
+	record.SetTimestamp(time.Now())
+	record.SetBody(otellog.StringValue(msg))
+	record.SetSeverity(convertSlogLevelToOTel(level))
+	record.SetSeverityText(level.String())
+	record.AddAttributes(otlpAttrs...)
+	l.otelLog.Emit(ctx, record) // async: SDK BatchProcessor channel send
+
+	*op = otlpAttrs[:0]
+	otlpAttrPool.Put(op)
+}
+
+// logConsole is the development path: slog JSON stdout + OTLP emit.
+// Separated from log() so the inliner can keep the production fast path lean.
+// Called only when Config.ConsoleLog=true.
+//
+// Cost: acquires slog's sync.Mutex for JSON serialisation → not suitable for
+// production workloads under concurrent load (use console=false there).
+func (l *otelLogger) logConsole(ctx context.Context, level slog.Level, msg string, fields []observability.Field) {
 	sp := slogAttrPool.Get().(*[]slog.Attr)
 	op := otlpAttrPool.Get().(*[]otellog.KeyValue)
 	slogAttrs := (*sp)[:0]
 	otlpAttrs := (*op)[:0]
 
-	// Single pass: permanent fields (from With).
+	// Single pass over both permanent and call-specific fields.
 	for _, f := range l.fields {
 		slogAttrs = append(slogAttrs, convertFieldToSlogAttr(f))
 		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
 	}
-
-	// Single pass: call-specific fields.
 	for _, f := range fields {
 		slogAttrs = append(slogAttrs, convertFieldToSlogAttr(f))
 		otlpAttrs = append(otlpAttrs, convertFieldToOTelAttr(f))
 	}
 
-	// Service field (always a string — skip generic conversion).
 	slogAttrs = append(slogAttrs, slog.String("service", l.serviceName))
 	otlpAttrs = append(otlpAttrs, otellog.String("service", l.serviceName))
 
 	// Inject trace context into slog output only.
-	// The OTel SDK extracts trace context from ctx automatically during Emit,
-	// so adding it manually to OTLP attrs would duplicate it in the backend.
+	// OTel SDK extracts it from ctx automatically during Emit — don't duplicate.
 	span := trace.SpanFromContext(ctx)
 	spanCtx := span.SpanContext()
 	if spanCtx.IsValid() {
+		// Stack-allocated hex buffers: 2 allocs (string copies) instead of 4
+		// (hex.EncodeToString allocates []byte + string per call).
+		tid := spanCtx.TraceID()
+		sid := spanCtx.SpanID()
+		var tidHex [32]byte
+		var sidHex [16]byte
+		encodeHex(tidHex[:], tid[:])
+		encodeHex(sidHex[:], sid[:])
 		slogAttrs = append(slogAttrs,
-			slog.String("trace_id", spanCtx.TraceID().String()),
-			slog.String("span_id", spanCtx.SpanID().String()),
+			slog.String("trace_id", string(tidHex[:])),
+			slog.String("span_id", string(sidHex[:])),
 		)
 	}
 
-	l.slogLogger.LogAttrs(ctx, level, msg, slogAttrs...)
+	l.slogLogger.LogAttrs(ctx, level, msg, slogAttrs...) // ← acquires mutex here
 
 	record := otellog.Record{}
 	record.SetTimestamp(time.Now())
@@ -188,7 +314,6 @@ func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fiel
 	record.AddAttributes(otlpAttrs...)
 	l.otelLog.Emit(ctx, record)
 
-	// Return slices to pool. Update pointers in case append reallocated.
 	*sp = slogAttrs[:0]
 	*op = otlpAttrs[:0]
 	slogAttrPool.Put(sp)
@@ -245,10 +370,12 @@ func (l *otelLogger) With(fields ...observability.Field) observability.Logger {
 	return &otelLogger{
 		otelLog:     l.otelLog,
 		slogLogger:  l.slogLogger,
-		level:       l.level,
-		format:      l.format,
 		serviceName: l.serviceName,
 		fields:      newFields,
+		sanitize:    l.sanitize,
+		console:     l.console,
+		level:       l.level,
+		format:      l.format,
 	}
 }
 
@@ -326,11 +453,12 @@ func sanitizeFields(fields []observability.Field) []observability.Field {
 }
 
 // isSensitiveKey checks if a field key matches any sensitive key pattern.
-// Uses pre-computed lowercase sensitive keys for performance.
+// Uses asciiContainsFold for zero-allocation case-insensitive ASCII comparison.
+// Previously used strings.ToLower(key) which heap-allocated a new string on
+// every call for every field; now zero allocations in the common case.
 func isSensitiveKey(key string) bool {
-	keyLower := strings.ToLower(key)
 	for _, sensitive := range sensitiveKeysLower {
-		if strings.Contains(keyLower, sensitive) {
+		if asciiContainsFold(key, sensitive) {
 			return true
 		}
 	}

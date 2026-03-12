@@ -83,6 +83,12 @@ func (s noopSpan) Context() observability.SpanContext {
 	return globalNoopSpanContext
 }
 
+func (s noopSpan) TraceID() string { return "" }
+
+func (s noopSpan) SpanID() string { return "" }
+
+func (s noopSpan) IsSampled() bool { return false }
+
 // noopSpanContext implements observability.SpanContext with no-op operations.
 type noopSpanContext struct{}
 

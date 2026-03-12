@@ -9,17 +9,15 @@ import (
 
 // otelMetrics implements observability.Metrics using OpenTelemetry.
 type otelMetrics struct {
-	meter                metric.Meter
-	namespace            string
-	cardinalityValidator *observability.CardinalityValidator
+	meter     metric.Meter
+	namespace string
 }
 
 // newOtelMetrics creates a new OpenTelemetry metrics recorder.
-func newOtelMetrics(meter metric.Meter, namespace string, validator *observability.CardinalityValidator) *otelMetrics {
+func newOtelMetrics(meter metric.Meter, namespace string) *otelMetrics {
 	return &otelMetrics{
-		meter:                meter,
-		namespace:            namespace,
-		cardinalityValidator: validator,
+		meter:     meter,
+		namespace: namespace,
 	}
 }
 
@@ -42,10 +40,7 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 	if err != nil {
 		return &noopCounter{}
 	}
-	return &otelCounter{
-		counter:   counter,
-		validator: m.cardinalityValidator,
-	}
+	return &otelCounter{counter: counter}
 }
 
 // Histogram creates or returns a histogram metric.
@@ -59,10 +54,7 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 	if err != nil {
 		return &noopHistogram{}
 	}
-	return &otelHistogram{
-		histogram: histogram,
-		validator: m.cardinalityValidator,
-	}
+	return &otelHistogram{histogram: histogram}
 }
 
 // HistogramWithBuckets creates or returns a histogram metric with custom bucket boundaries.
@@ -77,10 +69,7 @@ func (m *otelMetrics) HistogramWithBuckets(name, description, unit string, bucke
 	if err != nil {
 		return &noopHistogram{}
 	}
-	return &otelHistogram{
-		histogram: histogram,
-		validator: m.cardinalityValidator,
-	}
+	return &otelHistogram{histogram: histogram}
 }
 
 // UpDownCounter creates or returns an up-down counter metric.
@@ -94,10 +83,7 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 	if err != nil {
 		return &noopUpDownCounter{}
 	}
-	return &otelUpDownCounter{
-		counter:   upDown,
-		validator: m.cardinalityValidator,
-	}
+	return &otelUpDownCounter{counter: upDown}
 }
 
 // Gauge creates an asynchronous gauge metric.
@@ -117,18 +103,15 @@ func (m *otelMetrics) Gauge(name, description, unit string, callback observabili
 }
 
 // otelCounter implements observability.Counter.
+// The CardinalityValidator has been removed from the recording path.
+// Label validation (if needed) must be performed at the call site before
+// invoking Add/Increment, or at instrument-creation time.
 type otelCounter struct {
-	counter   metric.Int64Counter
-	validator *observability.CardinalityValidator
+	counter metric.Int64Counter
 }
 
 // Add increments the counter.
 func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	if c.validator != nil {
-		if err := c.validator.Validate(fields); err != nil {
-			return
-		}
-	}
 	if len(fields) == 0 {
 		c.counter.Add(ctx, value)
 		return
@@ -148,16 +131,10 @@ func (c *otelCounter) Increment(ctx context.Context, fields ...observability.Fie
 // otelHistogram implements observability.Histogram.
 type otelHistogram struct {
 	histogram metric.Float64Histogram
-	validator *observability.CardinalityValidator
 }
 
 // Record adds a value to the histogram.
 func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
-	if h.validator != nil {
-		if err := h.validator.Validate(fields); err != nil {
-			return
-		}
-	}
 	if len(fields) == 0 {
 		h.histogram.Record(ctx, value)
 		return
@@ -171,17 +148,11 @@ func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...obs
 
 // otelUpDownCounter implements observability.UpDownCounter.
 type otelUpDownCounter struct {
-	counter   metric.Int64UpDownCounter
-	validator *observability.CardinalityValidator
+	counter metric.Int64UpDownCounter
 }
 
 // Add adds a value to the up-down counter.
 func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
-	if u.validator != nil {
-		if err := u.validator.Validate(fields); err != nil {
-			return
-		}
-	}
 	if len(fields) == 0 {
 		u.counter.Add(ctx, value)
 		return

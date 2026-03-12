@@ -67,6 +67,9 @@ func NewCardinalityValidatorWithCustomLabels(enabled bool, customBlockedLabels [
 
 // Validate checks if any field contains a high-cardinality label.
 // Returns an error if validation is enabled and a blocked label is found.
+//
+// Uses strings.EqualFold for case-insensitive comparison without allocating
+// a normalised string per field (strings.ToLower allocates; EqualFold does not).
 func (v *CardinalityValidator) Validate(fields []Field) error {
 	if !v.enabled {
 		return nil
@@ -76,12 +79,13 @@ func (v *CardinalityValidator) Validate(fields []Field) error {
 	defer v.mu.RUnlock()
 
 	for _, field := range fields {
-		normalizedKey := strings.ToLower(field.Key)
-		if v.blockedLabels[normalizedKey] {
-			return fmt.Errorf(
-				"high-cardinality label '%s' is not allowed in metrics; use low-cardinality alternatives like type, category, or status",
-				field.Key,
-			)
+		for blocked := range v.blockedLabels {
+			if strings.EqualFold(field.Key, blocked) {
+				return fmt.Errorf(
+					"high-cardinality label '%s' is not allowed in metrics; use low-cardinality alternatives like type, category, or status",
+					field.Key,
+				)
+			}
 		}
 	}
 
@@ -103,8 +107,14 @@ func (v *CardinalityValidator) RemoveBlockedLabel(label string) {
 }
 
 // IsBlocked checks if a specific label is blocked.
+// Uses strings.EqualFold — zero allocation.
 func (v *CardinalityValidator) IsBlocked(label string) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	return v.blockedLabels[strings.ToLower(label)]
+	for blocked := range v.blockedLabels {
+		if strings.EqualFold(label, blocked) {
+			return true
+		}
+	}
+	return false
 }

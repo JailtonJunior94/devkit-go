@@ -166,11 +166,20 @@ func (s *FakeSpan) AddEvent(name string, fields ...observability.Field) {
 // Context returns a fake span context.
 func (s *FakeSpan) Context() observability.SpanContext {
 	return &FakeSpanContext{
-		traceID:  "fake-trace-id",
-		spanID:   "fake-span-id",
-		sampled:  true,
+		traceID: "fake-trace-id",
+		spanID:  "fake-span-id",
+		sampled: true,
 	}
 }
+
+// TraceID returns the fake trace ID directly. Zero allocation.
+func (s *FakeSpan) TraceID() string { return "fake-trace-id" }
+
+// SpanID returns the fake span ID directly. Zero allocation.
+func (s *FakeSpan) SpanID() string { return "fake-span-id" }
+
+// IsSampled reports whether the fake span is sampled (always true).
+func (s *FakeSpan) IsSampled() bool { return true }
 
 // FakeEvent represents a recorded span event.
 type FakeEvent struct {

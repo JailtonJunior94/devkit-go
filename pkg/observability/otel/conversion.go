@@ -10,9 +10,10 @@ import (
 
 // otelAttrPool pools slices of attribute.KeyValue to reduce per-call GC pressure.
 // Slices are reset to length 0 but retain their capacity between reuses.
+// Capacity is 16 to match slogAttrPool and avoid reallocation for typical field counts.
 var otelAttrPool = sync.Pool{
 	New: func() any {
-		s := make([]attribute.KeyValue, 0, 8)
+		s := make([]attribute.KeyValue, 0, 16)
 		return &s
 	},
 }
