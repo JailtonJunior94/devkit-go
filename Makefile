@@ -18,6 +18,10 @@ test:
 	@echo "Running tests..."
 	go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
+test-integration:
+	@echo "Running integration tests..."
+	go test -v -race -tags=integration -coverprofile=coverage_integration.txt -covermode=atomic ./...
+
 cover:
 	@echo "Generating coverage report..."
 	go tool cover -html=coverage.out
