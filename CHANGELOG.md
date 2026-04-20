@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.1.0] - 2026-04-20
+
 ### Added
 - `pkg/nullable`: nullable value objects for int, int64, float32, float64, string and time
 
@@ -78,7 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Database migration support (`pkg/migration`)
 - Encryption utilities (`pkg/encrypt`)
 
-[Unreleased]: https://github.com/JailtonJunior94/devkit-go/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/JailtonJunior94/devkit-go/compare/v2.1.0...HEAD
+[v2.1.0]: https://github.com/JailtonJunior94/devkit-go/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/JailtonJunior94/devkit-go/compare/v1.7.8...v2.0.0
 [v1.7.8]: https://github.com/JailtonJunior94/devkit-go/compare/v1.7.0...v1.7.8
 [v1.7.0]: https://github.com/JailtonJunior94/devkit-go/compare/v1.6.0...v1.7.0
