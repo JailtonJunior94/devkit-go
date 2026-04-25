@@ -15,16 +15,14 @@ import (
 func TestGitCLIIntegration(t *testing.T) {
 	t.Parallel()
 
-	repoPath, remotePath := newGitRepository(t)
-	gitCLI := NewGitCLI(repoPath)
-
-	firstSHA := gitCommitFile(t, repoPath, "README.md", "bootstrap\n", "docs: bootstrap repository", "")
-	secondSHA := gitCommitFile(t, repoPath, "feature.txt", "feature\n", "feat: add release automation", "BREAKING CHANGE: none\n")
-
-	ctx := context.Background()
-
 	t.Run("detects bootstrap repository without tags", func(t *testing.T) {
 		t.Parallel()
+
+		repoPath, _ := newGitRepository(t)
+		gitCLI := NewGitCLI(repoPath)
+		firstSHA := gitCommitFile(t, repoPath, "README.md", "bootstrap\n", "docs: bootstrap repository", "")
+		secondSHA := gitCommitFile(t, repoPath, "feature.txt", "feature\n", "feat: add release automation", "BREAKING CHANGE: none\n")
+		ctx := context.Background()
 
 		latest, err := gitCLI.LatestTag(ctx)
 		require.NoError(t, err)
@@ -39,6 +37,12 @@ func TestGitCLIIntegration(t *testing.T) {
 
 	t.Run("reads commits since existing tag and manages tags", func(t *testing.T) {
 		t.Parallel()
+
+		repoPath, remotePath := newGitRepository(t)
+		gitCLI := NewGitCLI(repoPath)
+		firstSHA := gitCommitFile(t, repoPath, "README.md", "bootstrap\n", "docs: bootstrap repository", "")
+		_ = gitCommitFile(t, repoPath, "feature.txt", "feature\n", "feat: add release automation", "BREAKING CHANGE: none\n")
+		ctx := context.Background()
 
 		runGit(t, repoPath, "tag", "v0.1.0", firstSHA)
 
