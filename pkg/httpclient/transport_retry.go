@@ -27,7 +27,7 @@ import (
 // - retry.attempt: Current attempt number (1-indexed)
 //
 // Span events added:
-// - retry_attempt: Logged before each retry with attempt number and reason
+// - retry_attempt: Logged before each retry with attempt number and reason.
 type retryTransport struct {
 	base            http.RoundTripper
 	maxAttempts     int
@@ -168,7 +168,7 @@ func (t *retryTransport) bufferBody(req *http.Request) ([]byte, error) {
 		return nil, nil
 	}
 
-	defer req.Body.Close()
+	defer func() { _ = req.Body.Close() }()
 
 	limitedReader := io.LimitReader(req.Body, t.maxBodySize+1)
 	bodyBytes, err := io.ReadAll(limitedReader)

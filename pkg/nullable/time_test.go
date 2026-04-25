@@ -109,7 +109,7 @@ func TestTime_Equal_nullVsPresent(t *testing.T) {
 
 func TestTime_Equal_reflexive(t *testing.T) {
 	a := nullable.TimeOf(newTestTime())
-	require.True(t, a.Equal(a))
+	require.True(t, a.Equal(a)) //nolint:gocritic // intentional reflexivity test
 }
 
 func TestTime_Equal_symmetric(t *testing.T) {

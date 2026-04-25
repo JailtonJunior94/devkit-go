@@ -22,7 +22,7 @@ type instrumentation struct {
 // Following OpenTelemetry Semantic Conventions for HTTP client metrics:
 // - http.client.request.count: Total number of HTTP client requests
 // - http.client.request.errors: Total number of HTTP client request errors
-// - http.client.request.duration: Duration of HTTP client requests in milliseconds
+// - http.client.request.duration: Duration of HTTP client requests in milliseconds.
 func newInstrumentation(tracer observability.Tracer, metrics observability.Metrics) *instrumentation {
 	return &instrumentation{
 		tracer: tracer,

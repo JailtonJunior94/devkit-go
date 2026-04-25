@@ -206,7 +206,7 @@ func corsMiddleware(origins string) fiber.Handler {
 	}
 }
 
-// parseOrigins splits comma-separated origins
+// parseOrigins splits comma-separated origins.
 func parseOrigins(origins string) []string {
 	if origins == "" {
 		return []string{}
@@ -228,7 +228,7 @@ func parseOrigins(origins string) []string {
 	return result
 }
 
-// isOriginAllowed checks if the origin is in the allowed list
+// isOriginAllowed checks if the origin is in the allowed list.
 func isOriginAllowed(origin string, allowedOrigins []string) bool {
 	if len(allowedOrigins) == 0 {
 		return false
@@ -249,7 +249,7 @@ func isOriginAllowed(origin string, allowedOrigins []string) bool {
 	return false
 }
 
-// splitAndTrim splits a string by delimiter and trims each part
+// splitAndTrim splits a string by delimiter and trims each part.
 func splitAndTrim(s, sep string) []string {
 	parts := []string{}
 	for _, part := range splitString(s, sep) {

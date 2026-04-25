@@ -73,7 +73,7 @@ func TestInt_Equal_nullVsPresent(t *testing.T) {
 
 func TestInt_Equal_reflexive(t *testing.T) {
 	a := nullable.IntOf(3)
-	require.True(t, a.Equal(a))
+	require.True(t, a.Equal(a)) //nolint:gocritic // intentional reflexivity test
 }
 
 func TestInt_Equal_symmetric(t *testing.T) {

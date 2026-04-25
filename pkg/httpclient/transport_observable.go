@@ -24,7 +24,7 @@ import (
 // Metrics recorded:
 // - http.client.request.count: Incremented for every request
 // - http.client.request.errors: Incremented when errors occur
-// - http.client.request.duration: Request duration in milliseconds
+// - http.client.request.duration: Request duration in milliseconds.
 type observableTransport struct {
 	base            http.RoundTripper
 	instrumentation *instrumentation
@@ -73,9 +73,9 @@ func (t *observableTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		span.RecordError(err)
 		span.SetStatus(observability.StatusCodeError, err.Error())
 
-		errorAttrs := append(metricAttrs,
-			observability.String("error.type", classifyError(err)),
-		)
+		errorAttrs := make([]observability.Field, len(metricAttrs), len(metricAttrs)+1)
+		copy(errorAttrs, metricAttrs)
+		errorAttrs = append(errorAttrs, observability.String("error.type", classifyError(err)))
 		t.instrumentation.errorCounter.Increment(metricsCtx, errorAttrs...)
 		t.instrumentation.requestCounter.Increment(metricsCtx, metricAttrs...)
 		t.instrumentation.latencyHistogram.Record(metricsCtx, duration, metricAttrs...)

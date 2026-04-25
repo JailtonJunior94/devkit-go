@@ -231,7 +231,7 @@ func (c *ObservableClient) buildRequestConfig(opts []RequestOption) *requestConf
 }
 
 // buildTransportChain constructs the transport chain based on request config.
-// Returns a composed transport: observableTransport -> [retryTransport] -> baseTransport
+// Returns a composed transport: observableTransport -> [retryTransport] -> baseTransport.
 func (c *ObservableClient) buildTransportChain(cfg *requestConfig) http.RoundTripper {
 	transport := c.baseTransport
 

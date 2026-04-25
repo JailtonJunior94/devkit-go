@@ -1,87 +1,59 @@
-# Arquitetura e Persistência
+# Arquitetura do Toolkit
 
 - Rule ID: R-ARCH-001
 - Severidade: hard
-- Escopo: Todo código-fonte Go em `internal/*/`.
+- Escopo: Código-fonte Go em `pkg/*`, exemplos e artefatos de governança relacionados à arquitetura.
 
 ## Objetivo
-Garantir design Go idiomático, Clean Architecture, fronteiras DDD e implementação consistente de repositórios.
+
+Garantir que mudanças preservem a arquitetura real do repositório: um toolkit Go organizado por componente, com contratos públicos em `pkg/` e adapters concretos localizados.
+
+## Fonte Canônica
+
+- `AGENTS.md`
+- `.agents/skills/agent-governance/SKILL.md`
+- `.agents/skills/go-implementation/SKILL.md` quando a tarefa alterar código Go
 
 ## Requisitos
 
-### Estrutura de Bounded Context
-Cada bounded context deve residir em `internal/{module}/` com domain, application, infrastructure e wiring do módulo.
+### Estrutura do Repositório
 
-### Responsabilidades por Camada
-- Domain: entidades, VOs, factories, interfaces, erros de domínio.
-- Application: orquestra use cases, sem regras de negócio core.
-- Infrastructure: transporte/persistência/adapters, sem regras de negócio.
-- Wiring do módulo: composition root e setup de dependências.
+- Tratar o projeto como **monolito modular orientado a toolkit**, não como aplicação única em `internal/{module}`.
+- Cada pacote de topo em `pkg/` representa um componente público ou um shared kernel reutilizável.
+- Antes de criar um novo pacote de topo em `pkg/`, verificar se a responsabilidade cabe em componente já existente.
 
-### Direção de Dependência
-- Deve apontar para dentro: infrastructure -> application -> domain.
-- Domain não deve importar application/infrastructure.
-- Application depende de interfaces do domain.
-- Infrastructure implementa interfaces do domain.
+### Fronteiras de Dependência
 
-### Contexto e Interfaces
-- Métodos públicos devem aceitar `context.Context` como primeiro parâmetro.
-- Interfaces devem estar no pacote consumidor e permanecer focadas.
+- Pacotes de contrato e base (`observability`, `database`, `messaging`, `vos`) não devem depender de adapters concretos de transporte, deploy ou integração específica.
+- Adapters concretos podem depender de contratos compartilhados, nunca o contrário.
+- Não introduzir dependências circulares entre pacotes de `pkg/`.
+- Se a dependência for nova entre componentes, justificar a direção e avaliar impacto na API pública.
 
-### Modelagem de Domínio
-- Value objects se autovalidam e são imutáveis por design.
-- Entidades protegem invariantes na criação e mutação.
-- Factories fazem a ponte entre input bruto e tipos seguros do domínio.
+### Contratos Públicos
 
-### Estrutura de Repositório
-- Implementação do repositório deve ser struct privada implementando interface do domínio.
-- Construtor deve aceitar `database.DBTX` e provedor de observabilidade.
-- Construtor deve retornar o tipo da interface do domínio.
+- Alterações em `pkg/` devem presumir impacto em consumidores externos.
+- Não quebrar API pública sem explicitar a mudança.
+- Quando existir pacote raiz com contrato público, preferir depender dele em vez de depender diretamente de subpacote concreto.
 
-### Acesso a Banco de Dados
-- Usar abstração `database.DBTX`.
-- Segurança SQL: ver R-SEC-001.
-- Usar chamadas de DB com context.
-- Fechar rows/statements e verificar `rows.Err()`.
-- **(hard)** Ver seção "Defer Close com Observabilidade" abaixo para regra de cleanup de recursos.
+### HTTP e Transporte
 
-### Comportamento de Not Found
-- Retornar `(nil, nil)` quando a ausência não é um erro para aquele contrato.
-- Detectar e tratar `sql.ErrNoRows` explicitamente em queries de linha única.
+- `pkg/http_server` e `pkg/httpserver` coexistem. Antes de alterar comportamento HTTP, confirmar em qual componente a mudança deve viver.
+- Não consolidar ou migrar esses componentes por inferência; isso exige decisão explícita.
 
-### Defer Close com Observabilidade (hard)
-Todo recurso que implemente `io.Closer` ou retorne erro no `Close` deve ter o erro capturado e registrado via o11y. Aplica-se a, mas não se limita a:
-- `sql.Rows`, `sql.Stmt` (banco de dados)
-- `http.Response.Body` (chamadas HTTP externas)
-- `amqp.Channel`, `amqp.Connection` (RabbitMQ)
-- Qualquer `io.ReadCloser`, `io.WriteCloser` ou recurso similar
+### Infra Local
 
-Padrão obrigatório:
-```go
-defer func() {
-    if closeErr := resource.Close(); closeErr != nil {
-        span.RecordError(closeErr)
-        r.o11y.Logger().Error(ctx, "{MethodName}: failed to close {resource}",
-            observability.Error(closeErr),
-        )
-    }
-}()
-```
+- `deployment/` e `docker-compose.yml` servem para infraestrutura local, observabilidade e suporte operacional.
+- Não usar diretórios de infraestrutura como justificativa para impor fronteiras de aplicação inexistentes no código.
 
-- `{MethodName}`: nome do método onde o defer está (ex.: `ListPaginated`, `FindByID`).
-- `{resource}`: tipo do recurso sendo fechado (ex.: `rows`, `response body`, `channel`).
-- Quando não houver span disponível, registrar apenas via logger.
-- Nunca usar `_ = resource.Close()` ou `defer resource.Close()` sem captura de erro.
+### Modelagem Local
 
-### Erro e Observabilidade no Repositório
-- Retornar erros brutos de infraestrutura; não converter para erros de domínio aqui.
-- Seguir `error-handling.md` e `o11y.md` para comportamento de erro e telemetria.
+- Dentro de cada componente, contracts-first e ports/adapters são aceitáveis quando já adotados pelo pacote.
+- Não impor uma camada global `domain/application/infrastructure` onde ela não existe.
+- Reutilizar abstrações já expostas, como `database.DBTX` e `observability.Observability`, antes de criar novas interfaces.
 
 ## Proibido
-- Lógica de negócio em handlers/repositórios.
-- Dependências circulares.
-- SQL bruto em use cases.
-- Estado global mutável para fluxo de negócio.
-- Pular cleanup de recursos (`rows.Close`, `stmt.Close`).
-- Engolir erros de `Close()` com `_ =` ou `defer resource.Close()` sem captura — erros de close devem ser registrados via o11y.
-- Usar tipo concreto de DB diretamente quando abstração compartilhada existe.
+
+- Assumir que o layout canônico do projeto é `internal/{module}/domain/application/infrastructure`.
+- Reescrever componentes para Clean Architecture global sem demanda explícita.
+- Introduzir dependência de adapter concreto em pacote base.
+- Criar pacote novo em `pkg/` para responsabilidade já coberta por componente existente.

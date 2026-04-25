@@ -7,6 +7,12 @@
 ## Objetivo
 Definir governança determinística para `.claude/rules/`: precedência, severidade, resolução de conflitos, segurança de execução e política de evidência.
 
+## Fonte Canônica
+
+- `AGENTS.md` é a fonte canônica de arquitetura e governança do repositório.
+- Arquivos em `.claude/` complementam essa governança para Claude.
+- Em caso de conflito entre `.claude/` e `AGENTS.md`, prevalece `AGENTS.md`.
+
 ## Escopo das Regras
 Todos os commands e skills seguem implicitamente todas as regras em `.claude/rules/`. Regras têm precedência em caso de conflito. Todos os commands e skills têm acesso implícito aos arquivos de `.claude/context/`.
 

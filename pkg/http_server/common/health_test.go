@@ -153,7 +153,7 @@ func TestExecuteHealthChecks_ContextCancellation(t *testing.T) {
 	}
 }
 
-// Helper function to format check names uniquely
+// Helper function to format check names uniquely.
 func formatCheckName(i int) string {
 	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
 	if i < 10 {
@@ -277,7 +277,7 @@ func TestExecuteHealthChecks_MixedResults(t *testing.T) {
 	}
 }
 
-// Benchmark
+// Benchmark.
 func BenchmarkExecuteHealthChecks_10Checks(b *testing.B) {
 	ctx := context.Background()
 	checks := make(map[string]HealthCheckFunc)

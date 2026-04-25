@@ -229,7 +229,7 @@ func TestResponseWriter_PreventDoubleWrite_Scenario(t *testing.T) {
 	}
 }
 
-// Benchmark for checking performance overhead
+// Benchmark for checking performance overhead.
 func BenchmarkResponseWriter_WriteHeader(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		w := httptest.NewRecorder()

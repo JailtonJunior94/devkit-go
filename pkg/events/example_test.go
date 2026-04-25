@@ -8,7 +8,7 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/events"
 )
 
-// OrderCreatedEvent represents a concrete event implementation
+// OrderCreatedEvent represents a concrete event implementation.
 type OrderCreatedEvent struct {
 	orderID string
 }
@@ -21,7 +21,7 @@ func (e *OrderCreatedEvent) GetPayload() any {
 	return map[string]string{"order_id": e.orderID}
 }
 
-// EmailNotificationHandler sends email when order is created
+// EmailNotificationHandler sends email when order is created.
 type EmailNotificationHandler struct{}
 
 func (h *EmailNotificationHandler) Handle(ctx context.Context, event events.Event) error {
@@ -44,7 +44,7 @@ func (h *EmailNotificationHandler) Handle(ctx context.Context, event events.Even
 	return nil
 }
 
-// MetricsHandler records metrics
+// MetricsHandler records metrics.
 type MetricsHandler struct{}
 
 func (h *MetricsHandler) Handle(ctx context.Context, event events.Event) error {
@@ -103,7 +103,9 @@ func ExampleEventDispatcher_Remove() {
 	dispatcher := events.NewEventDispatcher()
 	handler := &EmailNotificationHandler{}
 
-	dispatcher.Register("order.created", handler)
+	if err := dispatcher.Register("order.created", handler); err != nil {
+		log.Fatal(err)
+	}
 
 	// Remove handler
 	err := dispatcher.Remove("order.created", handler)
@@ -124,7 +126,9 @@ func ExampleEventDispatcher_Dispatch_withContextCancellation() {
 	dispatcher := events.NewEventDispatcher()
 	handler := &EmailNotificationHandler{}
 
-	dispatcher.Register("order.created", handler)
+	if err := dispatcher.Register("order.created", handler); err != nil {
+		log.Fatal(err)
+	}
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -147,7 +151,9 @@ func ExampleNewEventDispatcher_withCapacity() {
 	dispatcher := events.NewEventDispatcher(events.WithCapacity(50))
 
 	handler := &EmailNotificationHandler{}
-	dispatcher.Register("order.created", handler)
+	if err := dispatcher.Register("order.created", handler); err != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Println("Dispatcher created with capacity optimization")
 

@@ -72,7 +72,7 @@ func TestInt64_Equal_nullVsPresent(t *testing.T) {
 
 func TestInt64_Equal_reflexive(t *testing.T) {
 	a := nullable.Int64Of(3)
-	require.True(t, a.Equal(a))
+	require.True(t, a.Equal(a)) //nolint:gocritic // intentional reflexivity test
 }
 
 func TestInt64_Equal_symmetric(t *testing.T) {

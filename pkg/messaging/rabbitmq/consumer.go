@@ -432,7 +432,7 @@ func (c *Consumer) processMessageLogic(ctx context.Context, delivery amqp.Delive
 	}
 
 	// Fallback: execute directly without tracing
-	c.processMessageWithHandler(ctx, msg, delivery, handler, retryCount)
+	_ = c.processMessageWithHandler(ctx, msg, delivery, handler, retryCount)
 }
 
 // processMessageWithHandler executes the handler and handles success/error.

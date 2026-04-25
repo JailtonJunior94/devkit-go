@@ -89,7 +89,7 @@ func TestString_Equal_nullVsPresent(t *testing.T) {
 
 func TestString_Equal_reflexive(t *testing.T) {
 	a := nullable.StringOf("hello")
-	require.True(t, a.Equal(a))
+	require.True(t, a.Equal(a)) //nolint:gocritic // intentional reflexivity test
 }
 
 func TestString_Equal_symmetric(t *testing.T) {

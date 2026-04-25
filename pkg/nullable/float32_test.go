@@ -72,7 +72,7 @@ func TestFloat32_Equal_nullVsPresent(t *testing.T) {
 
 func TestFloat32_Equal_reflexive(t *testing.T) {
 	a := nullable.Float32Of(3.14)
-	require.True(t, a.Equal(a))
+	require.True(t, a.Equal(a)) //nolint:gocritic // intentional reflexivity test
 }
 
 func TestFloat32_Equal_symmetric(t *testing.T) {

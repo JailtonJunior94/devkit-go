@@ -201,7 +201,7 @@ func TestSecurityHeaders_ApplyDoesNotMutateOriginal(t *testing.T) {
 	}
 }
 
-// Helper function to check if a string contains a substring
+// Helper function to check if a string contains a substring.
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || findSubstring(s, substr))
 }

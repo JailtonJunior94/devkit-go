@@ -1,8 +1,13 @@
 # Ferramentas e Comandos
 
-- **Testes:** `make test` (unitários e integração)
-- **Linting:** `make lint` (golangci-lint)
-- **Integridade:** `make check` (executa lint e testes)
-- **Build:** `make build`
-- **Mocks:** `mockery --all`
-- **Migrações de Banco:** `migrate` (via Makefile ou CLI)
+- **Lint:** `make lint`
+- **Testes principais:** `make test`
+- **Testes de integração:** `make test-integration`
+- **Vulnerabilidades:** `make vulncheck`
+- **Mocks:** `make mocks`
+- **Ambiente local RabbitMQ:** `make start_rabbitmq`
+- **Ambiente local Kafka:** `make start_kafka`
+- **Ambiente local observabilidade:** `make start_o11y`
+- **Parada do ambiente Docker:** `make stop_docker`
+
+Se um comando esperado não existir no repositório, registrar a ausência em vez de inventar substituto.

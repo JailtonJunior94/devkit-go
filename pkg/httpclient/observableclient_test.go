@@ -16,7 +16,7 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability/fake"
 )
 
-// Helper function to create client and fail test on error
+// Helper function to create client and fail test on error.
 func mustNewObservableClient(t *testing.T, o11y observability.Observability, opts ...ClientOption) *ObservableClient {
 	t.Helper()
 	client, err := NewObservableClient(o11y, opts...)
@@ -94,7 +94,7 @@ func TestObservableClientGet(t *testing.T) {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "success"}`))
+		_, _ = w.Write([]byte(`{"message": "success"}`))
 	}))
 	defer server.Close()
 
@@ -104,13 +104,13 @@ func TestObservableClientGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 
 	expected := `{"message": "success"}`
 	if string(body) != expected {
@@ -133,7 +133,7 @@ func TestObservableClientPost(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"id": "123"}`))
+		_, _ = w.Write([]byte(`{"id": "123"}`))
 	}))
 	defer server.Close()
 
@@ -143,6 +143,7 @@ func TestObservableClientPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
 		t.Errorf("expected status 201, got %d", resp.StatusCode)
@@ -177,6 +178,7 @@ func TestObservableClientWithHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -195,7 +197,7 @@ func TestObservableClientRetry(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("success"))
+		_, _ = w.Write([]byte("success"))
 	}))
 	defer server.Close()
 
@@ -207,6 +209,7 @@ func TestObservableClientRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -258,6 +261,7 @@ func TestObservableClientNoRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected status 503, got %d", resp.StatusCode)
@@ -285,6 +289,9 @@ func TestObservableClientRetryBodyBuffering(t *testing.T) {
 	resp, err := client.Post(ctx, server.URL, largeBody,
 		WithRetry(3, 10*time.Millisecond, DefaultNewRetryPolicy),
 	)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	if err == nil {
 		t.Fatal("expected error for body too large")
@@ -314,6 +321,7 @@ func TestObservableClientMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -348,6 +356,9 @@ func TestObservableClientError(t *testing.T) {
 
 	ctx := context.Background()
 	resp, err := client.Get(ctx, "http://invalid-host-that-does-not-exist.local")
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	if err == nil {
 		t.Fatal("expected error for invalid host")
@@ -481,6 +492,9 @@ func TestObservableClientRetryDoesNotRetryContextErrors(t *testing.T) {
 		WithRetry(3, 10*time.Millisecond, DefaultNewRetryPolicy),
 	)
 	elapsed := time.Since(startTime)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	// Should fail with deadline exceeded
 	if err == nil {
@@ -598,9 +612,13 @@ func TestWithRetryValidation(t *testing.T) {
 			ctx := context.Background()
 
 			// Try to make request with retry option
-			_, err = client.Get(ctx, server.URL,
+			var resp *http.Response
+			resp, err = client.Get(ctx, server.URL,
 				WithRetry(tt.maxAttempts, tt.backoff, tt.policy),
 			)
+			if resp != nil {
+				defer func() { _ = resp.Body.Close() }()
+			}
 
 			// Check error expectation
 			if tt.shouldError {

@@ -10,8 +10,8 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// TestErrorChannelNoLeak validates that sendError() doesn't block when channel is full
-// Run with: go test -run TestErrorChannelNoLeak -timeout 30s
+// TestErrorChannelNoLeak validates that sendError() doesn't block when channel is full.
+// Run with: go test -run TestErrorChannelNoLeak -timeout 30s.
 func TestErrorChannelNoLeak(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()
@@ -65,7 +65,7 @@ func TestErrorChannelNoLeak(t *testing.T) {
 	}
 }
 
-// TestErrorChannelMonitoring validates the monitoring goroutine
+// TestErrorChannelMonitoring validates the monitoring goroutine.
 func TestErrorChannelMonitoring(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()
@@ -108,7 +108,7 @@ func TestErrorChannelMonitoring(t *testing.T) {
 	}
 }
 
-// TestDroppedErrorsCounter validates the dropped errors counter
+// TestDroppedErrorsCounter validates the dropped errors counter.
 func TestDroppedErrorsCounter(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()
@@ -140,7 +140,7 @@ func TestDroppedErrorsCounter(t *testing.T) {
 	t.Logf("✅ Correctly counted %d dropped errors", dropped)
 }
 
-// TestErrorChannelRateLimitedLogging validates that dropped error logging is rate-limited
+// TestErrorChannelRateLimitedLogging validates that dropped error logging is rate-limited.
 func TestErrorChannelRateLimitedLogging(t *testing.T) {
 	cfg := defaultConfig()
 	logCalls := 0
@@ -178,7 +178,7 @@ func TestErrorChannelRateLimitedLogging(t *testing.T) {
 	t.Logf("✅ Rate limiting working: %d log calls for 100 dropped errors", logCalls)
 }
 
-// TestConsumerCloseLogsDroppedErrors validates that Close() logs dropped errors
+// TestConsumerCloseLogsDroppedErrors validates that Close() logs dropped errors.
 func TestConsumerCloseLogsDroppedErrors(t *testing.T) {
 	cfg := defaultConfig()
 	loggedDroppedCount := false
@@ -226,7 +226,7 @@ func TestConsumerCloseLogsDroppedErrors(t *testing.T) {
 	}
 }
 
-// TestErrorChannelHealthCheck validates the health check logic
+// TestErrorChannelHealthCheck validates the health check logic.
 func TestErrorChannelHealthCheck(t *testing.T) {
 	cfg := defaultConfig()
 	warnLogged := false
@@ -278,7 +278,7 @@ func TestErrorChannelHealthCheck(t *testing.T) {
 	}
 }
 
-// BenchmarkSendErrorNoBlock benchmarks sendError to verify it never blocks
+// BenchmarkSendErrorNoBlock benchmarks sendError to verify it never blocks.
 func BenchmarkSendErrorNoBlock(b *testing.B) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()
@@ -307,7 +307,7 @@ func BenchmarkSendErrorNoBlock(b *testing.B) {
 	b.Logf("Dropped errors: %d", c.DroppedErrors())
 }
 
-// testLogger is a simple logger for testing
+// testLogger is a simple logger for testing.
 type testLogger struct {
 	infoFunc  func(ctx context.Context, msg string, fields ...Field)
 	warnFunc  func(ctx context.Context, msg string, fields ...Field)

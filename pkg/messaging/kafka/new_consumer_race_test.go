@@ -11,8 +11,8 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// TestConcurrentRegisterAndProcess validates the race condition fix
-// Run with: go test -race -run TestConcurrentRegisterAndProcess
+// TestConcurrentRegisterAndProcess validates the race condition fix.
+// Run with: go test -race -run TestConcurrentRegisterAndProcess.
 func TestConcurrentRegisterAndProcess(t *testing.T) {
 	// Create a consumer with minimal config
 	cfg := defaultConfig()
@@ -133,7 +133,7 @@ func TestConcurrentRegisterAndProcess(t *testing.T) {
 	}
 }
 
-// TestDefensiveCopyCorrectness validates that the defensive copy works correctly
+// TestDefensiveCopyCorrectness validates that the defensive copy works correctly.
 func TestDefensiveCopyCorrectness(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()
@@ -200,7 +200,7 @@ func TestDefensiveCopyCorrectness(t *testing.T) {
 	}
 }
 
-// BenchmarkProcessMessageWithDefensiveCopy benchmarks the performance impact
+// BenchmarkProcessMessageWithDefensiveCopy benchmarks the performance impact.
 func BenchmarkProcessMessageWithDefensiveCopy(b *testing.B) {
 	cfg := defaultConfig()
 	cfg.logger = NewNoopLogger()

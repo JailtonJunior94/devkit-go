@@ -162,7 +162,7 @@ func timeoutMiddleware(
 	}
 }
 
-// timeoutWriter wraps http.ResponseWriter to track if response was written
+// timeoutWriter wraps http.ResponseWriter to track if response was written.
 type timeoutWriter struct {
 	http.ResponseWriter
 	mu       sync.Mutex

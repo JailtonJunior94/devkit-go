@@ -8,9 +8,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-env:
-  GO_VERSION: "1.25"
-  
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   lint:
     name: Lint
@@ -20,10 +24,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{env.GO_VERSION}}
-          cache: false
+          go-version-file: go.mod
+          cache: true
 
       - name: Linter
         run: make lint
@@ -36,13 +40,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{env.GO_VERSION}}
-          cache: false
+          go-version-file: go.mod
+          cache: true
 
       - name: Test
         run: make test
+
+  test-integration:
+    name: Test Integration
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test integration
+        run: make test-integration
 
   vulncheck:
     name: Vulncheck
@@ -52,10 +72,115 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{env.GO_VERSION}}
-          cache: false
+          go-version-file: go.mod
+          cache: true
 
       - name: Vulncheck
         run: make vulncheck
+
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test, test-integration, vulncheck]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Plan release
+        id: plan
+        run: |
+          set -euo pipefail
+          plan_file="$RUNNER_TEMP/release-plan.json"
+
+          go run ./scripts/ci_release -- plan \
+            --repo-path . \
+            --changelog CHANGELOG.md \
+            --lint \
+            --unit \
+            --integration \
+            --vulncheck >"$plan_file"
+
+          python3 - "$plan_file" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as plan_handle:
+              plan = json.load(plan_handle)
+
+          with open(sys.argv[2], "a", encoding="utf-8") as output_handle:
+              base_version = plan.get("base_version")
+              if base_version:
+                  output_handle.write(f"base_version={base_version}\n")
+              output_handle.write(f"next_version={plan['next_version']}\n")
+              output_handle.write(f"bootstrap={str(plan['bootstrap']).lower()}\n")
+              output_handle.write(f"commit_count={plan['commit_count']}\n")
+          PY
+
+      - name: Publish release
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_file="$RUNNER_TEMP/release-publish.json"
+
+          go run ./scripts/ci_release -- publish \
+            --repo-path . \
+            --changelog CHANGELOG.md \
+            --github-token "$GITHUB_TOKEN" \
+            --lint \
+            --unit \
+            --integration \
+            --vulncheck >"$publish_file"
+
+          python3 - "$publish_file" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as publish_handle:
+              release = json.load(publish_handle)
+
+          with open(sys.argv[2], "a", encoding="utf-8") as output_handle:
+              base_version = release.get("base_version")
+              if base_version:
+                  output_handle.write(f"base_version={base_version}\n")
+              output_handle.write(f"version={release['version']}\n")
+              output_handle.write(f"bootstrap={str(release['bootstrap']).lower()}\n")
+          PY
+
+      - name: Write release summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          BASE_VERSION: ${{ steps.plan.outputs.base_version || steps.publish.outputs.base_version || 'none' }}
+          NEXT_VERSION: ${{ steps.plan.outputs.next_version || steps.publish.outputs.version || 'unavailable' }}
+          PUBLISHED_VERSION: ${{ steps.publish.outputs.version || '' }}
+          BOOTSTRAP: ${{ steps.plan.outputs.bootstrap || steps.publish.outputs.bootstrap || 'unknown' }}
+        run: |
+          set -euo pipefail
+          version="${PUBLISHED_VERSION:-$NEXT_VERSION}"
+
+          {
+            echo "## Release job"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Result | $JOB_STATUS |"
+            echo "| Base tag | $BASE_VERSION |"
+            echo "| Calculated version | $version |"
+            echo "| Bootstrap | $BOOTSTRAP |"
+          } >>"$GITHUB_STEP_SUMMARY"

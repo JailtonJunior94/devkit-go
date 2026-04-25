@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Mock event implementation
+// Mock event implementation.
 type testEvent struct {
 	eventType string
 	payload   any
@@ -23,7 +23,7 @@ func (e *testEvent) GetPayload() any {
 	return e.payload
 }
 
-// Mock handler that counts calls
+// Mock handler that counts calls.
 type testHandler struct {
 	callCount atomic.Int32
 	mu        sync.Mutex
@@ -146,9 +146,9 @@ func TestDispatch_MultipleHandlers(t *testing.T) {
 	handler2 := &testHandler{}
 	handler3 := &testHandler{}
 
-	dispatcher.Register("test.event", handler1)
-	dispatcher.Register("test.event", handler2)
-	dispatcher.Register("test.event", handler3)
+	_ = dispatcher.Register("test.event", handler1)
+	_ = dispatcher.Register("test.event", handler2)
+	_ = dispatcher.Register("test.event", handler3)
 
 	event := &testEvent{eventType: "test.event", payload: "data"}
 
@@ -182,7 +182,7 @@ func TestRemove_Success(t *testing.T) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
 
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	if !dispatcher.Has("test.event", handler) {
 		t.Fatal("Handler not registered")
@@ -233,8 +233,8 @@ func TestClear(t *testing.T) {
 	handler1 := &testHandler{}
 	handler2 := &testHandler{}
 
-	dispatcher.Register("event1", handler1)
-	dispatcher.Register("event2", handler2)
+	_ = dispatcher.Register("event1", handler1)
+	_ = dispatcher.Register("event2", handler2)
 
 	dispatcher.Clear()
 
@@ -307,7 +307,7 @@ func TestDispatch_HandlerError(t *testing.T) {
 	expectedErr := errors.New("handler error")
 	handler := &testHandler{err: expectedErr}
 
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	event := &testEvent{eventType: "test.event", payload: nil}
 	err := dispatcher.Dispatch(context.Background(), event)
@@ -323,12 +323,12 @@ func TestDispatch_StopsOnFirstError(t *testing.T) {
 	handler2 := &testHandler{err: errors.New("error")}
 	handler3 := &testHandler{}
 
-	dispatcher.Register("test.event", handler1)
-	dispatcher.Register("test.event", handler2)
-	dispatcher.Register("test.event", handler3)
+	_ = dispatcher.Register("test.event", handler1)
+	_ = dispatcher.Register("test.event", handler2)
+	_ = dispatcher.Register("test.event", handler3)
 
 	event := &testEvent{eventType: "test.event", payload: nil}
-	dispatcher.Dispatch(context.Background(), event)
+	_ = dispatcher.Dispatch(context.Background(), event)
 
 	if handler1.GetCallCount() != 1 {
 		t.Error("Handler1 should be called")
@@ -349,7 +349,7 @@ func TestDispatch_ContextCancellation(t *testing.T) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{delay: 100 * time.Millisecond}
 
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -366,7 +366,7 @@ func TestDispatch_ContextCancelledBeforeDispatch(t *testing.T) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
 
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -389,9 +389,9 @@ func TestDispatch_ContextCancelledBetweenHandlers(t *testing.T) {
 	handler2 := &testHandler{delay: 50 * time.Millisecond}
 	handler3 := &testHandler{}
 
-	dispatcher.Register("test.event", handler1)
-	dispatcher.Register("test.event", handler2)
-	dispatcher.Register("test.event", handler3)
+	_ = dispatcher.Register("test.event", handler1)
+	_ = dispatcher.Register("test.event", handler2)
+	_ = dispatcher.Register("test.event", handler3)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
@@ -440,7 +440,7 @@ func TestConcurrentRegister(t *testing.T) {
 func TestConcurrentDispatch(t *testing.T) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	var wg sync.WaitGroup
 	numGoroutines := 100
@@ -476,7 +476,7 @@ func TestConcurrentRegisterAndDispatch(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			handler := &testHandler{}
-			dispatcher.Register("test.event", handler)
+			_ = dispatcher.Register("test.event", handler)
 		}()
 	}
 
@@ -485,7 +485,7 @@ func TestConcurrentRegisterAndDispatch(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			event := &testEvent{eventType: "test.event", payload: "data"}
-			dispatcher.Dispatch(context.Background(), event)
+			_ = dispatcher.Dispatch(context.Background(), event)
 		}()
 	}
 
@@ -509,7 +509,7 @@ func TestConcurrentRegisterRemoveDispatch(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			handler := handlers[idx%len(handlers)]
-			dispatcher.Register("test.event", handler)
+			_ = dispatcher.Register("test.event", handler)
 		}(i)
 	}
 
@@ -518,7 +518,7 @@ func TestConcurrentRegisterRemoveDispatch(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			handler := handlers[idx%len(handlers)]
-			dispatcher.Remove("test.event", handler)
+			_ = dispatcher.Remove("test.event", handler)
 		}(i)
 	}
 
@@ -527,7 +527,7 @@ func TestConcurrentRegisterRemoveDispatch(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			event := &testEvent{eventType: "test.event", payload: "data"}
-			dispatcher.Dispatch(context.Background(), event)
+			_ = dispatcher.Dispatch(context.Background(), event)
 		}()
 	}
 
@@ -554,7 +554,7 @@ func TestConcurrentHasAndRegister(t *testing.T) {
 	for i := 0; i < numOperations; i++ {
 		go func() {
 			defer wg.Done()
-			dispatcher.Register("test.event", handler)
+			_ = dispatcher.Register("test.event", handler)
 		}()
 	}
 
@@ -564,7 +564,7 @@ func TestConcurrentHasAndRegister(t *testing.T) {
 func TestConcurrentClearAndDispatch(t *testing.T) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
-	dispatcher.Register("test.event", handler)
+	_ = dispatcher.Register("test.event", handler)
 
 	var wg sync.WaitGroup
 	numOperations := 50
@@ -583,7 +583,7 @@ func TestConcurrentClearAndDispatch(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			event := &testEvent{eventType: "test.event", payload: "data"}
-			dispatcher.Dispatch(context.Background(), event)
+			_ = dispatcher.Dispatch(context.Background(), event)
 		}()
 	}
 
@@ -604,14 +604,14 @@ func TestConcurrentMultipleEventTypes(t *testing.T) {
 			go func(et string) {
 				defer wg.Done()
 				handler := &testHandler{}
-				dispatcher.Register(et, handler)
+				_ = dispatcher.Register(et, handler)
 			}(eventType)
 
 			// Dispatch
 			go func(et string) {
 				defer wg.Done()
 				event := &testEvent{eventType: et, payload: "data"}
-				dispatcher.Dispatch(context.Background(), event)
+				_ = dispatcher.Dispatch(context.Background(), event)
 			}(eventType)
 
 			// Has
@@ -651,14 +651,14 @@ func TestStress_MassiveParallelOperations(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			handler := handlers[idx%len(handlers)]
-			dispatcher.Register("stress.event", handler)
+			_ = dispatcher.Register("stress.event", handler)
 		}(i)
 
 		// Dispatch
 		go func() {
 			defer wg.Done()
 			event := &testEvent{eventType: "stress.event", payload: "data"}
-			dispatcher.Dispatch(context.Background(), event)
+			_ = dispatcher.Dispatch(context.Background(), event)
 		}()
 
 		// Has
@@ -672,7 +672,7 @@ func TestStress_MassiveParallelOperations(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			handler := handlers[idx%len(handlers)]
-			dispatcher.Remove("stress.event", handler)
+			_ = dispatcher.Remove("stress.event", handler)
 		}(i)
 	}
 
@@ -692,21 +692,21 @@ func BenchmarkRegister(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		dispatcher.Register("bench.event", handlers[i])
+		_ = dispatcher.Register("bench.event", handlers[i])
 	}
 }
 
 func BenchmarkDispatch_SingleHandler(b *testing.B) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
-	dispatcher.Register("bench.event", handler)
+	_ = dispatcher.Register("bench.event", handler)
 
 	event := &testEvent{eventType: "bench.event", payload: "data"}
 	ctx := context.Background()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		dispatcher.Dispatch(ctx, event)
+		_ = dispatcher.Dispatch(ctx, event)
 	}
 }
 
@@ -715,7 +715,7 @@ func BenchmarkDispatch_MultipleHandlers(b *testing.B) {
 
 	// Register 10 handlers
 	for i := 0; i < 10; i++ {
-		dispatcher.Register("bench.event", &testHandler{})
+		_ = dispatcher.Register("bench.event", &testHandler{})
 	}
 
 	event := &testEvent{eventType: "bench.event", payload: "data"}
@@ -723,14 +723,14 @@ func BenchmarkDispatch_MultipleHandlers(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		dispatcher.Dispatch(ctx, event)
+		_ = dispatcher.Dispatch(ctx, event)
 	}
 }
 
 func BenchmarkHas(b *testing.B) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
-	dispatcher.Register("bench.event", handler)
+	_ = dispatcher.Register("bench.event", handler)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -745,24 +745,24 @@ func BenchmarkRemove(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		handler := &testHandler{}
-		dispatcher.Register("bench.event", handler)
+		_ = dispatcher.Register("bench.event", handler)
 		b.StartTimer()
 
-		dispatcher.Remove("bench.event", handler)
+		_ = dispatcher.Remove("bench.event", handler)
 	}
 }
 
 func BenchmarkConcurrentDispatch(b *testing.B) {
 	dispatcher := NewEventDispatcher()
 	handler := &testHandler{}
-	dispatcher.Register("bench.event", handler)
+	_ = dispatcher.Register("bench.event", handler)
 
 	event := &testEvent{eventType: "bench.event", payload: "data"}
 	ctx := context.Background()
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			dispatcher.Dispatch(ctx, event)
+			_ = dispatcher.Dispatch(ctx, event)
 		}
 	})
 }
@@ -773,7 +773,7 @@ func BenchmarkConcurrentRegister(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			handler := &testHandler{}
-			dispatcher.Register("bench.event", handler)
+			_ = dispatcher.Register("bench.event", handler)
 		}
 	})
 }

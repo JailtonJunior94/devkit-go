@@ -167,7 +167,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize observability:", err)
 	}
-	defer provider.Shutdown(ctx)
+	defer func() { _ = provider.Shutdown(ctx) }()
 
 	// Create service
 	service := NewOrderService(provider)

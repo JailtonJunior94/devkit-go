@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// Error channel configuration
+	// Error channel configuration.
 	defaultErrorChannelSize    = 1000 // Increased from 100 to reduce dropped errors
 	errorChannelWarnThreshold  = 800  // Warn when 80% full
 	errorChannelMonitoringTick = 10 * time.Second
@@ -558,7 +558,7 @@ func (c *consumer) DroppedErrors() uint64 {
 // fills up and errors are silently dropped. This goroutine:
 // 1. Monitors channel fullness every 10 seconds
 // 2. Warns when channel is 80% full
-// 3. Helps operators detect misconfiguration before errors are lost
+// 3. Helps operators detect misconfiguration before errors are lost.
 func (c *consumer) startErrorChannelMonitoring() {
 	monitoringCtx, cancel := context.WithCancel(context.Background())
 	c.monitoringCancel = cancel
