@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `scripts/ci_release`: corrigido o parser da CLI para aceitar o separador `--` usado pelo workflow de release em `go run`, eliminando a falha do passo `Plan release`
 - `scripts/ci_release`: corrigida a instabilidade do teste `TestGitCLIIntegration` ao isolar o repositório Git temporário por subtest e evitar contaminação de tags entre cenários paralelos
 
 ## [v0.1.0] - 2026-04-24

@@ -113,6 +113,10 @@ func run(
 }
 
 func parseCLIConfig(args []string, getenv func(string) string) (cliConfig, error) {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+
 	if len(args) == 0 {
 		return cliConfig{}, fmt.Errorf("command is required")
 	}
@@ -225,5 +229,5 @@ func firstNonEmpty(values ...string) string {
 }
 
 func printUsage(writer io.Writer) {
-	_, _ = fmt.Fprintln(writer, "usage: go run ./scripts/ci_release -- <plan|publish> [flags]")
+	_, _ = fmt.Fprintln(writer, "usage: go run ./scripts/ci_release [--] <plan|publish> [flags]")
 }

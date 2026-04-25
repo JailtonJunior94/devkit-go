@@ -20,6 +20,33 @@ import (
 func TestCLIPlanAndPublishIntegration(t *testing.T) {
 	t.Parallel()
 
+	t.Run("plan accepts go run separator", func(t *testing.T) {
+		t.Parallel()
+
+		repoPath := newCLIRepository(t)
+		writeFixtureToRepo(t, repoPath, "bootstrap_changelog.md")
+		commitFileCLI(t, repoPath, "README.md", "bootstrap\n", "docs: bootstrap release", "")
+
+		var stdout strings.Builder
+		err := run(context.Background(), []string{
+			"--",
+			"plan",
+			"--repo-path", repoPath,
+			"--changelog", filepath.Join(repoPath, "CHANGELOG.md"),
+			"--ref-name", "main",
+			"--lint",
+			"--unit",
+			"--integration",
+			"--vulncheck",
+		}, &stdout, ioDiscard{}, func(string) string { return "" })
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout.String()), &payload))
+		assert.Equal(t, "v0.1.0", payload["next_version"])
+		assert.Equal(t, true, payload["bootstrap"])
+	})
+
 	t.Run("bootstrap plan emits version from real changelog", func(t *testing.T) {
 		t.Parallel()
 
