@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JailtonJunior94/devkit-go/scripts/ci_release/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,7 +99,7 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 		assert.Contains(t, payload["skip_reason"], "no version increment")
 	})
 
-	t.Run("plan fails when next tag already exists", func(t *testing.T) {
+	t.Run("plan skips when next tag already exists", func(t *testing.T) {
 		t.Parallel()
 
 		repoPath := newCLIRepository(t)
@@ -115,6 +113,7 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 		runGitCLI(t, repoPath, "tag", "v0.2.0")
 		runGitCLI(t, repoPath, "checkout", "main")
 
+		var stdout strings.Builder
 		err := run(context.Background(), []string{
 			"plan",
 			"--repo-path", repoPath,
@@ -124,12 +123,16 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 			"--unit",
 			"--integration",
 			"--vulncheck",
-		}, &strings.Builder{}, ioDiscard{}, func(string) string { return "" })
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, domain.ErrTagAlreadyExists))
+		}, &stdout, ioDiscard{}, func(string) string { return "" })
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout.String()), &payload))
+		assert.Equal(t, false, payload["release"])
+		assert.Contains(t, payload["skip_reason"], "tag already exists")
 	})
 
-	t.Run("plan fails when changelog section is missing", func(t *testing.T) {
+	t.Run("plan skips when changelog section is missing", func(t *testing.T) {
 		t.Parallel()
 
 		repoPath := newCLIRepository(t)
@@ -138,6 +141,7 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 		runGitCLI(t, repoPath, "tag", "v0.1.0", baselineSHA)
 		commitFileCLI(t, repoPath, "feature.txt", "feature\n", "feat: add release automation", "")
 
+		var stdout strings.Builder
 		err := run(context.Background(), []string{
 			"plan",
 			"--repo-path", repoPath,
@@ -147,9 +151,13 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 			"--unit",
 			"--integration",
 			"--vulncheck",
-		}, &strings.Builder{}, ioDiscard{}, func(string) string { return "" })
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, domain.ErrMissingChangelogSection))
+		}, &stdout, ioDiscard{}, func(string) string { return "" })
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout.String()), &payload))
+		assert.Equal(t, false, payload["release"])
+		assert.Contains(t, payload["skip_reason"], "missing changelog section")
 	})
 
 	t.Run("publish creates tag and github release", func(t *testing.T) {

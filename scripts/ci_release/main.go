@@ -88,7 +88,7 @@ func run(
 		ChangelogPath: config.changelogPath,
 	})
 	if err != nil {
-		if errors.Is(err, domain.ErrNoVersionIncrement) {
+		if isReleaseSkippable(err) {
 			return writeSkippedRelease(stdout, config.command, err.Error())
 		}
 		return err
@@ -120,6 +120,12 @@ func run(
 	default:
 		return fmt.Errorf("unsupported command %q", config.command)
 	}
+}
+
+func isReleaseSkippable(err error) bool {
+	return errors.Is(err, domain.ErrNoVersionIncrement) ||
+		errors.Is(err, domain.ErrMissingChangelogSection) ||
+		errors.Is(err, domain.ErrTagAlreadyExists)
 }
 
 func writeSkippedRelease(stdout io.Writer, command string, reason string) error {
