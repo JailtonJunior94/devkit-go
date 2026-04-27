@@ -73,6 +73,34 @@ func TestCLIPlanAndPublishIntegration(t *testing.T) {
 		assert.Equal(t, true, payload["bootstrap"])
 	})
 
+	t.Run("plan skips when no version-bumping commits exist since last tag", func(t *testing.T) {
+		t.Parallel()
+
+		repoPath := newCLIRepository(t)
+		writeFixtureToRepo(t, repoPath, "existing_tag_changelog.md")
+		baselineSHA := commitFileCLI(t, repoPath, "README.md", "baseline\n", "docs: baseline", "")
+		runGitCLI(t, repoPath, "tag", "v0.1.0", baselineSHA)
+		commitFileCLI(t, repoPath, "docs/notes.md", "notes\n", "docs: extend documentation", "")
+
+		var stdout strings.Builder
+		err := run(context.Background(), []string{
+			"plan",
+			"--repo-path", repoPath,
+			"--changelog", filepath.Join(repoPath, "CHANGELOG.md"),
+			"--ref-name", "main",
+			"--lint",
+			"--unit",
+			"--integration",
+			"--vulncheck",
+		}, &stdout, ioDiscard{}, func(string) string { return "" })
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout.String()), &payload))
+		assert.Equal(t, false, payload["release"])
+		assert.Contains(t, payload["skip_reason"], "no version increment")
+	})
+
 	t.Run("plan fails when next tag already exists", func(t *testing.T) {
 		t.Parallel()
 

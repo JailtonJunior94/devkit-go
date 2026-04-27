@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +39,8 @@ type planJSONOutput struct {
 	Bootstrap   bool    `json:"bootstrap"`
 	CommitCount int     `json:"commit_count"`
 	Notes       string  `json:"notes"`
+	Release     bool    `json:"release"`
+	SkipReason  string  `json:"skip_reason,omitempty"`
 }
 
 type publishJSONOutput struct {
@@ -45,6 +48,8 @@ type publishJSONOutput struct {
 	Version     string  `json:"version"`
 	Bootstrap   bool    `json:"bootstrap"`
 	Notes       string  `json:"notes"`
+	Release     bool    `json:"release"`
+	SkipReason  string  `json:"skip_reason,omitempty"`
 }
 
 func main() {
@@ -83,6 +88,9 @@ func run(
 		ChangelogPath: config.changelogPath,
 	})
 	if err != nil {
+		if errors.Is(err, domain.ErrNoVersionIncrement) {
+			return writeSkippedRelease(stdout, config.command, err.Error())
+		}
 		return err
 	}
 
@@ -94,6 +102,7 @@ func run(
 			Bootstrap:   plan.Bootstrap,
 			CommitCount: len(plan.Commits),
 			Notes:       plan.Notes.Markdown(),
+			Release:     true,
 		})
 	case "publish":
 		output, publishErr := service.PublishRelease(ctx, plan)
@@ -106,9 +115,21 @@ func run(
 			Version:     output.Version,
 			Bootstrap:   plan.Bootstrap,
 			Notes:       output.Notes,
+			Release:     true,
 		})
 	default:
 		return fmt.Errorf("unsupported command %q", config.command)
+	}
+}
+
+func writeSkippedRelease(stdout io.Writer, command string, reason string) error {
+	switch command {
+	case "plan":
+		return writeJSON(stdout, planJSONOutput{Release: false, SkipReason: reason})
+	case "publish":
+		return writeJSON(stdout, publishJSONOutput{Release: false, SkipReason: reason})
+	default:
+		return fmt.Errorf("unsupported command %q", command)
 	}
 }
 

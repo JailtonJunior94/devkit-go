@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `pkg/observability/README.md`: Documentação técnica detalhada em PT-BR cobrindo Logger, Metrics, Tracing e propagação de contexto em HTTP e Mensageria.
 - `README.md`: Documentação raiz do projeto em PT-BR com mapeamento de todos os pacotes do DevKit.
+- `scripts/ci_release`: adicionado suporte a flag `release` e `skip_reason` no output JSON para evitar falhas no workflow quando não houver incremento de versão.
+
+### Changed
+- `.github/workflows/ci.yml`: atualizado para utilizar a nova flag `release` e evitar execuções desnecessárias do passo de publicação.
 
 ## [v0.2.0] - 2026-04-27
 

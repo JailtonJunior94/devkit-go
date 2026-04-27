@@ -135,13 +135,16 @@ jobs:
               base_version = plan.get("base_version")
               if base_version:
                   output_handle.write(f"base_version={base_version}\n")
-              output_handle.write(f"next_version={plan['next_version']}\n")
-              output_handle.write(f"bootstrap={str(plan['bootstrap']).lower()}\n")
-              output_handle.write(f"commit_count={plan['commit_count']}\n")
+              output_handle.write(f"next_version={plan.get('next_version', '')}\n")
+              output_handle.write(f"bootstrap={str(plan.get('bootstrap', False)).lower()}\n")
+              output_handle.write(f"commit_count={plan.get('commit_count', 0)}\n")
+              output_handle.write(f"release={str(plan.get('release', False)).lower()}\n")
+              output_handle.write(f"skip_reason={plan.get('skip_reason', '')}\n")
           PY
 
       - name: Publish release
         id: publish
+        if: steps.plan.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -168,8 +171,10 @@ jobs:
               base_version = release.get("base_version")
               if base_version:
                   output_handle.write(f"base_version={base_version}\n")
-              output_handle.write(f"version={release['version']}\n")
-              output_handle.write(f"bootstrap={str(release['bootstrap']).lower()}\n")
+              output_handle.write(f"version={release.get('version', '')}\n")
+              output_handle.write(f"bootstrap={str(release.get('bootstrap', False)).lower()}\n")
+              output_handle.write(f"release={str(release.get('release', False)).lower()}\n")
+              output_handle.write(f"skip_reason={release.get('skip_reason', '')}\n")
           PY
 
       - name: Write release summary
