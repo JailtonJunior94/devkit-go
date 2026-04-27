@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.2.0] - 2026-04-27
 
 ### Added
 - `pkg/observability/otel`: instrumentação HTTP framework-neutral (`http.go`, `propagation.go`, `runtime.go`, `shutdown.go`) com métricas de duração, contagem, requisições ativas e erros
@@ -49,5 +49,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pkg/httpserver`: preferir `pkg/http_server/chi_server` ou `pkg/http_server/server_fiber`
 - `pkg/logger`: preferir o logger exposto por `pkg/observability`
 
-[Unreleased]: https://github.com/JailtonJunior94/devkit-go/compare/v0.1.0...HEAD
+[v0.2.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/JailtonJunior94/devkit-go/releases/tag/v0.1.0
