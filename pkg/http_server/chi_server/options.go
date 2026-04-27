@@ -115,3 +115,17 @@ func WithEnvironment(env string) Option {
 		s.config.Environment = env
 	}
 }
+
+// WithTracing enables shared HTTP distributed tracing.
+func WithTracing() Option {
+	return func(s *Server) {
+		s.config.EnableTracing = true
+	}
+}
+
+// WithOTelMetrics enables shared OpenTelemetry HTTP metrics.
+func WithOTelMetrics() Option {
+	return func(s *Server) {
+		s.config.EnableOTelMetrics = true
+	}
+}

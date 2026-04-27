@@ -8,9 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// otelAttrPool pools slices of attribute.KeyValue to reduce per-call GC pressure.
-// Slices are reset to length 0 but retain their capacity between reuses.
-// Capacity is 16 to match slogAttrPool and avoid reallocation for typical field counts.
+// otelAttrPool reutiliza slices de atributos; cap 16 alinhado com slogAttrPool.
 var otelAttrPool = sync.Pool{
 	New: func() any {
 		s := make([]attribute.KeyValue, 0, 16)
@@ -18,21 +16,16 @@ var otelAttrPool = sync.Pool{
 	},
 }
 
-// acquireAttrs returns a pooled *[]attribute.KeyValue with length reset to 0.
-// Always pair with releaseAttrs.
 func acquireAttrs() *[]attribute.KeyValue {
 	return otelAttrPool.Get().(*[]attribute.KeyValue)
 }
 
-// releaseAttrs returns a slice to the pool.
-// Set *p = attrs before calling so the pool retains any reallocation from append.
+// releaseAttrs devolve o slice ao pool. Atribua *p = attrs antes de chamar para preservar realocações.
 func releaseAttrs(p *[]attribute.KeyValue) {
 	*p = (*p)[:0]
 	otelAttrPool.Put(p)
 }
 
-// convertFieldToAttribute converts an observability.Field to an OpenTelemetry attribute.
-// Uses the Field discriminated union (Kind + typed accessors) — zero boxing for common types.
 func convertFieldToAttribute(field observability.Field) attribute.KeyValue {
 	switch field.Kind() {
 	case observability.FieldKindString:
@@ -55,8 +48,6 @@ func convertFieldToAttribute(field observability.Field) attribute.KeyValue {
 	}
 }
 
-// appendFieldAttrs appends OTel attribute conversions of fields to dst and returns the result.
-// Use with acquireAttrs/releaseAttrs in hot paths to avoid per-call heap allocation.
 func appendFieldAttrs(dst []attribute.KeyValue, fields []observability.Field) []attribute.KeyValue {
 	for _, f := range fields {
 		dst = append(dst, convertFieldToAttribute(f))
@@ -64,8 +55,7 @@ func appendFieldAttrs(dst []attribute.KeyValue, fields []observability.Field) []
 	return dst
 }
 
-// convertFieldsToAttributes converts multiple observability.Field to OpenTelemetry attributes.
-// Returns nil for empty slices. Prefer acquireAttrs/appendFieldAttrs/releaseAttrs in hot paths.
+// convertFieldsToAttributes aloca. Em hot paths use acquireAttrs/appendFieldAttrs/releaseAttrs.
 func convertFieldsToAttributes(fields []observability.Field) []attribute.KeyValue {
 	if len(fields) == 0 {
 		return nil

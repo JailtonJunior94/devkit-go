@@ -48,6 +48,16 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Observability benchmark gate
+        run: |
+          set -euo pipefail
+          benchmark_output="$RUNNER_TEMP/observability-otel-benchmarks.txt"
+          go test -run=^$ -bench . -benchmem ./pkg/observability/otel/... | tee "$benchmark_output"
+          go run ./scripts/benchmark_gate \
+            -baseline pkg/observability/testdata/benchmarks/otel_benchmarks.txt \
+            -budget 5 \
+            -input "$benchmark_output"
+
   test-integration:
     name: Test Integration
     runs-on: ubuntu-22.04

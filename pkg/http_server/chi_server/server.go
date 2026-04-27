@@ -71,6 +71,12 @@ func (s *Server) RegisterRouters(routers ...Router) *Server {
 func (s *Server) registerMiddlewares() {
 	s.router.Use(recoverMiddleware(s.observability))
 	s.router.Use(requestIDMiddleware())
+	if s.config.EnableTracing || s.config.EnableOTelMetrics {
+		s.router.Use(observabilityMiddleware(s.observability))
+		s.observability.Logger().Info(context.Background(), "shared HTTP observability enabled",
+			observability.Bool("tracing", s.config.EnableTracing),
+			observability.Bool("metrics", s.config.EnableOTelMetrics))
+	}
 	s.router.Use(bodyLimitMiddleware(int64(s.config.BodyLimit)))
 
 	if len(s.routeTimeouts) > 0 || s.config.ReadTimeout > 0 {

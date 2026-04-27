@@ -7,13 +7,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// otelMetrics implements observability.Metrics using OpenTelemetry.
 type otelMetrics struct {
 	meter     metric.Meter
 	namespace string
 }
 
-// newOtelMetrics creates a new OpenTelemetry metrics recorder.
 func newOtelMetrics(meter metric.Meter, namespace string) *otelMetrics {
 	return &otelMetrics{
 		meter:     meter,
@@ -21,7 +19,6 @@ func newOtelMetrics(meter metric.Meter, namespace string) *otelMetrics {
 	}
 }
 
-// addNamespace adds the namespace prefix to the metric name if configured.
 func (m *otelMetrics) addNamespace(name string) string {
 	if m.namespace == "" {
 		return name
@@ -29,7 +26,6 @@ func (m *otelMetrics) addNamespace(name string) string {
 	return m.namespace + "." + name
 }
 
-// Counter creates or returns a counter metric.
 func (m *otelMetrics) Counter(name, description, unit string) observability.Counter {
 	fullName := m.addNamespace(name)
 	counter, err := m.meter.Int64Counter(
@@ -43,7 +39,6 @@ func (m *otelMetrics) Counter(name, description, unit string) observability.Coun
 	return &otelCounter{counter: counter}
 }
 
-// Histogram creates or returns a histogram metric.
 func (m *otelMetrics) Histogram(name, description, unit string) observability.Histogram {
 	fullName := m.addNamespace(name)
 	histogram, err := m.meter.Float64Histogram(
@@ -57,7 +52,6 @@ func (m *otelMetrics) Histogram(name, description, unit string) observability.Hi
 	return &otelHistogram{histogram: histogram}
 }
 
-// HistogramWithBuckets creates or returns a histogram metric with custom bucket boundaries.
 func (m *otelMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
 	fullName := m.addNamespace(name)
 	histogram, err := m.meter.Float64Histogram(
@@ -72,7 +66,6 @@ func (m *otelMetrics) HistogramWithBuckets(name, description, unit string, bucke
 	return &otelHistogram{histogram: histogram}
 }
 
-// UpDownCounter creates or returns an up-down counter metric.
 func (m *otelMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
 	fullName := m.addNamespace(name)
 	upDown, err := m.meter.Int64UpDownCounter(
@@ -86,7 +79,6 @@ func (m *otelMetrics) UpDownCounter(name, description, unit string) observabilit
 	return &otelUpDownCounter{counter: upDown}
 }
 
-// Gauge creates an asynchronous gauge metric.
 func (m *otelMetrics) Gauge(name, description, unit string, callback observability.GaugeCallback) error {
 	fullName := m.addNamespace(name)
 	_, err := m.meter.Float64ObservableGauge(
@@ -102,15 +94,12 @@ func (m *otelMetrics) Gauge(name, description, unit string, callback observabili
 	return err
 }
 
-// otelCounter implements observability.Counter.
-// The CardinalityValidator has been removed from the recording path.
-// Label validation (if needed) must be performed at the call site before
-// invoking Add/Increment, or at instrument-creation time.
+// otelCounter: CardinalityValidator foi removido do caminho de gravação.
+// Validação de labels deve ser feita no call site ou na criação do instrumento.
 type otelCounter struct {
 	counter metric.Int64Counter
 }
 
-// Add increments the counter.
 func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
 	if len(fields) == 0 {
 		c.counter.Add(ctx, value)
@@ -123,17 +112,14 @@ func (c *otelCounter) Add(ctx context.Context, value int64, fields ...observabil
 	releaseAttrs(p)
 }
 
-// Increment increments the counter by 1.
 func (c *otelCounter) Increment(ctx context.Context, fields ...observability.Field) {
 	c.Add(ctx, 1, fields...)
 }
 
-// otelHistogram implements observability.Histogram.
 type otelHistogram struct {
 	histogram metric.Float64Histogram
 }
 
-// Record adds a value to the histogram.
 func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
 	if len(fields) == 0 {
 		h.histogram.Record(ctx, value)
@@ -146,12 +132,10 @@ func (h *otelHistogram) Record(ctx context.Context, value float64, fields ...obs
 	releaseAttrs(p)
 }
 
-// otelUpDownCounter implements observability.UpDownCounter.
 type otelUpDownCounter struct {
 	counter metric.Int64UpDownCounter
 }
 
-// Add adds a value to the up-down counter.
 func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
 	if len(fields) == 0 {
 		u.counter.Add(ctx, value)
@@ -164,7 +148,6 @@ func (u *otelUpDownCounter) Add(ctx context.Context, value int64, fields ...obse
 	releaseAttrs(p)
 }
 
-// No-op implementations for error cases.
 type noopCounter struct{}
 
 func (c *noopCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {}

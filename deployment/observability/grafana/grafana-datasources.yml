@@ -6,19 +6,31 @@ datasources:
   uid: prometheus
   access: proxy
   orgId: 1
-  url: http://prometheus:9090
+  url: http://lgtm:9090
+  basicAuth: false
+  isDefault: true
+  version: 1
+  editable: false
+  jsonData:
+    httpMethod: GET
+- name: Tempo
+  type: tempo
+  uid: tempo
+  access: proxy
+  orgId: 1
+  url: http://lgtm:3200
   basicAuth: false
   isDefault: false
   version: 1
   editable: false
   jsonData:
     httpMethod: GET
-- name: Jaeger
-  type: jaeger
-  uid: jaeger
+- name: Loki
+  type: loki
+  uid: loki
   access: proxy
   orgId: 1
-  url: http://jaeger:16686
+  url: http://lgtm:3100
   basicAuth: false
   isDefault: false
   version: 1

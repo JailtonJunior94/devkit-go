@@ -180,6 +180,7 @@ func newErrorHandler(errorHandler ErrorHandler, handler Handler) http.Handler {
 		if err == nil {
 			return
 		}
+		recordHTTPHandlerError(req.Context(), err)
 		errorHandler(req.Context(), w, err)
 	})
 }

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -122,6 +123,45 @@ func TestWithMiddlewares_Append(t *testing.T) {
 
 	if len(s.globalMiddlewares) != 2 {
 		t.Errorf("expected 2 middlewares, got %d", len(s.globalMiddlewares))
+	}
+}
+
+func TestWithObservability(t *testing.T) {
+	hook := &recordingHTTPInstrumentation{}
+
+	s := defaultSettings
+	s = WithObservability(hook)(s)
+
+	if len(s.globalMiddlewares) != 1 {
+		t.Fatalf("expected 1 middleware, got %d", len(s.globalMiddlewares))
+	}
+
+	handlerCalled := false
+	wrapped := s.globalMiddlewares[0](http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	wrapped.ServeHTTP(rec, req)
+
+	if !handlerCalled {
+		t.Error("expected handler to be called")
+	}
+	if len(hook.requests) != 1 {
+		t.Fatalf("expected 1 observed request, got %d", len(hook.requests))
+	}
+	if hook.requests[0].Target != "/ready" {
+		t.Errorf("expected target /ready, got %s", hook.requests[0].Target)
+	}
+}
+
+func TestWithObservability_NilHook(t *testing.T) {
+	s := defaultSettings
+	s = WithObservability(nil)(s)
+
+	if len(s.globalMiddlewares) != 0 {
+		t.Fatalf("expected no middleware, got %d", len(s.globalMiddlewares))
 	}
 }
 

@@ -3,6 +3,7 @@ package observability_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
@@ -198,6 +199,119 @@ func TestFieldHelpers(t *testing.T) {
 
 			if tt.field.AnyValue() != tt.wantValue {
 				t.Errorf("got value %v, want %v", tt.field.AnyValue(), tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestPublicContractValueObjects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "service descriptor",
+			run: func(t *testing.T) {
+				descriptor, err := observability.NewServiceDescriptor("payments", "1.0.0", "prod")
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if descriptor.Name() != "payments" || descriptor.Version() != "1.0.0" || descriptor.Environment() != "prod" {
+					t.Fatalf("unexpected descriptor values: %+v", descriptor)
+				}
+			},
+		},
+		{
+			name: "propagation headers defaults",
+			run: func(t *testing.T) {
+				headers, err := observability.NewPropagationHeaders("", "")
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if headers.RequestIDHeader() != "x-request-id" || headers.CorrelationIDHeader() != "correlation-id" {
+					t.Fatalf("unexpected propagation headers")
+				}
+			},
+		},
+		{
+			name: "shutdown policy defaults",
+			run: func(t *testing.T) {
+				policy, err := observability.NewShutdownPolicy(0, nil)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if policy.Timeout() != 15*time.Second {
+					t.Fatalf("unexpected timeout: %s", policy.Timeout())
+				}
+				if len(policy.FlushOrder()) == 0 {
+					t.Fatal("expected default flush order")
+				}
+			},
+		},
+		{
+			name: "benchmark budget",
+			run: func(t *testing.T) {
+				budget, err := observability.NewBenchmarkBudget("logger_hot_path", 5, "testdata/logger.txt")
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if err := budget.ValidateRegression(4.5); err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.run(t)
+		})
+	}
+}
+
+func TestPublicContractErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		err     error
+		target  error
+		message string
+	}{
+		{
+			name:    "invalid config",
+			err:     observability.NewInvalidConfigError("service name is required"),
+			target:  observability.ErrInvalidConfig,
+			message: "observability: invalid config: service name is required",
+		},
+		{
+			name:    "invalid header name",
+			err:     observability.NewInvalidHeaderNameError("x request id"),
+			target:  observability.ErrInvalidHeaderName,
+			message: "observability: invalid propagation header name: x request id",
+		},
+		{
+			name:    "benchmark regression",
+			err:     observability.NewBenchmarkRegressionError("logger_hot_path", 8),
+			target:  observability.ErrBenchmarkRegression,
+			message: "observability: benchmark regression: logger_hot_path exceeded 8.00%",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !errors.Is(tt.err, tt.target) {
+				t.Fatalf("expected errors.Is(%v), got %v", tt.target, tt.err)
+			}
+			if tt.err.Error() != tt.message {
+				t.Fatalf("unexpected message: %q", tt.err.Error())
 			}
 		})
 	}

@@ -2,11 +2,14 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 )
 
 func TestRequestID_GeneratesID(t *testing.T) {
@@ -77,6 +80,27 @@ func TestGetRequestID_WithID(t *testing.T) {
 	id := GetRequestID(ctx)
 	if id != "test-id-123" {
 		t.Errorf("expected test-id-123, got %s", id)
+	}
+}
+
+func TestRequestID_PreservesExistingContextID(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := GetRequestID(r.Context()); got != "existing-request-id" {
+			t.Errorf("expected existing-request-id, got %s", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := RequestID(handler)
+
+	ctx := context.WithValue(context.Background(), ContextKeyRequestID, "existing-request-id")
+	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get(headerRequestID); got != "existing-request-id" {
+		t.Errorf("expected response request ID existing-request-id, got %s", got)
 	}
 }
 
@@ -337,6 +361,185 @@ func TestMiddlewareChain(t *testing.T) {
 			t.Errorf("expected sequence[%d] = %s, got %s", i, v, sequence[i])
 		}
 	}
+}
+
+func TestObservabilityMiddleware(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		headers           map[string]string
+		handler           http.HandlerFunc
+		wantRequestID     string
+		wantCorrelationID string
+		wantStatus        int
+		wantBytes         int64
+	}{
+		{
+			name: "request with correlation headers delegates request and response to hook",
+			headers: map[string]string{
+				headerRequestID:     "req-123",
+				headerCorrelationID: "corr-456",
+			},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte("created"))
+			},
+			wantRequestID:     "req-123",
+			wantCorrelationID: "corr-456",
+			wantStatus:        http.StatusCreated,
+			wantBytes:         int64(len("created")),
+		},
+		{
+			name: "request without correlation headers still creates root scope",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			},
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name: "server error response is finished as HTTP error status",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "failed", http.StatusServiceUnavailable)
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantBytes:  int64(len("failed\n")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hook := &recordingHTTPInstrumentation{}
+			var handlerRequestID string
+			wrapped := ObservabilityMiddleware(hook)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handlerRequestID = GetRequestID(r.Context())
+				tt.handler(w, r)
+			}))
+
+			req := httptest.NewRequest(http.MethodPost, "/orders/123", nil)
+			req.RemoteAddr = "10.0.0.1:1234"
+			req.Header.Set("User-Agent", "devkit-test")
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			if len(hook.requests) != 1 {
+				t.Fatalf("expected 1 root HTTP scope, got %d", len(hook.requests))
+			}
+			gotReq := hook.requests[0]
+			if gotReq.Method != http.MethodPost {
+				t.Errorf("expected method POST, got %s", gotReq.Method)
+			}
+			if gotReq.Target != "/orders/123" {
+				t.Errorf("expected target /orders/123, got %s", gotReq.Target)
+			}
+			if gotReq.RemoteAddr != "10.0.0.1:1234" {
+				t.Errorf("expected remote addr 10.0.0.1:1234, got %s", gotReq.RemoteAddr)
+			}
+			if gotReq.UserAgent != "devkit-test" {
+				t.Errorf("expected user agent devkit-test, got %s", gotReq.UserAgent)
+			}
+			if tt.wantRequestID != "" && gotReq.RequestID != tt.wantRequestID {
+				t.Errorf("expected request ID %s, got %s", tt.wantRequestID, gotReq.RequestID)
+			}
+			if gotReq.RequestID == "" {
+				t.Error("expected request ID to be delegated to hook")
+			}
+			if handlerRequestID != gotReq.RequestID {
+				t.Errorf("expected handler context request ID %s, got %s", gotReq.RequestID, handlerRequestID)
+			}
+			if gotReq.CorrelationID != tt.wantCorrelationID {
+				t.Errorf("expected correlation ID %s, got %s", tt.wantCorrelationID, gotReq.CorrelationID)
+			}
+			if rec.Header().Get(headerRequestID) != gotReq.RequestID {
+				t.Errorf("expected response request ID %s, got %s", gotReq.RequestID, rec.Header().Get(headerRequestID))
+			}
+
+			scope := hook.scopes[0]
+			if len(scope.responses) != 1 {
+				t.Fatalf("expected 1 finished response, got %d", len(scope.responses))
+			}
+			if scope.responses[0].StatusCode != tt.wantStatus {
+				t.Errorf("expected status %d, got %d", tt.wantStatus, scope.responses[0].StatusCode)
+			}
+			if scope.responses[0].Bytes != tt.wantBytes {
+				t.Errorf("expected bytes %d, got %d", tt.wantBytes, scope.responses[0].Bytes)
+			}
+		})
+	}
+}
+
+func TestObservabilityMiddleware_NilHookIsNoop(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	wrapped := ObservabilityMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	wrapped.ServeHTTP(rec, req)
+
+	if !called {
+		t.Error("expected handler to be called")
+	}
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("expected status 202, got %d", rec.Code)
+	}
+}
+
+func TestRecordHTTPHandlerError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("handler failed")
+	scope := &recordingHTTPRequestScope{}
+	ctx := context.WithValue(context.Background(), httpRequestScopeContextKey{}, scope)
+
+	recordHTTPHandlerError(ctx, expectedErr)
+	recordHTTPHandlerError(context.Background(), expectedErr)
+	recordHTTPHandlerError(ctx, nil)
+
+	if len(scope.errors) != 1 {
+		t.Fatalf("expected 1 recorded error, got %d", len(scope.errors))
+	}
+	if !errors.Is(scope.errors[0], expectedErr) {
+		t.Errorf("expected recorded error %v, got %v", expectedErr, scope.errors[0])
+	}
+}
+
+type recordingHTTPInstrumentation struct {
+	requests []otel.HTTPRequest
+	scopes   []*recordingHTTPRequestScope
+}
+
+func (r *recordingHTTPInstrumentation) StartRequest(
+	ctx context.Context,
+	req otel.HTTPRequest,
+) (context.Context, otel.HTTPRequestScope) {
+	scope := &recordingHTTPRequestScope{}
+	r.requests = append(r.requests, req)
+	r.scopes = append(r.scopes, scope)
+	return ctx, scope
+}
+
+type recordingHTTPRequestScope struct {
+	errors    []error
+	responses []otel.HTTPResponse
+}
+
+func (r *recordingHTTPRequestScope) OnError(err error) {
+	r.errors = append(r.errors, err)
+}
+
+func (r *recordingHTTPRequestScope) Finish(resp otel.HTTPResponse) {
+	r.responses = append(r.responses, resp)
 }
 
 func TestCORS_SpecificOrigin(t *testing.T) {

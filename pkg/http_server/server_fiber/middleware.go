@@ -2,16 +2,16 @@ package serverfiber
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
+	otelobs "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // recoverMiddleware recovers from panics and logs detailed error information.
@@ -75,6 +75,118 @@ func requestIDMiddleware() fiber.Handler {
 
 		return c.Next()
 	}
+}
+
+type httpHookProvider interface {
+	HTTP() otelobs.HTTPInstrumentation
+}
+
+func observabilityMiddleware(o11y observability.Observability) fiber.Handler {
+	hook := httpInstrumentation(o11y)
+	if hook == nil {
+		return func(c *fiber.Ctx) error {
+			return c.Next()
+		}
+	}
+
+	return func(c *fiber.Ctx) error {
+		requestID, _ := c.Locals("requestID").(string)
+		ctx, scope := hook.StartRequest(c.UserContext(), otelobs.HTTPRequest{
+			Method:        c.Method(),
+			Route:         fiberRoutePattern(c),
+			Target:        c.Path(),
+			RemoteAddr:    c.IP(),
+			UserAgent:     c.Get("User-Agent"),
+			RequestID:     requestID,
+			CorrelationID: c.Get("Correlation-ID"),
+		})
+		c.SetUserContext(ctx)
+		if scope == nil {
+			return c.Next()
+		}
+
+		defer finishFiberObservedRequest(scope, c)
+
+		err := c.Next()
+		if err != nil {
+			scope.OnError(err)
+			c.Locals(observedStatusCodeKey{}, fiberStatusCode(c, err))
+		}
+		return err
+	}
+}
+
+func httpInstrumentation(o11y observability.Observability) otelobs.HTTPInstrumentation {
+	provider, ok := o11y.(httpHookProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.HTTP()
+}
+
+func fiberRoutePattern(c *fiber.Ctx) string {
+	if route := c.Route(); route != nil && route.Path != "" && route.Path != "/" {
+		return route.Path
+	}
+	return lowCardinalityRoute(c.Path())
+}
+
+func fiberStatusCode(c *fiber.Ctx, err error) int {
+	if statusCode, ok := c.Locals(observedStatusCodeKey{}).(int); ok && statusCode > 0 {
+		return statusCode
+	}
+	if err != nil {
+		if fiberErr, ok := err.(*fiber.Error); ok {
+			return fiberErr.Code
+		}
+		return fiber.StatusInternalServerError
+	}
+	return c.Response().StatusCode()
+}
+
+type observedStatusCodeKey struct{}
+
+func finishFiberObservedRequest(scope otelobs.HTTPRequestScope, c *fiber.Ctx) {
+	if recovered := recover(); recovered != nil {
+		scope.OnError(fmt.Errorf("panic: %v", recovered))
+		scope.Finish(otelobs.HTTPResponse{
+			StatusCode: fiber.StatusInternalServerError,
+			Bytes:      int64(len(c.Response().Body())),
+		})
+		panic(recovered)
+	}
+
+	scope.Finish(otelobs.HTTPResponse{
+		StatusCode: fiberStatusCode(c, nil),
+		Bytes:      int64(len(c.Response().Body())),
+	})
+}
+
+func lowCardinalityRoute(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "/" {
+		return path
+	}
+
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		if numericPathSegment(segment) {
+			segments[i] = "{param}"
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func numericPathSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, char := range segment {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // timeoutMiddleware applies request timeout with proper cleanup.
@@ -296,69 +408,4 @@ func trimSpace(s string) string {
 	}
 
 	return s[start:end]
-}
-
-// otelMetricsMiddleware creates OpenTelemetry HTTP metrics for the server.
-// It records request duration, request count, and active requests.
-// Metrics follow OpenTelemetry Semantic Conventions for HTTP metrics.
-//
-// PERFORMANCE: Instruments are created once and reused for all requests.
-// Uses the global MeterProvider configured by the observability package.
-func otelMetricsMiddleware(serviceName string) fiber.Handler {
-	// Get global MeterProvider (already configured by otel.Provider)
-	meter := otel.GetMeterProvider().Meter(serviceName)
-
-	// Create instruments once (reuse for all requests to avoid overhead)
-	durationHistogram, _ := meter.Float64Histogram(
-		"http.server.duration",
-		metric.WithDescription("Duration of HTTP server requests in seconds"),
-		metric.WithUnit("s"),
-	)
-
-	requestCounter, _ := meter.Int64Counter(
-		"http.server.request.count",
-		metric.WithDescription("Total number of HTTP requests"),
-		metric.WithUnit("{request}"),
-	)
-
-	activeRequests, _ := meter.Int64UpDownCounter(
-		"http.server.active_requests",
-		metric.WithDescription("Number of active HTTP requests"),
-		metric.WithUnit("{request}"),
-	)
-
-	return func(c *fiber.Ctx) error {
-		start := time.Now()
-		ctx := c.UserContext()
-
-		// Increment active requests
-		activeRequests.Add(ctx, 1)
-		defer activeRequests.Add(ctx, -1)
-
-		// Process request
-		err := c.Next()
-
-		// Calculate duration in seconds
-		duration := time.Since(start).Seconds()
-
-		// Get route path (use template, not actual path to avoid cardinality explosion)
-		// Example: /users/:id instead of /users/123
-		route := c.Route().Path
-		if route == "" {
-			route = "unknown"
-		}
-
-		// Prepare attributes following OpenTelemetry Semantic Conventions
-		attrs := metric.WithAttributes(
-			attribute.String("http.method", c.Method()),
-			attribute.String("http.route", route),
-			attribute.Int("http.status_code", c.Response().StatusCode()),
-		)
-
-		// Record metrics
-		durationHistogram.Record(ctx, duration, attrs)
-		requestCounter.Add(ctx, 1, attrs)
-
-		return err
-	}
 }

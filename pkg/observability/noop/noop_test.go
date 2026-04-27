@@ -25,6 +25,42 @@ func TestNoopProvider(t *testing.T) {
 	}
 }
 
+func TestNoopProvider_ContractCompatibility(t *testing.T) {
+	t.Parallel()
+
+	provider := noop.NewProvider()
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "implements observability facade",
+			run: func(t *testing.T) {
+				var obs observability.Observability = provider
+				if obs.Tracer() == nil || obs.Logger() == nil || obs.Metrics() == nil {
+					t.Fatal("expected all observability dependencies to be available")
+				}
+			},
+		},
+		{
+			name: "shutdown remains compatible",
+			run: func(t *testing.T) {
+				if err := provider.Shutdown(context.Background()); err != nil {
+					t.Fatalf("unexpected shutdown error: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.run(t)
+		})
+	}
+}
+
 func TestNoopTracer(t *testing.T) {
 	provider := noop.NewProvider()
 	tracer := provider.Tracer()

@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 	"github.com/JailtonJunior94/devkit-go/pkg/vos"
+	"github.com/go-chi/chi/v5"
 )
 
 // ContextKey is a type for context keys to avoid collisions.
@@ -21,6 +24,13 @@ const (
 	ContextKeyRequestID ContextKey = "request-id"
 )
 
+const (
+	headerRequestID     = "X-Request-ID"
+	headerCorrelationID = "Correlation-ID"
+)
+
+type httpRequestScopeContextKey struct{}
+
 // RequestID is a middleware that adds a unique request ID to each request.
 // The request ID is stored in the context and can be retrieved using
 // GetRequestID or directly from the context with ContextKeyRequestID.
@@ -29,12 +39,152 @@ const (
 // is generated to ensure every request has an ID.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := generateRequestID()
+		requestID := GetRequestID(r.Context())
+		if requestID == "" {
+			requestID = generateRequestID()
+		}
 
-		w.Header().Set("X-Request-ID", requestID)
+		w.Header().Set(headerRequestID, requestID)
 		ctx := context.WithValue(r.Context(), ContextKeyRequestID, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// ObservabilityMiddleware instruments HTTP requests using the shared OTel HTTP hook.
+// It is opt-in and can be installed with WithObservability without changing New.
+func ObservabilityMiddleware(hook otel.HTTPInstrumentation) Middleware {
+	if hook == nil {
+		return func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			requestID := requestIDFromRequest(ctx, r)
+			if requestID != "" {
+				w.Header().Set(headerRequestID, requestID)
+				ctx = context.WithValue(ctx, ContextKeyRequestID, requestID)
+			}
+
+			ctx, scope := hook.StartRequest(ctx, otel.HTTPRequest{
+				Method:        r.Method,
+				Route:         routePattern(ctx),
+				Target:        r.URL.Path,
+				RemoteAddr:    r.RemoteAddr,
+				UserAgent:     r.UserAgent(),
+				RequestID:     requestID,
+				CorrelationID: r.Header.Get(headerCorrelationID),
+			})
+			if scope == nil {
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			ctx = context.WithValue(ctx, httpRequestScopeContextKey{}, scope)
+
+			rw := newObservabilityResponseWriter(w)
+			defer finishHTTPRequestScope(scope, rw)
+
+			next.ServeHTTP(rw, r.WithContext(ctx))
+		})
+	}
+}
+
+func requestIDFromRequest(ctx context.Context, r *http.Request) string {
+	if requestID := strings.TrimSpace(r.Header.Get(headerRequestID)); requestID != "" {
+		return requestID
+	}
+	if requestID := GetRequestID(ctx); requestID != "" {
+		return requestID
+	}
+	return generateRequestID()
+}
+
+func routePattern(ctx context.Context) string {
+	routeCtx := chi.RouteContext(ctx)
+	if routeCtx == nil {
+		return ""
+	}
+	return routeCtx.RoutePattern()
+}
+
+func recordHTTPHandlerError(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	scope, ok := ctx.Value(httpRequestScopeContextKey{}).(otel.HTTPRequestScope)
+	if !ok || scope == nil {
+		return
+	}
+	scope.OnError(err)
+}
+
+func finishHTTPRequestScope(scope otel.HTTPRequestScope, rw *observabilityResponseWriter) {
+	if recovered := recover(); recovered != nil {
+		scope.OnError(fmt.Errorf("panic: %v", recovered))
+		scope.Finish(otel.HTTPResponse{
+			StatusCode: http.StatusInternalServerError,
+			Bytes:      rw.bytesWritten(),
+		})
+		panic(recovered)
+	}
+
+	scope.Finish(otel.HTTPResponse{
+		StatusCode: rw.statusCode(),
+		Bytes:      rw.bytesWritten(),
+	})
+}
+
+type observabilityResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int64
+	wroteHeader bool
+}
+
+func newObservabilityResponseWriter(w http.ResponseWriter) *observabilityResponseWriter {
+	return &observabilityResponseWriter{
+		ResponseWriter: w,
+		status:         http.StatusOK,
+	}
+}
+
+func (rw *observabilityResponseWriter) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+	rw.wroteHeader = true
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *observabilityResponseWriter) Write(body []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.wroteHeader = true
+	}
+	written, err := rw.ResponseWriter.Write(body)
+	rw.bytes += int64(written)
+	return written, err
+}
+
+func (rw *observabilityResponseWriter) Flush() {
+	flusher, ok := rw.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	flusher.Flush()
+}
+
+func (rw *observabilityResponseWriter) statusCode() int {
+	if rw.status <= 0 {
+		return http.StatusOK
+	}
+	return rw.status
+}
+
+func (rw *observabilityResponseWriter) bytesWritten() int64 {
+	return rw.bytes
 }
 
 // generateRequestID generates a unique request ID using UUID v7.

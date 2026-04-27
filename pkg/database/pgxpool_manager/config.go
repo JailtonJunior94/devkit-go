@@ -56,6 +56,13 @@ type Config struct {
 	// Default: 1 minute
 	HealthCheckPeriod time.Duration
 
+	// Environment is the deployment environment ("development", "staging",
+	// "production"). When set to "production" or "prod" (case-insensitive),
+	// validateConfig rejects EnableQueryLogging=true to prevent leaking PII
+	// or secrets carried in query arguments. Empty value is treated as
+	// non-production and only emits a warning. Default: "" (non-production).
+	Environment string
+
 	// === Observability Configuration ===
 
 	// EnableTracing enables automatic distributed tracing for all queries.

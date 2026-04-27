@@ -34,9 +34,9 @@ type Config struct {
 	EnableMetrics      bool
 	EnableHealthChecks bool
 
-	// OpenTelemetry configuration (Fiber-specific, ignored by Chi)
-	EnableTracing     bool // Enable OpenTelemetry distributed tracing
-	EnableOTelMetrics bool // Enable OpenTelemetry HTTP metrics
+	// OpenTelemetry configuration
+	EnableTracing     bool // Enable shared HTTP distributed tracing
+	EnableOTelMetrics bool // Enable shared HTTP metrics
 }
 
 // DefaultConfig returns a new Config with sensible defaults.

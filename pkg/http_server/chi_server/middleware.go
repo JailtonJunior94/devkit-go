@@ -11,6 +11,8 @@ import (
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
+	otelobs "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -20,6 +22,10 @@ type contextKey string
 const (
 	requestIDKey contextKey = "requestID"
 )
+
+type httpHookProvider interface {
+	HTTP() otelobs.HTTPInstrumentation
+}
 
 // recoverMiddleware recovers from panics and logs them.
 // SECURITY: Uses a wrapper to track if headers were sent to prevent double write.
@@ -68,7 +74,6 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 	}
 }
 
-
 // requestIDMiddleware generates or propagates a request ID.
 func requestIDMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -85,6 +90,155 @@ func requestIDMiddleware() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func observabilityMiddleware(o11y observability.Observability) func(http.Handler) http.Handler {
+	hook := httpInstrumentation(o11y)
+	if hook == nil {
+		return func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			requestID, _ := ctx.Value(requestIDKey).(string)
+			correlationID := r.Header.Get("Correlation-ID")
+
+			ctx, scope := hook.StartRequest(ctx, otelobs.HTTPRequest{
+				Method:        r.Method,
+				Route:         chiRoutePattern(ctx, r),
+				Target:        r.URL.Path,
+				RemoteAddr:    r.RemoteAddr,
+				UserAgent:     r.UserAgent(),
+				RequestID:     requestID,
+				CorrelationID: correlationID,
+			})
+			if scope == nil {
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			rw := newObservedResponseWriter(w)
+			defer finishObservedRequest(scope, rw)
+
+			next.ServeHTTP(rw, r.WithContext(ctx))
+		})
+	}
+}
+
+func httpInstrumentation(o11y observability.Observability) otelobs.HTTPInstrumentation {
+	provider, ok := o11y.(httpHookProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.HTTP()
+}
+
+func chiRoutePattern(ctx context.Context, r *http.Request) string {
+	routeCtx := chi.RouteContext(ctx)
+	if routeCtx == nil {
+		return lowCardinalityRoute(r.URL.Path)
+	}
+	if route := routeCtx.RoutePattern(); route != "" {
+		return route
+	}
+	return lowCardinalityRoute(r.URL.Path)
+}
+
+func lowCardinalityRoute(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "/" {
+		return path
+	}
+
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		if numericPathSegment(segment) {
+			segments[i] = "{param}"
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func numericPathSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, char := range segment {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func finishObservedRequest(scope otelobs.HTTPRequestScope, rw *observedResponseWriter) {
+	if recovered := recover(); recovered != nil {
+		scope.OnError(fmt.Errorf("panic: %v", recovered))
+		scope.Finish(otelobs.HTTPResponse{
+			StatusCode: http.StatusInternalServerError,
+			Bytes:      rw.bytesWritten(),
+		})
+		panic(recovered)
+	}
+
+	scope.Finish(otelobs.HTTPResponse{
+		StatusCode: rw.statusCode(),
+		Bytes:      rw.bytesWritten(),
+	})
+}
+
+type observedResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int64
+	wroteHeader bool
+}
+
+func newObservedResponseWriter(w http.ResponseWriter) *observedResponseWriter {
+	return &observedResponseWriter{
+		ResponseWriter: w,
+		status:         http.StatusOK,
+	}
+}
+
+func (rw *observedResponseWriter) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+	rw.wroteHeader = true
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *observedResponseWriter) Write(body []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.wroteHeader = true
+	}
+	written, err := rw.ResponseWriter.Write(body)
+	rw.bytes += int64(written)
+	return written, err
+}
+
+func (rw *observedResponseWriter) Flush() {
+	flusher, ok := rw.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	flusher.Flush()
+}
+
+func (rw *observedResponseWriter) statusCode() int {
+	if rw.status <= 0 {
+		return http.StatusOK
+	}
+	return rw.status
+}
+
+func (rw *observedResponseWriter) bytesWritten() int64 {
+	return rw.bytes
 }
 
 // timeoutMiddleware applies a timeout to requests with race-free implementation.
@@ -265,7 +419,6 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 		})
 	}
 }
-
 
 // bodyLimitMiddleware enforces a maximum request body size.
 // SECURITY: Always applies MaxBytesReader regardless of Content-Length header

@@ -8,11 +8,19 @@ lint:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.2.1
 	GOGC=20 golangci-lint run --config .golangci.yml ./...
 
-.PHONY: mockery
-mocks:
+.PHONY: mocks-clean mocks-generate mocks-reset mocks
+mocks-clean:
+	@echo "Removing generated mocks..."
+	find ./pkg/observability -type d -name mocks -prune -exec rm -rf {} +
+
+mocks-generate:
 	@echo "Generating mocks..."
-	go install github.com/vektra/mockery/v3@v3.5.0
+	go install github.com/vektra/mockery/v3@v3.7.0
 	mockery
+
+mocks-reset: mocks-clean mocks-generate
+
+mocks: mocks-generate
 
 test:
 	@echo "Running tests..."

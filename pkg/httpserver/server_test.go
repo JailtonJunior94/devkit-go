@@ -130,6 +130,73 @@ func TestNew_WithMiddlewares(t *testing.T) {
 	}
 }
 
+func TestNew_WithObservabilityRecordsHandlerError(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("test error")
+	hook := &recordingHTTPInstrumentation{}
+	handler := func(w http.ResponseWriter, r *http.Request) error {
+		return expectedErr
+	}
+
+	srv := New(
+		WithObservability(hook),
+		WithRoutes(NewRoute(http.MethodGet, "/error", handler)),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/error", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", rec.Code)
+	}
+	if len(hook.scopes) != 1 {
+		t.Fatalf("expected 1 HTTP scope, got %d", len(hook.scopes))
+	}
+	scope := hook.scopes[0]
+	if len(scope.errors) != 1 {
+		t.Fatalf("expected 1 recorded handler error, got %d", len(scope.errors))
+	}
+	if !errors.Is(scope.errors[0], expectedErr) {
+		t.Errorf("expected recorded error %v, got %v", expectedErr, scope.errors[0])
+	}
+	if len(scope.responses) != 1 {
+		t.Fatalf("expected 1 finished response, got %d", len(scope.responses))
+	}
+	if scope.responses[0].StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected finished status 500, got %d", scope.responses[0].StatusCode)
+	}
+}
+
+func TestNew_WithRouteObservabilityRecordsRoutePattern(t *testing.T) {
+	t.Parallel()
+
+	hook := &recordingHTTPInstrumentation{}
+	handler := func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	}
+
+	srv := New(
+		WithRoutes(NewRoute(http.MethodGet, "/users/{id}", handler, ObservabilityMiddleware(hook))),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+	if len(hook.requests) != 1 {
+		t.Fatalf("expected 1 observed request, got %d", len(hook.requests))
+	}
+	if hook.requests[0].Route != "/users/{id}" {
+		t.Errorf("expected route /users/{id}, got %s", hook.requests[0].Route)
+	}
+}
+
 func TestNew_WithErrorHandler(t *testing.T) {
 	expectedErr := errors.New("test error")
 	handlerErrorCalled := false

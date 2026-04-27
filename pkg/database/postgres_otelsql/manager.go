@@ -3,14 +3,20 @@ package postgres_otelsql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/XSAM/otelsql"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
+	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
+
+const dbOperationSpanPrefix = "db.client.operation"
 
 // DBManager manages a PostgreSQL connection pool instrumented with OpenTelemetry.
 //
@@ -24,10 +30,10 @@ import (
 //  5. Graceful Shutdown: Connections are properly closed without losing in-flight queries.
 //
 // Anti-Patterns to AVOID:
-//  - Creating a new manager per HTTP request (destroys pooling)
-//  - Calling Close() and then using DB() (returns nil, causes panics)
-//  - Using context.Background() in handlers (breaks tracing propagation)
-//  - Setting MaxOpenConns > PostgreSQL max_connections (causes connection errors)
+//   - Creating a new manager per HTTP request (destroys pooling)
+//   - Calling Close() and then using DB() (returns nil, causes panics)
+//   - Using context.Background() in handlers (breaks tracing propagation)
+//   - Setting MaxOpenConns > PostgreSQL max_connections (causes connection errors)
 type DBManager struct {
 	db     *sql.DB
 	config *Config
@@ -83,13 +89,7 @@ func NewDBManager(ctx context.Context, config *Config) (*DBManager, error) {
 	// - Context propagation (trace_id flows through queries)
 	driverName, err := otelsql.Register(
 		"pgx",
-		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
-		otelsql.WithSpanOptions(otelsql.SpanOptions{
-			// DisableErrSkip: false means we DON'T create spans for sql.ErrNoRows
-			// This reduces noise - missing rows is not an error condition
-			DisableErrSkip: false,
-		}),
-		otelsql.WithSQLCommenter(config.EnableQueryLogging),
+		otelsqlOptions(config)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to register otelsql driver: %w", err)
@@ -122,13 +122,74 @@ func NewDBManager(ctx context.Context, config *Config) (*DBManager, error) {
 
 	// Start metrics recording if enabled
 	if config.EnableMetrics {
-		if _, err := otelsql.RegisterDBStatsMetrics(db); err != nil {
+		if _, err := otelsql.RegisterDBStatsMetrics(db, otelsqlOptions(config)...); err != nil {
 			// Non-fatal: we can continue without metrics
 			manager.logf("Failed to register otelsql metrics: %v", err)
 		}
 	}
 
 	return manager, nil
+}
+
+func otelsqlOptions(config *Config) []otelsql.Option {
+	spanOptions := otelsql.SpanOptions{
+		// DisableErrSkip: false keeps sql.ErrNoRows out of span errors.
+		DisableErrSkip: false,
+		DisableQuery:   !config.EnableQueryLogging,
+		SpanFilter:     propagatedTraceOnlySpanFilter,
+	}
+	if !config.EnableTracing {
+		spanOptions.SpanFilter = func(context.Context, otelsql.Method, string, []driver.NamedValue) bool {
+			return false
+		}
+	}
+
+	return []otelsql.Option{
+		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
+		otelsql.WithAttributes(attribute.String("component", "postgres_otelsql")),
+		otelsql.WithSpanNameFormatter(formatDBSpanName),
+		otelsql.WithSpanOptions(spanOptions),
+		otelsql.WithSQLCommenter(config.EnableQueryLogging),
+	}
+}
+
+func propagatedTraceOnlySpanFilter(ctx context.Context, _ otelsql.Method, _ string, _ []driver.NamedValue) bool {
+	return oteltrace.SpanContextFromContext(ctx).IsValid()
+}
+
+func formatDBSpanName(_ context.Context, method otelsql.Method, query string) string {
+	operation := extractOperation(query)
+	if operation == "UNKNOWN" {
+		operation = string(method)
+	}
+	return dbOperationSpanPrefix + " " + operation
+}
+
+func extractOperation(sql string) string {
+	trimmed := strings.TrimSpace(sql)
+	if trimmed == "" {
+		return "UNKNOWN"
+	}
+
+	firstWord, _, _ := strings.Cut(trimmed, " ")
+	switch strings.ToUpper(firstWord) {
+	case "SELECT":
+		return "SELECT"
+	case "INSERT":
+		return "INSERT"
+	case "UPDATE":
+		return "UPDATE"
+	case "DELETE":
+		return "DELETE"
+	case "CREATE", "DROP", "ALTER", "TRUNCATE":
+		return "DDL"
+	case "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT":
+		return "TRANSACTION"
+	case "WITH":
+		return "SELECT"
+	default:
+		return "OTHER"
+	}
 }
 
 // logConfig is a helper to log configuration warnings during validation.
@@ -296,16 +357,16 @@ func (m *DBManager) Ping(ctx context.Context) error {
 // The context is checked BEFORE starting Close(), but Close() itself is blocking.
 //
 // Behavior:
-//  - Checks if context is already expired BEFORE starting Close()
-//  - Marks connection as closed to prevent new operations
-//  - Executes blocking Close() (may exceed context deadline)
-//  - Close() CANNOT be interrupted once started
-//  - Idempotent and thread-safe
+//   - Checks if context is already expired BEFORE starting Close()
+//   - Marks connection as closed to prevent new operations
+//   - Executes blocking Close() (may exceed context deadline)
+//   - Close() CANNOT be interrupted once started
+//   - Idempotent and thread-safe
 //
 // IMPORTANT:
-//  - Close() is blocking by design in database/sql
-//  - If context expires DURING Close(), operation continues until complete
-//  - Trade-off: We prefer closing connections completely rather than leaving them orphaned
+//   - Close() is blocking by design in database/sql
+//   - If context expires DURING Close(), operation continues until complete
+//   - Trade-off: We prefer closing connections completely rather than leaving them orphaned
 //
 // MUST be called during application shutdown:
 //

@@ -9,7 +9,6 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 
-	"github.com/gofiber/contrib/otelfiber"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -84,18 +83,18 @@ func (s *Server) registerMiddlewares() {
 	// 1. Recover middleware - must be first to capture panics from all other middlewares
 	s.app.Use(recoverMiddleware(s.observability))
 
-	// 2. OpenTelemetry tracing - create root span early to capture full request lifecycle
-	if s.config.EnableTracing {
-		s.app.Use(otelfiber.Middleware(
-			otelfiber.WithServerName(s.config.ServiceName),
-		))
-		s.observability.Logger().Info(context.Background(), "OpenTelemetry tracing enabled",
+	// 2. Request ID middleware - must run before observability to propagate request IDs
+	s.app.Use(requestIDMiddleware())
+
+	// 3. Shared HTTP observability - tracing and metrics are delegated to the runtime hook
+	if s.config.EnableTracing || s.config.EnableOTelMetrics {
+		s.app.Use(observabilityMiddleware(s.observability))
+		s.observability.Logger().Info(context.Background(), "shared HTTP observability enabled",
 			observability.String("service", s.config.ServiceName),
+			observability.Bool("tracing", s.config.EnableTracing),
+			observability.Bool("metrics", s.config.EnableOTelMetrics),
 		)
 	}
-
-	// 3. Request ID middleware - can use trace ID from span context if needed
-	s.app.Use(requestIDMiddleware())
 
 	// 4. Timeout middleware - enforce request timeouts
 	if s.config.ReadTimeout > 0 {
@@ -113,15 +112,7 @@ func (s *Server) registerMiddlewares() {
 		)
 	}
 
-	// 7. OpenTelemetry metrics - record HTTP metrics (duration, count, active requests)
-	if s.config.EnableOTelMetrics {
-		s.app.Use(otelMetricsMiddleware(s.config.ServiceName))
-		s.observability.Logger().Info(context.Background(), "OpenTelemetry HTTP metrics enabled",
-			observability.String("service", s.config.ServiceName),
-		)
-	}
-
-	// 8. Custom middlewares - user-defined middlewares registered last
+	// 7. Custom middlewares - user-defined middlewares registered last
 	for _, middleware := range s.customMiddlewares {
 		s.app.Use(middleware)
 	}

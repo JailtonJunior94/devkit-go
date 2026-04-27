@@ -1,6 +1,10 @@
 package httpserver
 
-import "time"
+import (
+	"time"
+
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
+)
 
 const (
 	defaultHTTPPort        = "8080"
@@ -122,6 +126,17 @@ func WithMiddlewares(middlewares ...Middleware) Option {
 	return func(s settings) settings {
 		s.globalMiddlewares = append(s.globalMiddlewares, middlewares...)
 		return s
+	}
+}
+
+// WithObservability adds the shared HTTP observability middleware globally.
+// Passing nil is a no-op, keeping observability fully opt-in.
+func WithObservability(hook otel.HTTPInstrumentation) Option {
+	return func(s settings) settings {
+		if hook == nil {
+			return s
+		}
+		return WithMiddlewares(ObservabilityMiddleware(hook))(s)
 	}
 }
 

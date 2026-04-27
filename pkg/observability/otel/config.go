@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -17,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -26,57 +24,46 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// OTLPProtocol defines the protocol to use for OTLP export.
 type OTLPProtocol string
 
 const (
-	// ProtocolGRPC uses gRPC protocol for OTLP export (default: port 4317).
-	ProtocolGRPC OTLPProtocol = "grpc"
-	// ProtocolHTTP uses HTTP/protobuf protocol for OTLP export (default: port 4318).
-	ProtocolHTTP OTLPProtocol = "http"
+	ProtocolGRPC OTLPProtocol = "grpc" // porta padrão 4317
+	ProtocolHTTP OTLPProtocol = "http" // porta padrão 4318
 )
 
-// Config holds the configuration for the OpenTelemetry provider.
 type Config struct {
 	ServiceName    string
 	ServiceVersion string
 	Environment    string
 	OTLPEndpoint   string
-	OTLPProtocol   OTLPProtocol // "grpc" or "http", defaults to "grpc"
+	OTLPProtocol   OTLPProtocol
 
-	// Security configuration
-	Insecure  bool        // Allow insecure connections (only for non-production environments)
-	TLSConfig *tls.Config // Custom TLS configuration (optional, uses system defaults if nil)
+	// Insecure permite conexões sem TLS. Bloqueado em ambientes production/prod.
+	Insecure  bool
+	TLSConfig *tls.Config // nil usa os padrões do sistema
 
-	// Trace configuration
-	TraceSampleRate float64 // 0.0 to 1.0, default 1.0 (always sample)
+	TraceSampleRate float64 // 0.0–1.0, padrão 1.0
 
-	// Log configuration
 	LogLevel  observability.LogLevel
 	LogFormat observability.LogFormat
-	// Sanitize enables sensitive-field redaction (password, token, etc.) and long-value
-	// truncation in log entries. Disabled by default for performance; enable in
-	// environments where PII may appear in structured fields.
+	// Sanitize habilita redaction de campos sensíveis (password, token, etc.) e truncamento de valores longos.
+	// Desabilitado por padrão por custo O(n×m); habilite quando PII puder aparecer nos campos.
 	Sanitize bool
-	// ConsoleLog enables JSON output to stdout via slog in addition to OTLP export.
-	// Default false (production): only the async OTel batch exporter runs — no
-	// sync.Mutex, no I/O on the calling goroutine.
-	// Set true in local/development environments for human-readable log output.
-	// WARNING: slog's JSONHandler holds a sync.Mutex per write; enabling this in
-	// production under concurrent load introduces serialisation and p99 spikes.
+	// ConsoleLog escreve JSON no stdout via slog além do OTLP. Apenas para desenvolvimento.
+	// AVISO: slog.JSONHandler usa sync.Mutex por escrita — causa serialização e spikes de p99 em produção.
 	ConsoleLog bool
 
-	// Metrics configuration
-	MetricExportInterval    int64    // Export interval in seconds (default: 60)
-	MetricNamespace         string   // Optional prefix for all metric names (e.g., "myapp")
-	EnableCardinalityCheck  bool     // Enable validation of high-cardinality labels (default: true in production)
-	CustomBlockedLabels     []string // Custom high-cardinality labels to block (in addition to defaults)
+	MetricExportInterval   int64    // segundos, padrão 60
+	MetricNamespace        string   // prefixo opcional para nomes de métricas
+	EnableCardinalityCheck bool
+	CustomBlockedLabels    []string
 
-	// Resource attributes (optional)
 	ResourceAttributes map[string]string
+
+	// PropagationHeaders com zero value usa observability.DefaultPropagationHeaders().
+	PropagationHeaders observability.PropagationHeaders
 }
 
-// DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig(serviceName string) *Config {
 	return &Config{
 		ServiceName:            serviceName,
@@ -87,12 +74,11 @@ func DefaultConfig(serviceName string) *Config {
 		TraceSampleRate:        1.0,
 		LogLevel:               observability.LogLevelInfo,
 		LogFormat:              observability.LogFormatJSON,
-		MetricExportInterval:   60, // 60 seconds
-		EnableCardinalityCheck: false, // Disabled by default in dev
+		MetricExportInterval:   60,
+		EnableCardinalityCheck: false,
 	}
 }
 
-// normalizeProtocol normalizes the protocol string to a valid OTLPProtocol.
 func normalizeProtocol(protocol string) OTLPProtocol {
 	switch strings.ToLower(protocol) {
 	case "http", "http/protobuf":
@@ -104,7 +90,6 @@ func normalizeProtocol(protocol string) OTLPProtocol {
 	}
 }
 
-// Provider implements the observability.Observability interface using OpenTelemetry.
 type Provider struct {
 	config         *Config
 	tracerProvider *sdktrace.TracerProvider
@@ -113,119 +98,55 @@ type Provider struct {
 	tracer         *otelTracer
 	logger         *otelLogger
 	metrics        *otelMetrics
-	shutdownFuncs  []func(context.Context) error
-	shutdownOnce   sync.Once // guards idempotent Shutdown
+	runtime        *runtime
 }
 
-// validateConfig validates required configuration fields.
 func validateConfig(config *Config) error {
 	if config.ServiceName == "" {
 		return fmt.Errorf("ServiceName cannot be empty")
 	}
-
 	if config.OTLPEndpoint == "" {
 		return fmt.Errorf("OTLPEndpoint cannot be empty")
 	}
-
-	// Validate TraceSampleRate range
 	if config.TraceSampleRate < 0.0 || config.TraceSampleRate > 1.0 {
 		return fmt.Errorf("TraceSampleRate must be between 0.0 and 1.0, got %f", config.TraceSampleRate)
 	}
-
 	return nil
 }
 
-// validateSecurityConfig validates the security configuration.
 func validateSecurityConfig(config *Config) error {
-	// Prevent insecure connections in production
 	if config.Insecure {
 		env := strings.ToLower(config.Environment)
 		if env == "production" || env == "prod" {
 			return fmt.Errorf("insecure connections are not allowed in production environment")
 		}
 	}
-
-	// Validate TLS configuration if provided
 	if config.TLSConfig != nil {
-		// Check minimum TLS version
 		if config.TLSConfig.MinVersion > 0 && config.TLSConfig.MinVersion < tls.VersionTLS12 {
 			return fmt.Errorf("minimum TLS version must be 1.2 or higher for security compliance")
 		}
 	}
-
 	return nil
 }
 
-// NewProvider creates and initializes a new OpenTelemetry provider.
 func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
-
-	// Validate required configuration fields
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
-
-	// Security validation
 	if err := validateSecurityConfig(config); err != nil {
 		return nil, err
 	}
-
-	// Normalize protocol
 	config.OTLPProtocol = normalizeProtocol(string(config.OTLPProtocol))
-
-	provider := &Provider{
-		config:        config,
-		shutdownFuncs: nil,
-	}
-
-	// Create resource with service information
-	res, err := provider.createResource(ctx)
+	runtime, err := newRuntime(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+		return nil, err
 	}
-
-	// Initialize tracer provider
-	if err := provider.initTracerProvider(ctx, res); err != nil {
-		return nil, fmt.Errorf("failed to initialize tracer provider: %w", err)
-	}
-
-	// Initialize meter provider
-	if err := provider.initMeterProvider(ctx, res); err != nil {
-		return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
-	}
-
-	// Initialize logger provider
-	if err := provider.initLoggerProvider(ctx, res); err != nil {
-		return nil, fmt.Errorf("failed to initialize logger provider: %w", err)
-	}
-
-	// Set global propagator for trace context propagation
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-
-	// Initialize components
-	provider.tracer = newOtelTracer(provider.tracerProvider.Tracer(config.ServiceName))
-	provider.logger = newOtelLogger(
-		config.LogLevel,
-		config.LogFormat,
-		config.ServiceName,
-		provider.loggerProvider.Logger(config.ServiceName),
-		config.Sanitize,
-		config.ConsoleLog,
-	)
-	provider.metrics = newOtelMetrics(
-		provider.meterProvider.Meter(config.ServiceName),
-		config.MetricNamespace,
-	)
-
-	return provider, nil
+	return runtime.observability(), nil
 }
 
-// createResource creates an OTLP resource with service information.
 func (p *Provider) createResource(ctx context.Context) (*resource.Resource, error) {
 	attrs := []resource.Option{
 		resource.WithAttributes(
@@ -235,7 +156,6 @@ func (p *Provider) createResource(ctx context.Context) (*resource.Resource, erro
 		),
 	}
 
-	// Add custom resource attributes
 	if len(p.config.ResourceAttributes) > 0 {
 		customAttrs := make([]attribute.KeyValue, 0, len(p.config.ResourceAttributes))
 		for k, v := range p.config.ResourceAttributes {
@@ -250,7 +170,6 @@ func (p *Provider) createResource(ctx context.Context) (*resource.Resource, erro
 	)
 }
 
-// initTracerProvider initializes the OpenTelemetry tracer provider.
 func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resource) error {
 	exporter, err := p.createTraceExporter(ctx)
 	if err != nil {
@@ -266,12 +185,15 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 	)
 
 	otel.SetTracerProvider(p.tracerProvider)
-	p.shutdownFuncs = append(p.shutdownFuncs, p.tracerProvider.Shutdown)
+	p.runtime.shutdown.register(shutdownStep{
+		name:       "tracer_provider",
+		forceFlush: p.tracerProvider.ForceFlush,
+		shutdown:   p.tracerProvider.Shutdown,
+	})
 
 	return nil
 }
 
-// createTraceExporter creates the appropriate trace exporter based on protocol.
 func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
 		opts := []otlptracehttp.Option{
@@ -288,7 +210,6 @@ func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 		return otlptracehttp.New(ctx, opts...)
 	}
 
-	// gRPC protocol
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
@@ -303,7 +224,6 @@ func (p *Provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 	return otlptracegrpc.New(ctx, opts...)
 }
 
-// createTraceSampler creates the appropriate sampler based on sample rate.
 func (p *Provider) createTraceSampler() sdktrace.Sampler {
 	if p.config.TraceSampleRate >= 1.0 {
 		return sdktrace.AlwaysSample()
@@ -316,17 +236,15 @@ func (p *Provider) createTraceSampler() sdktrace.Sampler {
 	return sdktrace.TraceIDRatioBased(p.config.TraceSampleRate)
 }
 
-// initMeterProvider initializes the OpenTelemetry meter provider.
 func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource) error {
 	exporter, err := p.createMetricExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 
-	// Configure periodic reader with custom interval
 	interval := time.Duration(p.config.MetricExportInterval) * time.Second
 	if interval <= 0 {
-		interval = 60 * time.Second // Default to 60 seconds
+		interval = 60 * time.Second
 	}
 
 	reader := sdkmetric.NewPeriodicReader(
@@ -340,12 +258,15 @@ func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource
 	)
 
 	otel.SetMeterProvider(p.meterProvider)
-	p.shutdownFuncs = append(p.shutdownFuncs, p.meterProvider.Shutdown)
+	p.runtime.shutdown.register(shutdownStep{
+		name:       "meter_provider",
+		forceFlush: p.meterProvider.ForceFlush,
+		shutdown:   p.meterProvider.Shutdown,
+	})
 
 	return nil
 }
 
-// createMetricExporter creates the appropriate metric exporter based on protocol.
 func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
 		opts := []otlpmetrichttp.Option{
@@ -362,7 +283,6 @@ func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter
 		return otlpmetrichttp.New(ctx, opts...)
 	}
 
-	// gRPC protocol
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
@@ -377,7 +297,6 @@ func (p *Provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter
 	return otlpmetricgrpc.New(ctx, opts...)
 }
 
-// initLoggerProvider initializes the OpenTelemetry logger provider.
 func (p *Provider) initLoggerProvider(ctx context.Context, res *resource.Resource) error {
 	exporter, err := p.createLogExporter(ctx)
 	if err != nil {
@@ -389,12 +308,15 @@ func (p *Provider) initLoggerProvider(ctx context.Context, res *resource.Resourc
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
 	)
 
-	p.shutdownFuncs = append(p.shutdownFuncs, p.loggerProvider.Shutdown)
+	p.runtime.shutdown.register(shutdownStep{
+		name:       "logger_provider",
+		forceFlush: p.loggerProvider.ForceFlush,
+		shutdown:   p.loggerProvider.Shutdown,
+	})
 
 	return nil
 }
 
-// createLogExporter creates the appropriate log exporter based on protocol.
 func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 	if p.config.OTLPProtocol == ProtocolHTTP {
 		opts := []otlploghttp.Option{
@@ -411,7 +333,6 @@ func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 		return otlploghttp.New(ctx, opts...)
 	}
 
-	// gRPC protocol
 	opts := []otlploggrpc.Option{
 		otlploggrpc.WithEndpoint(p.config.OTLPEndpoint),
 	}
@@ -426,36 +347,21 @@ func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 	return otlploggrpc.New(ctx, opts...)
 }
 
-// Tracer returns the OpenTelemetry tracer.
-func (p *Provider) Tracer() observability.Tracer {
-	return p.tracer
+func (p *Provider) Tracer() observability.Tracer  { return p.tracer }
+func (p *Provider) Logger() observability.Logger  { return p.logger }
+func (p *Provider) Metrics() observability.Metrics { return p.metrics }
+
+func (p *Provider) HTTP() HTTPInstrumentation {
+	if p == nil || p.runtime == nil || p.runtime.http == nil {
+		return noopHTTPInstrumentation{}
+	}
+	return p.runtime.http
 }
 
-// Logger returns the OpenTelemetry logger.
-func (p *Provider) Logger() observability.Logger {
-	return p.logger
-}
-
-// Metrics returns the OpenTelemetry metrics recorder.
-func (p *Provider) Metrics() observability.Metrics {
-	return p.metrics
-}
-
-// Shutdown gracefully shuts down the provider, flushing any pending telemetry.
-// Idempotent: concurrent or repeated calls are safe — only the first execution
-// runs the shutdown functions; subsequent calls return nil immediately.
+// Shutdown é idempotente: chamadas concorrentes ou repetidas são seguras.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	var shutdownErr error
-	p.shutdownOnce.Do(func() {
-		var errs []error
-		for _, fn := range p.shutdownFuncs {
-			if err := fn(ctx); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		if len(errs) > 0 {
-			shutdownErr = fmt.Errorf("errors during shutdown: %v", errs)
-		}
-	})
-	return shutdownErr
+	if p.runtime == nil {
+		return nil
+	}
+	return p.runtime.Shutdown(ctx)
 }

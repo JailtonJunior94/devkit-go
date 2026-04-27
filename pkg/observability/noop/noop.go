@@ -6,15 +6,25 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// Provider returns a no-op implementation of observability that has zero runtime overhead.
-// Use this when you want to disable observability completely.
+var (
+	_ observability.Observability = (*Provider)(nil)
+	_ observability.Tracer        = (*noopTracer)(nil)
+	_ observability.Span          = noopSpan{}
+	_ observability.SpanContext   = noopSpanContext{}
+	_ observability.Logger        = (*noopLogger)(nil)
+	_ observability.Metrics       = (*noopMetrics)(nil)
+	_ observability.Counter       = noopCounter{}
+	_ observability.Histogram     = noopHistogram{}
+	_ observability.UpDownCounter = noopUpDownCounter{}
+)
+
+// Provider é uma implementação noop de observabilidade com overhead zero.
 type Provider struct {
 	tracer  *noopTracer
 	logger  *noopLogger
 	metrics *noopMetrics
 }
 
-// NewProvider creates a new no-op observability provider.
 func NewProvider() *Provider {
 	return &Provider{
 		tracer:  &noopTracer{},
@@ -23,25 +33,11 @@ func NewProvider() *Provider {
 	}
 }
 
-// Tracer returns a no-op tracer.
-func (p *Provider) Tracer() observability.Tracer {
-	return p.tracer
-}
+func (p *Provider) Tracer() observability.Tracer   { return p.tracer }
+func (p *Provider) Logger() observability.Logger   { return p.logger }
+func (p *Provider) Metrics() observability.Metrics { return p.metrics }
 
-// Logger returns a no-op logger.
-func (p *Provider) Logger() observability.Logger {
-	return p.logger
-}
-
-// Metrics returns a no-op metrics recorder.
-func (p *Provider) Metrics() observability.Metrics {
-	return p.metrics
-}
-
-// Shutdown is a no-op for the noop provider.
-func (p *Provider) Shutdown(_ context.Context) error {
-	return nil
-}
+func (p *Provider) Shutdown(_ context.Context) error { return nil }
 
 var (
 	globalNoopSpan        = noopSpan{}
@@ -51,7 +47,6 @@ var (
 	globalNoopUpDown      = noopUpDownCounter{}
 )
 
-// noopTracer implements observability.Tracer with no-op operations.
 type noopTracer struct{}
 
 func (t *noopTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
@@ -66,7 +61,6 @@ func (t *noopTracer) ContextWithSpan(ctx context.Context, span observability.Spa
 	return ctx
 }
 
-// noopSpan implements observability.Span with no-op operations.
 type noopSpan struct{}
 
 func (s noopSpan) End() {}
@@ -89,7 +83,6 @@ func (s noopSpan) SpanID() string { return "" }
 
 func (s noopSpan) IsSampled() bool { return false }
 
-// noopSpanContext implements observability.SpanContext with no-op operations.
 type noopSpanContext struct{}
 
 func (c noopSpanContext) TraceID() string {
@@ -104,7 +97,6 @@ func (c noopSpanContext) IsSampled() bool {
 	return false
 }
 
-// noopLogger implements observability.Logger with no-op operations.
 type noopLogger struct{}
 
 func (l *noopLogger) Debug(ctx context.Context, msg string, fields ...observability.Field) {}
@@ -119,7 +111,6 @@ func (l *noopLogger) With(fields ...observability.Field) observability.Logger {
 	return l
 }
 
-// noopMetrics implements observability.Metrics with no-op operations.
 type noopMetrics struct{}
 
 func (m *noopMetrics) Counter(name, description, unit string) observability.Counter {
@@ -142,19 +133,16 @@ func (m *noopMetrics) Gauge(name, description, unit string, callback observabili
 	return nil
 }
 
-// noopCounter implements observability.Counter with no-op operations.
 type noopCounter struct{}
 
 func (c noopCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {}
 
 func (c noopCounter) Increment(ctx context.Context, fields ...observability.Field) {}
 
-// noopHistogram implements observability.Histogram with no-op operations.
 type noopHistogram struct{}
 
 func (h noopHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {}
 
-// noopUpDownCounter implements observability.UpDownCounter with no-op operations.
 type noopUpDownCounter struct{}
 
 func (u noopUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {}

@@ -8,15 +8,25 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// Provider implements a fake observability provider for testing purposes.
-// It captures all operations so they can be inspected in tests.
+var (
+	_ observability.Observability = (*Provider)(nil)
+	_ observability.Tracer        = (*FakeTracer)(nil)
+	_ observability.Span          = (*FakeSpan)(nil)
+	_ observability.SpanContext   = (*FakeSpanContext)(nil)
+	_ observability.Logger        = (*FakeLogger)(nil)
+	_ observability.Metrics       = (*FakeMetrics)(nil)
+	_ observability.Counter       = (*FakeCounter)(nil)
+	_ observability.Histogram     = (*FakeHistogram)(nil)
+	_ observability.UpDownCounter = (*FakeUpDownCounter)(nil)
+)
+
+// Provider é um fake de observabilidade para testes; captura operações para inspeção.
 type Provider struct {
 	tracer  *FakeTracer
 	logger  *FakeLogger
 	metrics *FakeMetrics
 }
 
-// NewProvider creates a new fake observability provider for testing.
 func NewProvider() *Provider {
 	return &Provider{
 		tracer:  NewFakeTracer(),
@@ -25,43 +35,25 @@ func NewProvider() *Provider {
 	}
 }
 
-// Tracer returns the fake tracer.
-func (p *Provider) Tracer() observability.Tracer {
-	return p.tracer
-}
+func (p *Provider) Tracer() observability.Tracer   { return p.tracer }
+func (p *Provider) Logger() observability.Logger   { return p.logger }
+func (p *Provider) Metrics() observability.Metrics { return p.metrics }
 
-// Logger returns the fake logger.
-func (p *Provider) Logger() observability.Logger {
-	return p.logger
-}
+func (p *Provider) Shutdown(_ context.Context) error { return nil }
 
-// Metrics returns the fake metrics recorder.
-func (p *Provider) Metrics() observability.Metrics {
-	return p.metrics
-}
-
-// Shutdown is a no-op for the fake provider.
-func (p *Provider) Shutdown(_ context.Context) error {
-	return nil
-}
-
-// fakeSpanKey is the context key used to store and retrieve fake spans.
 type fakeSpanKey struct{}
 
-// FakeTracer captures all tracing operations for test assertions.
 type FakeTracer struct {
 	mu    sync.RWMutex
 	spans []*FakeSpan
 }
 
-// NewFakeTracer creates a new fake tracer.
 func NewFakeTracer() *FakeTracer {
 	return &FakeTracer{
 		spans: nil,
 	}
 }
 
-// Start creates a fake span, injects it into the context, and captures it for assertions.
 func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observability.SpanOption) (context.Context, observability.Span) {
 	config := observability.NewSpanConfig(opts)
 
@@ -79,7 +71,6 @@ func (t *FakeTracer) Start(ctx context.Context, spanName string, opts ...observa
 	return context.WithValue(ctx, fakeSpanKey{}, span), span
 }
 
-// SpanFromContext returns the span stored in the context, or an empty span if none exists.
 func (t *FakeTracer) SpanFromContext(ctx context.Context) observability.Span {
 	if span, ok := ctx.Value(fakeSpanKey{}).(*FakeSpan); ok {
 		return span
@@ -87,12 +78,10 @@ func (t *FakeTracer) SpanFromContext(ctx context.Context) observability.Span {
 	return &FakeSpan{}
 }
 
-// ContextWithSpan returns a new context with the given span stored for later retrieval.
 func (t *FakeTracer) ContextWithSpan(ctx context.Context, span observability.Span) context.Context {
 	return context.WithValue(ctx, fakeSpanKey{}, span)
 }
 
-// GetSpans returns all captured spans (for test assertions).
 func (t *FakeTracer) GetSpans() []*FakeSpan {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -101,14 +90,12 @@ func (t *FakeTracer) GetSpans() []*FakeSpan {
 	return result
 }
 
-// Reset clears all captured spans.
 func (t *FakeTracer) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.spans = nil
 }
 
-// FakeSpan captures span operations for test assertions.
 type FakeSpan struct {
 	mu          sync.RWMutex
 	Name        string
@@ -121,7 +108,6 @@ type FakeSpan struct {
 	RecordedErr error
 }
 
-// End marks the span as ended.
 func (s *FakeSpan) End() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,14 +115,12 @@ func (s *FakeSpan) End() {
 	s.EndTime = &now
 }
 
-// SetAttributes adds attributes to the span.
 func (s *FakeSpan) SetAttributes(fields ...observability.Field) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Attributes = append(s.Attributes, fields...)
 }
 
-// SetStatus sets the span status.
 func (s *FakeSpan) SetStatus(code observability.StatusCode, description string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,7 +128,6 @@ func (s *FakeSpan) SetStatus(code observability.StatusCode, description string) 
 	s.StatusDesc = description
 }
 
-// RecordError records an error on the span.
 func (s *FakeSpan) RecordError(err error, fields ...observability.Field) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,7 +135,6 @@ func (s *FakeSpan) RecordError(err error, fields ...observability.Field) {
 	s.Attributes = append(s.Attributes, fields...)
 }
 
-// AddEvent adds an event to the span.
 func (s *FakeSpan) AddEvent(name string, fields ...observability.Field) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,7 +145,6 @@ func (s *FakeSpan) AddEvent(name string, fields ...observability.Field) {
 	})
 }
 
-// Context returns a fake span context.
 func (s *FakeSpan) Context() observability.SpanContext {
 	return &FakeSpanContext{
 		traceID: "fake-trace-id",
@@ -172,52 +153,32 @@ func (s *FakeSpan) Context() observability.SpanContext {
 	}
 }
 
-// TraceID returns the fake trace ID directly. Zero allocation.
-func (s *FakeSpan) TraceID() string { return "fake-trace-id" }
+func (s *FakeSpan) TraceID() string  { return "fake-trace-id" }
+func (s *FakeSpan) SpanID() string   { return "fake-span-id" }
+func (s *FakeSpan) IsSampled() bool  { return true }
 
-// SpanID returns the fake span ID directly. Zero allocation.
-func (s *FakeSpan) SpanID() string { return "fake-span-id" }
-
-// IsSampled reports whether the fake span is sampled (always true).
-func (s *FakeSpan) IsSampled() bool { return true }
-
-// FakeEvent represents a recorded span event.
 type FakeEvent struct {
 	Name      string
 	Timestamp time.Time
 	Fields    []observability.Field
 }
 
-// FakeSpanContext implements a fake span context.
 type FakeSpanContext struct {
 	traceID string
 	spanID  string
 	sampled bool
 }
 
-// TraceID returns the fake trace ID.
-func (c *FakeSpanContext) TraceID() string {
-	return c.traceID
-}
+func (c *FakeSpanContext) TraceID() string  { return c.traceID }
+func (c *FakeSpanContext) SpanID() string   { return c.spanID }
+func (c *FakeSpanContext) IsSampled() bool  { return c.sampled }
 
-// SpanID returns the fake span ID.
-func (c *FakeSpanContext) SpanID() string {
-	return c.spanID
-}
-
-// IsSampled returns whether the span is sampled.
-func (c *FakeSpanContext) IsSampled() bool {
-	return c.sampled
-}
-
-// FakeLogger captures all log operations for test assertions.
 type FakeLogger struct {
 	mu      *sync.RWMutex
 	entries *[]LogEntry
 	fields  []observability.Field
 }
 
-// NewFakeLogger creates a new fake logger.
 func NewFakeLogger() *FakeLogger {
 	var entries []LogEntry
 	return &FakeLogger{
@@ -227,7 +188,6 @@ func NewFakeLogger() *FakeLogger {
 	}
 }
 
-// Debug captures a debug log entry.
 func (l *FakeLogger) Debug(ctx context.Context, msg string, fields ...observability.Field) {
 	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
 	allFields = append(allFields, l.fields...)
@@ -243,7 +203,6 @@ func (l *FakeLogger) Debug(ctx context.Context, msg string, fields ...observabil
 	})
 }
 
-// Info captures an info log entry.
 func (l *FakeLogger) Info(ctx context.Context, msg string, fields ...observability.Field) {
 	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
 	allFields = append(allFields, l.fields...)
@@ -259,7 +218,6 @@ func (l *FakeLogger) Info(ctx context.Context, msg string, fields ...observabili
 	})
 }
 
-// Warn captures a warn log entry.
 func (l *FakeLogger) Warn(ctx context.Context, msg string, fields ...observability.Field) {
 	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
 	allFields = append(allFields, l.fields...)
@@ -275,7 +233,6 @@ func (l *FakeLogger) Warn(ctx context.Context, msg string, fields ...observabili
 	})
 }
 
-// Error captures an error log entry.
 func (l *FakeLogger) Error(ctx context.Context, msg string, fields ...observability.Field) {
 	allFields := make([]observability.Field, 0, len(l.fields)+len(fields))
 	allFields = append(allFields, l.fields...)
@@ -291,7 +248,6 @@ func (l *FakeLogger) Error(ctx context.Context, msg string, fields ...observabil
 	})
 }
 
-// With creates a child logger with additional fields.
 func (l *FakeLogger) With(fields ...observability.Field) observability.Logger {
 	newFields := make([]observability.Field, len(l.fields)+len(fields))
 	copy(newFields, l.fields)
@@ -304,7 +260,6 @@ func (l *FakeLogger) With(fields ...observability.Field) observability.Logger {
 	}
 }
 
-// GetEntries returns all captured log entries (for test assertions).
 func (l *FakeLogger) GetEntries() []LogEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -313,14 +268,12 @@ func (l *FakeLogger) GetEntries() []LogEntry {
 	return result
 }
 
-// Reset clears all captured log entries.
 func (l *FakeLogger) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	*l.entries = nil
 }
 
-// LogEntry represents a captured log entry.
 type LogEntry struct {
 	Level     observability.LogLevel
 	Message   string
@@ -328,7 +281,6 @@ type LogEntry struct {
 	Timestamp time.Time
 }
 
-// FakeMetrics captures all metrics operations for test assertions.
 type FakeMetrics struct {
 	mu         sync.RWMutex
 	counters   map[string]*FakeCounter
@@ -336,7 +288,6 @@ type FakeMetrics struct {
 	upDowns    map[string]*FakeUpDownCounter
 }
 
-// NewFakeMetrics creates a new fake metrics recorder.
 func NewFakeMetrics() *FakeMetrics {
 	return &FakeMetrics{
 		counters:   make(map[string]*FakeCounter),
@@ -345,7 +296,6 @@ func NewFakeMetrics() *FakeMetrics {
 	}
 }
 
-// Counter returns or creates a fake counter.
 func (m *FakeMetrics) Counter(name, description, unit string) observability.Counter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,7 +314,6 @@ func (m *FakeMetrics) Counter(name, description, unit string) observability.Coun
 	return c
 }
 
-// Histogram returns or creates a fake histogram.
 func (m *FakeMetrics) Histogram(name, description, unit string) observability.Histogram {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -383,12 +332,10 @@ func (m *FakeMetrics) Histogram(name, description, unit string) observability.Hi
 	return h
 }
 
-// HistogramWithBuckets returns or creates a fake histogram (ignores buckets in fake provider).
 func (m *FakeMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
 	return m.Histogram(name, description, unit)
 }
 
-// UpDownCounter returns or creates a fake up-down counter.
 func (m *FakeMetrics) UpDownCounter(name, description, unit string) observability.UpDownCounter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -407,33 +354,28 @@ func (m *FakeMetrics) UpDownCounter(name, description, unit string) observabilit
 	return u
 }
 
-// Gauge is a no-op for fake metrics.
 func (m *FakeMetrics) Gauge(name, description, unit string, callback observability.GaugeCallback) error {
 	return nil
 }
 
-// GetCounter returns a counter by name for test assertions.
 func (m *FakeMetrics) GetCounter(name string) *FakeCounter {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.counters[name]
 }
 
-// GetHistogram returns a histogram by name for test assertions.
 func (m *FakeMetrics) GetHistogram(name string) *FakeHistogram {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.histograms[name]
 }
 
-// GetUpDownCounter returns an up-down counter by name for test assertions.
 func (m *FakeMetrics) GetUpDownCounter(name string) *FakeUpDownCounter {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.upDowns[name]
 }
 
-// FakeCounter captures counter operations.
 type FakeCounter struct {
 	mu          sync.RWMutex
 	Name        string
@@ -442,7 +384,6 @@ type FakeCounter struct {
 	values      []CounterValue
 }
 
-// Add captures a counter increment.
 func (c *FakeCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -453,12 +394,10 @@ func (c *FakeCounter) Add(ctx context.Context, value int64, fields ...observabil
 	})
 }
 
-// Increment increments the counter by 1.
 func (c *FakeCounter) Increment(ctx context.Context, fields ...observability.Field) {
 	c.Add(ctx, 1, fields...)
 }
 
-// GetValues returns all captured values.
 func (c *FakeCounter) GetValues() []CounterValue {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -467,14 +406,12 @@ func (c *FakeCounter) GetValues() []CounterValue {
 	return result
 }
 
-// CounterValue represents a captured counter value.
 type CounterValue struct {
 	Value     int64
 	Fields    []observability.Field
 	Timestamp time.Time
 }
 
-// FakeHistogram captures histogram operations.
 type FakeHistogram struct {
 	mu          sync.RWMutex
 	Name        string
@@ -483,7 +420,6 @@ type FakeHistogram struct {
 	values      []HistogramValue
 }
 
-// Record captures a histogram value.
 func (h *FakeHistogram) Record(ctx context.Context, value float64, fields ...observability.Field) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -494,7 +430,6 @@ func (h *FakeHistogram) Record(ctx context.Context, value float64, fields ...obs
 	})
 }
 
-// GetValues returns all captured values.
 func (h *FakeHistogram) GetValues() []HistogramValue {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -503,14 +438,12 @@ func (h *FakeHistogram) GetValues() []HistogramValue {
 	return result
 }
 
-// HistogramValue represents a captured histogram value.
 type HistogramValue struct {
 	Value     float64
 	Fields    []observability.Field
 	Timestamp time.Time
 }
 
-// FakeUpDownCounter captures up-down counter operations.
 type FakeUpDownCounter struct {
 	mu          sync.RWMutex
 	Name        string
@@ -519,7 +452,6 @@ type FakeUpDownCounter struct {
 	values      []CounterValue
 }
 
-// Add captures an up-down counter change.
 func (u *FakeUpDownCounter) Add(ctx context.Context, value int64, fields ...observability.Field) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -530,7 +462,6 @@ func (u *FakeUpDownCounter) Add(ctx context.Context, value int64, fields ...obse
 	})
 }
 
-// GetValues returns all captured values.
 func (u *FakeUpDownCounter) GetValues() []CounterValue {
 	u.mu.RLock()
 	defer u.mu.RUnlock()

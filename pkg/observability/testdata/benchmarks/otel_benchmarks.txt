@@ -1,0 +1,19 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/JailtonJunior94/devkit-go/pkg/observability/otel
+cpu: Apple M1 Pro
+BenchmarkConvertFieldToAttribute-8          	100000000	        14.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConvertFieldsToAttributes-8        	12191884	       128.6 ns/op	     192 B/op	       1 allocs/op
+BenchmarkConvertFieldsToAttributesEmpty-8   	556328127	         2.158 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStart-8                            	 3384004	       356.0 ns/op	     576 B/op	       3 allocs/op
+BenchmarkSpanFromContext_FastPath-8         	266539615	         4.639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSpanFromContext_NoSpan-8           	137785118	         8.763 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTraceID-8                          	38597878	        30.94 ns/op	      32 B/op	       1 allocs/op
+BenchmarkContextTraceID-8                   	25032615	        51.87 ns/op	      96 B/op	       2 allocs/op
+BenchmarkStartWithKind-8                    	 2837658	       423.9 ns/op	     624 B/op	       5 allocs/op
+BenchmarkLoggerInfoNoFields-8               	11162894	       106.9 ns/op	      48 B/op	       2 allocs/op
+BenchmarkLoggerInfoWithFields-8             	 7929940	       148.5 ns/op	      48 B/op	       2 allocs/op
+BenchmarkPropagationExtract-8               	 1656904	       713.2 ns/op	     920 B/op	      11 allocs/op
+BenchmarkPropagationInject-8                	 3713865	       325.2 ns/op	     128 B/op	       4 allocs/op
+PASS
+ok  	github.com/JailtonJunior94/devkit-go/pkg/observability/otel	20.417s

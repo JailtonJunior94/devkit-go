@@ -12,8 +12,15 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	dbOperationDurationMetric = "db.client.operation.duration"
+	dbOperationCountMetric    = "db.client.operation.count"
+	dbOperationSpanPrefix     = "db.client.operation"
 )
 
 // PgxPoolManager manages a pgxpool connection pool instrumented with OpenTelemetry.
@@ -33,10 +40,10 @@ import (
 //  5. Graceful Shutdown: Closes connections cleanly without losing data
 //
 // Critical Anti-Patterns:
-//  - Creating pool per request (defeats pooling, exhausts connections)
-//  - Using context.Background() in handlers (breaks tracing)
-//  - Calling Close() then using Pool() (returns nil, causes panic)
-//  - Setting MaxConns > PostgreSQL max_connections (connection errors)
+//   - Creating pool per request (defeats pooling, exhausts connections)
+//   - Using context.Background() in handlers (breaks tracing)
+//   - Calling Close() then using Pool() (returns nil, causes panic)
+//   - Setting MaxConns > PostgreSQL max_connections (connection errors)
 type PgxPoolManager struct {
 	pool   *pgxpool.Pool
 	config *Config
@@ -98,6 +105,7 @@ func NewPgxPoolManager(ctx context.Context, config *Config) (*PgxPoolManager, er
 
 	// Get tracer from global provider
 	tracer := otel.Tracer(config.ServiceName)
+	dbMetrics := newDBMetrics(config)
 
 	manager := &PgxPoolManager{
 		config: config,
@@ -106,10 +114,13 @@ func NewPgxPoolManager(ctx context.Context, config *Config) (*PgxPoolManager, er
 	}
 
 	// Configure observability hooks BEFORE creating pool
-	if config.EnableTracing {
+	if config.EnableTracing || config.EnableMetrics {
 		poolConfig.ConnConfig.Tracer = &otelTracer{
-			tracer:      tracer,
-			serviceName: config.ServiceName,
+			tracer:          tracer,
+			serviceName:     config.ServiceName,
+			metrics:         dbMetrics,
+			traceSpans:      config.EnableTracing,
+			recordQueryText: config.EnableQueryLogging,
 		}
 	}
 
@@ -139,6 +150,23 @@ func NewPgxPoolManager(ctx context.Context, config *Config) (*PgxPoolManager, er
 	}
 
 	return manager, nil
+}
+
+// logConfig forwards a configuration warning to the optional Logger.
+func logConfig(config *Config, format string, args ...any) {
+	if config != nil && config.Logger != nil {
+		config.Logger(format, args...)
+	}
+}
+
+// isProductionEnv reports whether the configured environment is production.
+func isProductionEnv(env string) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "production", "prod":
+		return true
+	default:
+		return false
+	}
 }
 
 // validateConfig validates required configuration fields.
@@ -181,6 +209,17 @@ func validateConfig(config *Config) error {
 	if config.HealthCheckPeriod < 10*time.Second {
 		return fmt.Errorf("HealthCheckPeriod too short (minimum 10 seconds), got %v",
 			config.HealthCheckPeriod)
+	}
+
+	if config.EnableQueryLogging {
+		if isProductionEnv(config.Environment) {
+			return fmt.Errorf("EnableQueryLogging=true is not allowed in production environment %q: "+
+				"query arguments may carry PII or secrets",
+				config.Environment)
+		}
+		logConfig(config, "EnableQueryLogging=true. This should NEVER be enabled in production. "+
+			"It logs all SQL queries (including arguments that may contain sensitive data) "+
+			"and significantly impacts performance.")
 	}
 
 	return nil
@@ -263,16 +302,16 @@ func (m *PgxPoolManager) Ping(ctx context.Context) error {
 // The context is checked BEFORE starting Close(), but Close() itself is blocking.
 //
 // Behavior:
-//  - Checks if context is already expired BEFORE starting Close()
-//  - Marks pool as closed to prevent new operations
-//  - Executes blocking Close() (may exceed context deadline)
-//  - Close() CANNOT be interrupted once started
-//  - Idempotent and thread-safe
+//   - Checks if context is already expired BEFORE starting Close()
+//   - Marks pool as closed to prevent new operations
+//   - Executes blocking Close() (may exceed context deadline)
+//   - Close() CANNOT be interrupted once started
+//   - Idempotent and thread-safe
 //
 // IMPORTANT:
-//  - Close() is blocking by design in pgxpool
-//  - If context expires DURING Close(), operation continues until complete
-//  - Trade-off: We prefer closing connections completely rather than leaving them orphaned
+//   - Close() is blocking by design in pgxpool
+//   - If context expires DURING Close(), operation continues until complete
+//   - Trade-off: We prefer closing connections completely rather than leaving them orphaned
 //
 // MUST be called during application shutdown:
 //
@@ -338,27 +377,98 @@ func (m *PgxPoolManager) Stats() *pgxpool.Stat {
 
 // otelTracer implements pgx.QueryTracer for OpenTelemetry integration.
 type otelTracer struct {
-	tracer      trace.Tracer
-	serviceName string
+	tracer          trace.Tracer
+	serviceName     string
+	metrics         dbMetrics
+	traceSpans      bool
+	recordQueryText bool
+}
+
+type dbMetrics struct {
+	enabled  bool
+	duration metric.Float64Histogram
+	count    metric.Int64Counter
+}
+
+type dbTraceState struct {
+	startedAt time.Time
+	operation string
+	hasSpan   bool
+}
+
+type dbTraceStateKey struct{}
+
+func newDBMetrics(config *Config) dbMetrics {
+	if !config.EnableMetrics {
+		return dbMetrics{}
+	}
+
+	meter := otel.Meter(config.ServiceName)
+	duration, durationErr := meter.Float64Histogram(
+		dbOperationDurationMetric,
+		metric.WithDescription("Database client operation duration"),
+		metric.WithUnit("s"),
+	)
+	count, countErr := meter.Int64Counter(
+		dbOperationCountMetric,
+		metric.WithDescription("Database client operation count"),
+		metric.WithUnit("{operation}"),
+	)
+	if durationErr != nil || countErr != nil {
+		return dbMetrics{}
+	}
+
+	return dbMetrics{
+		enabled:  true,
+		duration: duration,
+		count:    count,
+	}
 }
 
 // TraceQueryStart creates a span when a query begins.
 func (t *otelTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	operation := extractOperation(data.SQL)
+	state := dbTraceState{
+		startedAt: time.Now(),
+		operation: operation,
+	}
+
+	if !t.traceSpans || !trace.SpanContextFromContext(ctx).IsValid() {
+		return context.WithValue(ctx, dbTraceStateKey{}, state)
+	}
+
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			semconv.DBSystemPostgreSQL,
-			attribute.String("db.statement", data.SQL),
-			attribute.String("db.operation", extractOperation(data.SQL)),
+			semconv.DBOperationName(operation),
+			attribute.String("component", "pgxpool_manager"),
 		),
 	}
+	if t.recordQueryText {
+		opts = append(opts, trace.WithAttributes(semconv.DBQueryText(data.SQL)))
+	}
 
-	ctx, _ = t.tracer.Start(ctx, "pgx.query", opts...)
-	return ctx
+	ctx, _ = t.tracer.Start(ctx, dbOperationSpanPrefix+" "+operation, opts...)
+	state.hasSpan = true
+	return context.WithValue(ctx, dbTraceStateKey{}, state)
 }
 
 // TraceQueryEnd finalizes the span when a query completes.
 func (t *otelTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
+	state, _ := ctx.Value(dbTraceStateKey{}).(dbTraceState)
+	if state.operation == "" {
+		state.operation = "UNKNOWN"
+	}
+	if state.startedAt.IsZero() {
+		state.startedAt = time.Now()
+	}
+	t.metrics.record(ctx, time.Since(state.startedAt), state.operation, data.Err)
+
+	if !state.hasSpan {
+		return
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
 		return
@@ -375,6 +485,24 @@ func (t *otelTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx
 	}
 
 	span.End()
+}
+
+func (m dbMetrics) record(ctx context.Context, duration time.Duration, operation string, err error) {
+	if !m.enabled {
+		return
+	}
+
+	attrs := []attribute.KeyValue{
+		semconv.DBSystemPostgreSQL,
+		semconv.DBOperationName(operation),
+		attribute.String("component", "pgxpool_manager"),
+	}
+	if err != nil {
+		attrs = append(attrs, attribute.String("error.type", fmt.Sprintf("%T", err)))
+	}
+
+	m.duration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+	m.count.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 // queryLogger logs SQL queries (for development only).
@@ -412,19 +540,19 @@ func (q *queryLogger) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pg
 // extractOperation extracts the SQL operation type (SELECT, INSERT, etc.).
 // Handles queries with leading whitespace and case-insensitive matching.
 func extractOperation(sql string) string {
-	// Trim whitespace (espaços, tabs, newlines)
+	// Trim leading/trailing whitespace (spaces, tabs, newlines).
 	trimmed := strings.TrimSpace(sql)
 	if len(trimmed) == 0 {
 		return "UNKNOWN"
 	}
 
-	// Pega primeira palavra (até espaço ou fim da string)
+	// Take the first word (up to a space or end of string).
 	firstWord, _, _ := strings.Cut(trimmed, " ")
 
-	// Normaliza para uppercase
+	// Normalize to uppercase for case-insensitive matching.
 	operation := strings.ToUpper(firstWord)
 
-	// Classifica operações conhecidas
+	// Classify known operations.
 	switch operation {
 	case "SELECT":
 		return "SELECT"

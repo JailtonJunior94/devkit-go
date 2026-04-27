@@ -1,13 +1,13 @@
-structname: '{{ .InterfaceName }}'
-filename: "{{ .InterfaceName | snakecase }}.go"
 template: testify
 template-data:
   unroll-variadic: true
+dir: "{{.InterfaceDir}}/mocks"
+filename: "{{.InterfaceName | snakecase}}.go"
+pkgname: "mocks"
 packages:
-  github.com/JailtonJunior94/devkit-go/pkg/o11y:
-    config:
-      dir: ./pkg/mocks
-      pkgname: mocks
+  github.com/JailtonJunior94/devkit-go/pkg/observability:
     interfaces:
-      Observability: {}
-      Span: {}
+      Observability:
+      Tracer:
+      Logger:
+      Metrics:
