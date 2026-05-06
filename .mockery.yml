@@ -11,3 +11,17 @@ packages:
       Tracer:
       Logger:
       Metrics:
+  github.com/JailtonJunior94/devkit-go/pkg/database:
+    interfaces:
+      DBTX:
+      Result:
+      Rows:
+      Row:
+  github.com/JailtonJunior94/devkit-go/pkg/database/manager:
+    interfaces:
+      Manager:
+      DriverConfig:
+  github.com/JailtonJunior94/devkit-go/pkg/database/migration:
+    interfaces:
+      Migrator:
+      Source:

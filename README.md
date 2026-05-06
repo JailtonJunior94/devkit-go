@@ -9,7 +9,7 @@ Este repositório contém as seguintes bibliotecas:
 ### Bibliotecas Principais
 
 - **[Observabilidade](./pkg/observability/README.md)**: Logs estruturados, métricas e rastreamento unificados com OpenTelemetry.
-- **[Database](./pkg/database/)**: Gerenciamento de conexões de banco de dados e padrões de Unit of Work.
+- **[Database](./pkg/database/)**: Gerenciamento de conexões multi-driver (Postgres, CockroachDB, MySQL, MSSQL), Unit of Work genérico e migração de banco de dados.
 - **[HTTP Server](./pkg/httpserver/)**: Implementação padronizada de servidor HTTP.
 - **[HTTP Client](./pkg/httpclient/)**: Cliente HTTP ciente de contexto com telemetria integrada.
 - **[Messaging](./pkg/messaging/)**: Abstrações para corretores de mensagens (Kafka, RabbitMQ).
@@ -20,7 +20,7 @@ Este repositório contém as seguintes bibliotecas:
 - **[Linq](./pkg/linq/)**: Consultas integradas à linguagem (LINQ) para slices e maps em Go.
 - **[Nullable](./pkg/nullable/)**: Tipos anuláveis (nullable) com segurança de tipo para compatibilidade com banco de dados e APIs.
 - **[Logger](./pkg/logger/)**: Interfaces de log padronizadas.
-- **[Migration](./pkg/migration/)**: Ferramentas para migração de banco de dados.
+- **[Migration](./pkg/database/migration/)**: Ferramentas para migração de banco de dados (parte de `pkg/database`).
 - **[Responses](./pkg/responses/)**: Estruturas padronizadas para respostas de API.
 - **[VOs](./pkg/vos/)**: Objetos de Valor (Value Objects) comuns (Email, UUID, etc.).
 

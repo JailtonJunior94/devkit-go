@@ -11,7 +11,7 @@ lint:
 .PHONY: mocks-clean mocks-generate mocks-reset mocks
 mocks-clean:
 	@echo "Removing generated mocks..."
-	find ./pkg/observability -type d -name mocks -prune -exec rm -rf {} +
+	find ./pkg/observability ./pkg/database -type d -name mocks -prune -exec rm -rf {} +
 
 mocks-generate:
 	@echo "Generating mocks..."
@@ -21,6 +21,23 @@ mocks-generate:
 mocks-reset: mocks-clean mocks-generate
 
 mocks: mocks-generate
+
+bench:
+	@echo "Running benchmarks..."
+	go test -bench=. -benchmem -benchtime=3s ./pkg/database/...
+
+bench-check:
+	@echo "Running benchmark gate (absolute thresholds)..."
+	go test -bench=. -benchmem -benchtime=3s ./pkg/database/... | tee /tmp/bench_out.txt
+	@echo "Checking BenchmarkDBTX_PoolPath ns/op <= 500..."
+	@awk '/BenchmarkDBTX_PoolPath[^a-zA-Z]/ {if ($$3+0 > 500) {print "FAIL: BenchmarkDBTX_PoolPath exceeded 500 ns/op: " $$3; exit 1}}' /tmp/bench_out.txt
+	@echo "Checking BenchmarkDBTX_TxInCtxPath ns/op <= 200..."
+	@awk '/BenchmarkDBTX_TxInCtxPath/ {if ($$3+0 > 200) {print "FAIL: BenchmarkDBTX_TxInCtxPath exceeded 200 ns/op: " $$3; exit 1}}' /tmp/bench_out.txt
+	@echo "Checking BenchmarkUoW_Do_Commit ns/op <= 1500..."
+	@awk '/BenchmarkUoW_Do_Commit[^a-zA-Z]/ {if ($$3+0 > 1500) {print "FAIL: BenchmarkUoW_Do_Commit exceeded 1500 ns/op: " $$3; exit 1}}' /tmp/bench_out.txt
+	@echo "Checking BenchmarkUoW_Do_Rollback ns/op <= 1500..."
+	@awk '/BenchmarkUoW_Do_Rollback[^a-zA-Z]/ {if ($$3+0 > 1500) {print "FAIL: BenchmarkUoW_Do_Rollback exceeded 1500 ns/op: " $$3; exit 1}}' /tmp/bench_out.txt
+	@echo "Benchmark gate passed."
 
 test:
 	@echo "Running tests..."

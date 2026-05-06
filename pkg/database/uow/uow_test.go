@@ -1,575 +1,501 @@
-package uow
+package uow_test
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/database"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/JailtonJunior94/devkit-go/pkg/database/uow"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/fake"
+	"github.com/stretchr/testify/require"
 )
 
-// setupTestDB creates an in-memory SQLite database for testing.
-//
-// IMPORTANTE: Estes testes usam SQLite por simplicidade e velocidade.
-// SQLite tem diferenças significativas em relação a PostgreSQL:
-//   - Concurrency: SQLite usa locks, PostgreSQL usa MVCC
-//   - Isolation: Semântica de isolation levels é diferente
-//   - Errors: Tipos de erro são diferentes
-//
-// Para testes de integração completos com PostgreSQL real, use:
-//   go test -tags=integration ./pkg/database/uow
-//
-// Trade-off: SQLite é suficiente para testar a LÓGICA do Unit of Work
-// (commit, rollback, panic recovery, context), mas não comportamento
-// específico de PostgreSQL (deadlocks, serialization failures).
-func setupTestDB(t *testing.T) *sql.DB {
-	// Create a temporary file for the database
-	tmpfile, err := os.CreateTemp("", "test_*.db")
-	if err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-	if err := tmpfile.Close(); err != nil {
-		t.Fatalf("failed to close temp file: %v", err)
-	}
+// --- fakes ---------------------------------------------------------------
 
-	// Clean up the temp file when test ends
-	t.Cleanup(func() {
-		_ = os.Remove(tmpfile.Name())
-	})
-
-	// Open database with WAL mode and busy timeout for better concurrency support
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?cache=shared&mode=rwc&_journal_mode=WAL&_busy_timeout=5000", tmpfile.Name()))
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-
-	t.Cleanup(func() {
-		_ = db.Close()
-	})
-
-	// Create test table
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS test_orders (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			status TEXT NOT NULL,
-			total DECIMAL(10,2) NOT NULL
-		)
-	`)
-	if err != nil {
-		t.Fatalf("failed to create table: %v", err)
-	}
-
-	return db
+// fakeTx registra chamadas de Commit/Rollback e pode simular erros.
+type fakeTx struct {
+	commitErr   error
+	rollbackErr error
+	committed   bool
+	rolledBack  bool
 }
 
-func TestUnitOfWork_SuccessfulCommit(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-		return err
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Verify data was committed
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("expected 1 row, got %d", count)
-	}
+func (t *fakeTx) ExecContext(_ context.Context, _ string, _ ...any) (database.Result, error) {
+	return nil, nil
+}
+func (t *fakeTx) QueryContext(_ context.Context, _ string, _ ...any) (database.Rows, error) {
+	return nil, nil
+}
+func (t *fakeTx) QueryRowContext(_ context.Context, _ string, _ ...any) database.Row { return nil }
+func (t *fakeTx) Commit(_ context.Context) error {
+	t.committed = true
+	return t.commitErr
+}
+func (t *fakeTx) Rollback(_ context.Context) error {
+	t.rolledBack = true
+	return t.rollbackErr
 }
 
-func TestUnitOfWork_RollbackOnError(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	expectedErr := errors.New("business logic error")
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-		if err != nil {
-			return err
-		}
-		return expectedErr
-	})
-
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected error %v, got: %v", expectedErr, err)
-	}
-
-	// Verify data was rolled back
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (rollback), got %d", count)
-	}
+// fakeManager satisfaz manager.Manager para que possa ser passado para uow.New[T].
+// Apenas BeginTx é usado pelo UoW em tempo de execução; os outros métodos são stubs.
+type fakeManager struct {
+	mu         sync.Mutex
+	tx         *fakeTx
+	txFactory  func() database.Tx
+	beginErr   error
+	lastOpts   database.TxOptions
+	beginCalls int
 }
 
-func TestUnitOfWork_PanicRecovery(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
+func (m *fakeManager) Driver() database.Driver { return database.DriverPostgres }
+func (m *fakeManager) DBTX(_ context.Context) database.DBTX {
+	return nil
+}
+func (m *fakeManager) BeginTx(_ context.Context, opts database.TxOptions) (database.Tx, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.beginCalls++
+	m.lastOpts = opts
+	if m.beginErr != nil {
+		return nil, m.beginErr
 	}
-	ctx := context.Background()
+	if m.txFactory != nil {
+		return m.txFactory(), nil
+	}
+	return m.tx, nil
+}
+func (m *fakeManager) Ping(_ context.Context) error     { return nil }
+func (m *fakeManager) Shutdown(_ context.Context) error { return nil }
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic to be re-thrown")
-		}
-	}()
+// --- testes ----------------------------------------------------------------
 
-	_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-		if err != nil {
-			return err
-		}
-		panic("simulated panic")
+func TestUnitOfWork_Do_CommitsOnSuccess(t *testing.T) {
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	result, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "ok", nil
 	})
 
-	// This code should not be reached
-	t.Error("code after panic should not execute")
+	require.NoError(t, err)
+	require.Equal(t, "ok", result)
+	require.True(t, tx.committed)
+	require.False(t, tx.rolledBack)
 }
 
-func TestUnitOfWork_PanicRecoveryRollback(t *testing.T) {
-	db := setupTestDB(t)
+func TestUnitOfWork_Do_RollsBackOnError(t *testing.T) {
+	fnErr := errors.New("fn failed")
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
+	result, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", fnErr
+	})
 
+	require.ErrorIs(t, err, fnErr)
+	require.Empty(t, result)
+	require.True(t, tx.rolledBack)
+	require.False(t, tx.committed)
+}
+
+func TestUnitOfWork_Do_RollsBackOnPanic(t *testing.T) {
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	panicked := false
 	func() {
 		defer func() {
-			_ = recover() // Catch panic to continue test
-		}()
-
-		_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-			_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-			if err != nil {
-				return err
+			if r := recover(); r != nil {
+				panicked = true
 			}
-			panic("simulated panic")
+		}()
+		_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+			panic("something went wrong")
 		})
 	}()
 
-	// Verify data was rolled back despite panic
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (panic rollback), got %d", count)
-	}
+	require.True(t, panicked, "o pânico deve ser re-propagado")
+	require.True(t, tx.rolledBack, "o rollback deve executar antes do pânico ser re-propagado")
+	require.False(t, tx.committed)
 }
 
-func TestUnitOfWork_ConcurrentTransactions(t *testing.T) {
-	db := setupTestDB(t)
+func TestUnitOfWork_Do_PanicWithRollbackError_LogsAndRepropagates(t *testing.T) {
+	// RF-26: panic deve ser repropagado. Erros de rollback no caminho de panic
+	// não podem ser silenciados: devem ser logados via observability (R-O11Y-001).
+	rollbackFailure := errors.New("rollback failed during panic")
+	tx := &fakeTx{rollbackErr: rollbackFailure}
+	obs := fake.NewProvider()
+	u := uow.New[string](&fakeManager{tx: tx}, uow.WithObservability(obs))
 
-	// Enable concurrent connections for this test
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(3)
-	db.SetConnMaxLifetime(0)
+	panicValue := errors.New("boom")
+	var caught any
+	func() {
+		defer func() { caught = recover() }()
+		_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+			panic(panicValue)
+		})
+	}()
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
+	require.Equal(t, panicValue, caught, "panic original deve ser repropagado mesmo com falha no rollback")
+	require.True(t, tx.rolledBack, "rollback deve ser tentado antes do re-panic")
 
-	const numGoroutines = 20
-	var wg sync.WaitGroup
-	successCount := 0
-	lockErrorCount := 0
-	var mu sync.Mutex
+	logger, ok := obs.Logger().(*fake.FakeLogger)
+	require.True(t, ok)
+	entries := logger.GetEntries()
+	require.NotEmpty(t, entries, "falha de rollback no caminho de panic deve ser logada")
 
-	// Launch multiple concurrent transactions
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-
-			err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-				// Simulate some work
-				time.Sleep(time.Millisecond * 2)
-				_, err := db.ExecContext(ctx,
-					"INSERT INTO test_orders (status, total) VALUES (?, ?)",
-					"pending",
-					float64(id))
-				return err
-			})
-
-			mu.Lock()
-			if err != nil {
-				// SQLite lock errors are expected under high concurrency - not a UoW bug
-				if err.Error() == "database table is locked" {
-					lockErrorCount++
-				} else {
-					t.Errorf("unexpected error: %v", err)
-				}
-			} else {
-				successCount++
+	var found bool
+	for _, e := range entries {
+		if e.Level != observability.LogLevelError {
+			continue
+		}
+		for _, f := range e.Fields {
+			if f.Key == "error" {
+				found = true
 			}
-			mu.Unlock()
-		}(i)
+		}
 	}
-
-	wg.Wait()
-
-	// Verify successful transactions were committed
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != successCount {
-		t.Errorf("expected %d rows (matching successful transactions), got %d", successCount, count)
-	}
-
-	// Verify we had some successful concurrent transactions (proves concurrency works)
-	// SQLite has limitations with concurrent writes, so we're lenient here
-	minExpected := numGoroutines / 3
-	if successCount < minExpected {
-		t.Errorf("expected at least %d successful transactions, got %d (lock errors: %d)",
-			minExpected, successCount, lockErrorCount)
-	}
-
-	t.Logf("Concurrent test completed: %d successful, %d lock errors (SQLite limitation)",
-		successCount, lockErrorCount)
+	require.True(t, found, "log de erro deve carregar o erro do rollback como field")
 }
 
-func TestUnitOfWork_ConcurrentWithFailures(t *testing.T) {
-	db := setupTestDB(t)
+func TestUnitOfWork_Do_FnError_RollbackFailureIsLogged(t *testing.T) {
+	// Regressão: rollback que falhar no caminho de erro do fn não pode ser
+	// silenciosamente descartado (R-O11Y-001). O erro retornado ao caller
+	// permanece o erro original do fn.
+	rollbackFailure := errors.New("rollback failed during fn error")
+	fnErr := errors.New("fn boom")
+	tx := &fakeTx{rollbackErr: rollbackFailure}
+	obs := fake.NewProvider()
+	u := uow.New[string](&fakeManager{tx: tx}, uow.WithObservability(obs))
 
-	// Enable concurrent connections for this test
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(3)
-	db.SetConnMaxLifetime(0)
+	_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", fnErr
+	})
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
+	require.ErrorIs(t, err, fnErr, "erro retornado deve ser o erro do fn, não o do rollback")
+	require.NotErrorIs(t, err, rollbackFailure, "erro do rollback não deve substituir o erro do fn")
+	require.True(t, tx.rolledBack)
 
-	const numGoroutines = 20
-	var wg sync.WaitGroup
-	successCount := 0
-	intentionalFailCount := 0
-	var mu sync.Mutex
+	logger, ok := obs.Logger().(*fake.FakeLogger)
+	require.True(t, ok)
 
-	// Launch concurrent transactions, half will fail intentionally
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-
-			err := uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-				_, err := db.ExecContext(ctx,
-					"INSERT INTO test_orders (status, total) VALUES (?, ?)",
-					"pending",
-					float64(id))
-				if err != nil {
-					return err
-				}
-
-				// Fail every other transaction intentionally
-				if id%2 == 0 {
-					return errors.New("simulated error")
-				}
-				return nil
-			})
-
-			mu.Lock()
-			if err == nil {
-				successCount++
-			} else if err.Error() == "simulated error" {
-				intentionalFailCount++
+	var found bool
+	for _, e := range logger.GetEntries() {
+		if e.Level != observability.LogLevelError {
+			continue
+		}
+		for _, f := range e.Fields {
+			if f.Key == "error" {
+				found = true
 			}
-			// Ignore SQLite lock errors for this test
-			mu.Unlock()
-		}(i)
+		}
 	}
-
-	wg.Wait()
-
-	// Verify only successful transactions were committed
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != successCount {
-		t.Errorf("expected %d rows, got %d", successCount, count)
-	}
-
-	// Verify we had some intentional failures (proves rollback works)
-	if intentionalFailCount == 0 {
-		t.Error("expected some intentional failures to test rollback")
-	}
-
-	t.Logf("Concurrent with failures test: %d successful, %d intentional failures (rollback tested)",
-		successCount, intentionalFailCount)
+	require.True(t, found, "log de erro deve carregar o erro do rollback como field")
 }
 
-func TestUnitOfWork_ContextCancellation(t *testing.T) {
-	db := setupTestDB(t)
+func TestUnitOfWork_Do_PanicValuePreserved(t *testing.T) {
+	sentinel := errors.New("sentinel panic value")
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+	var caught any
+	func() {
+		defer func() { caught = recover() }()
+		_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+			panic(sentinel)
+		})
+	}()
 
-	// Create already cancelled context
+	require.Equal(t, sentinel, caught, "o valor original do pânico deve ser preservado")
+}
+
+func TestUnitOfWork_Do_ErrNestedTransaction_SameInstance(t *testing.T) {
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	var innerErr error
+	_, _ = u.Do(context.Background(), func(ctx context.Context, _ database.DBTX) (string, error) {
+		// Mesma instância: tx propagada via context é detectada → ErrNestedTransaction.
+		_, innerErr = u.Do(ctx, func(_ context.Context, _ database.DBTX) (string, error) {
+			return "inner", nil
+		})
+		return "", innerErr
+	})
+
+	require.ErrorIs(t, innerErr, database.ErrNestedTransaction)
+}
+
+func TestUnitOfWork_Do_NestedWithFreshContext_ReturnsErrNestedTransaction(t *testing.T) {
+	mgr := &fakeManager{tx: &fakeTx{}}
+	u := uow.New[string](mgr)
+
+	var innerErr error
+	_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		_, innerErr = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+			return "inner", nil
+		})
+		return "", innerErr
+	})
+
+	require.ErrorIs(t, innerErr, database.ErrNestedTransaction)
+	require.Equal(t, 1, mgr.beginCalls, "nested call must not open a second transaction")
+}
+
+func TestUnitOfWork_Do_ErrNestedTransaction_DifferentInstance(t *testing.T) {
+	tx1 := &fakeTx{}
+	tx2 := &fakeTx{}
+	u1 := uow.New[string](&fakeManager{tx: tx1})
+	u2 := uow.New[string](&fakeManager{tx: tx2})
+
+	var innerErr error
+	_, _ = u1.Do(context.Background(), func(ctx context.Context, _ database.DBTX) (string, error) {
+		// ctx carrega uma tx injetada pelo u1.Do; u2.Do deve detectá-la e recusar.
+		_, innerErr = u2.Do(ctx, func(_ context.Context, _ database.DBTX) (string, error) {
+			return "inner", nil
+		})
+		return "", innerErr
+	})
+
+	require.ErrorIs(t, innerErr, database.ErrNestedTransaction)
+}
+
+func TestUnitOfWork_Do_BeginTxError_Propagated(t *testing.T) {
+	beginErr := errors.New("cannot begin")
+	u := uow.New[string](&fakeManager{beginErr: beginErr})
+
+	_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", nil
+	})
+
+	require.ErrorIs(t, err, beginErr)
+}
+
+func TestUnitOfWork_Do_CommitError_Propagated(t *testing.T) {
+	commitErr := errors.New("commit failed")
+	tx := &fakeTx{commitErr: commitErr}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "result", nil
+	})
+
+	require.ErrorIs(t, err, commitErr)
+}
+
+func TestUnitOfWork_Do_WithIsolation_AppliedToBeginTx(t *testing.T) {
+	tx := &fakeTx{}
+	mgr := &fakeManager{tx: tx}
+	u := uow.New[string](mgr, uow.WithIsolation(sql.LevelSerializable))
+
+	_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", nil
+	})
+
+	require.Equal(t, database.LevelSerializable, mgr.lastOpts.Isolation)
+}
+
+func TestUnitOfWork_Do_WithReadOnly_AppliedToBeginTx(t *testing.T) {
+	tx := &fakeTx{}
+	mgr := &fakeManager{tx: tx}
+	u := uow.New[string](mgr, uow.WithReadOnly(true))
+
+	_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", nil
+	})
+
+	require.True(t, mgr.lastOpts.ReadOnly)
+}
+
+func TestUnitOfWork_Do_CtxCancelled_RollsBack(t *testing.T) {
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // já cancelado
+
+	_, err := u.Do(ctx, func(ctx context.Context, _ database.DBTX) (string, error) {
+		return "", fmt.Errorf("fn: %w", ctx.Err())
+	})
+
+	require.Error(t, err)
+	require.True(t, tx.rolledBack)
+}
+
+func TestUnitOfWork_Do_Commits_EmitsTxMetricsAndSpan(t *testing.T) {
+	tx := &fakeTx{}
+	obs := fake.NewProvider()
+	u := uow.New[string](&fakeManager{tx: tx}, uow.WithObservability(obs))
+
+	_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "ok", nil
+	})
+	require.NoError(t, err)
+
+	commitCounter := obs.Metrics().(*fake.FakeMetrics).GetCounter("database.tx.committed")
+	require.NotNil(t, commitCounter)
+	require.NotEmpty(t, commitCounter.GetValues())
+
+	durationHist := obs.Metrics().(*fake.FakeMetrics).GetHistogram("database.tx.duration_ms")
+	require.NotNil(t, durationHist)
+	require.NotEmpty(t, durationHist.GetValues())
+
+	spans := obs.Tracer().(*fake.FakeTracer).GetSpans()
+	require.NotEmpty(t, spans)
+	require.Equal(t, "db.postgres.tx", spans[0].Name)
+}
+
+func TestUnitOfWork_Do_Rollback_EmitsRollbackMetric(t *testing.T) {
+	tx := &fakeTx{}
+	obs := fake.NewProvider()
+	u := uow.New[string](&fakeManager{tx: tx}, uow.WithObservability(obs))
+
+	_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", errors.New("boom")
+	})
+	require.Error(t, err)
+
+	rollbackCounter := obs.Metrics().(*fake.FakeMetrics).GetCounter("database.tx.rolledback")
+	require.NotNil(t, rollbackCounter)
+	require.NotEmpty(t, rollbackCounter.GetValues())
+}
+
+func TestUnitOfWork_Do_TxInjectedInCtx(t *testing.T) {
+	tx := &fakeTx{}
+	u := uow.New[string](&fakeManager{tx: tx})
+
+	var ctxTx database.DBTX
+	var ok bool
+	_, _ = u.Do(context.Background(), func(ctx context.Context, _ database.DBTX) (string, error) {
+		ctxTx, ok = database.FromContext(ctx)
+		return "", nil
+	})
+
+	require.True(t, ok, "tx deve ser injetada no ctx")
+	require.NotNil(t, ctxTx)
+}
+
+func TestUnitOfWork_Do_DefaultOptions_NilIsolationAndFalseReadOnly(t *testing.T) {
+	tx := &fakeTx{}
+	mgr := &fakeManager{tx: tx}
+	u := uow.New[string](mgr)
+
+	_, _ = u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+		return "", nil
+	})
+
+	require.Equal(t, database.LevelDefault, mgr.lastOpts.Isolation)
+	require.False(t, mgr.lastOpts.ReadOnly)
+}
+
+// I1: rollback emergencial após panic deve usar ctx desacoplado do caller,
+// caso contrário um ctx já cancelado bloqueia o rollback antes mesmo de tentar.
+type ctxCapturingTx struct {
+	*fakeTx
+	rollbackCtx context.Context
+	rollbackErr error
+}
+
+func (t *ctxCapturingTx) Rollback(ctx context.Context) error {
+	t.rollbackCtx = ctx
+	t.rollbackErr = ctx.Err()
+	return t.fakeTx.Rollback(ctx)
+}
+
+func TestUnitOfWork_Do_PanicWithCancelledCtx_RollsBackWithFreshCtx(t *testing.T) {
+	captured := &ctxCapturingTx{fakeTx: &fakeTx{}}
+	mgr := &fakeManager{txFactory: func() database.Tx { return captured }}
+	u := uow.New[string](mgr)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		t.Error("function should not be executed with cancelled context")
-		return nil
-	})
-
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestUnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-
-	// Create context with timeout that will expire during execution
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		// Insert data
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-		if err != nil {
-			return err
-		}
-
-		// Simulate long-running operation
-		time.Sleep(100 * time.Millisecond)
-
-		// Try to insert more data (this should succeed but transaction will be rolled back)
-		_, err = db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "completed", 200.00)
-		return err
-	})
-
-	// Should return context cancellation error
-	if err == nil {
-		t.Fatal("expected error for cancelled context during execution")
-	}
-
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
-	}
-
-	// Verify transaction was rolled back
-	var count int
-	queryErr := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if queryErr != nil {
-		t.Fatalf("failed to query: %v", queryErr)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (rollback due to context cancellation), got %d", count)
-	}
-}
-
-func TestUnitOfWork_WithIsolationLevel(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-		return err
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Verify data was committed
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("expected 1 row, got %d", count)
-	}
-}
-
-func TestUnitOfWork_WithReadOnly(t *testing.T) {
-	db := setupTestDB(t)
-
-	// Insert test data first
-	_, err := db.Exec("INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-	if err != nil {
-		t.Fatalf("failed to insert test data: %v", err)
-	}
-
-	uow, err := NewUnitOfWork(db, WithReadOnly(true))
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		var count int
-		return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error for read operation, got: %v", err)
-	}
-}
-
-func TestUnitOfWork_NilDB(t *testing.T) {
-	_, err := NewUnitOfWork(nil)
-	if err == nil {
-		t.Error("expected error when creating UnitOfWork with nil DB")
-	}
-}
-
-func TestUnitOfWork_MultiplePanicsSequential(t *testing.T) {
-	db := setupTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	// Test that multiple panics in sequence are handled correctly
-	for i := 0; i < 3; i++ {
-		func() {
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("iteration %d: expected panic to be propagated", i)
-				}
-			}()
-
-			_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-				_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", float64(i))
-				if err != nil {
-					return err
-				}
-				panic("simulated panic")
-			})
-		}()
-	}
-
-	// Verify no data was committed due to panics
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (all panicked), got %d", count)
-	}
-}
-
-// Benchmark tests.
-func BenchmarkUnitOfWork_Sequential(b *testing.B) {
-	// Create a mock testing.T for setup
-	t := &testing.T{}
-	db := setupTestDB(t)
-	// setupTestDB uses t.Cleanup, so we need to defer close manually for benchmarks
 	defer func() {
-		if err := db.Close(); err != nil {
-			b.Logf("failed to close database: %v", err)
-		}
+		_ = recover()
 	}()
+	_, _ = u.Do(ctx, func(_ context.Context, _ database.DBTX) (string, error) {
+		panic("boom")
+	})
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
+	require.True(t, captured.rolledBack, "rollback emergencial deve executar mesmo com ctx cancelado")
+	require.NotNil(t, captured.rollbackCtx, "rollback deve receber um ctx novo")
+	require.NoError(t, captured.rollbackCtx.Err(), "ctx do rollback emergencial não pode estar cancelado")
+}
+
+func TestUnitOfWork_Do_AllowsConcurrentTopLevelCallsOnSameInstance(t *testing.T) {
+	mgr := &fakeManager{
+		txFactory: func() database.Tx { return &fakeTx{} },
 	}
-	ctx := context.Background()
+	u := uow.New[string](mgr)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-			_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-			return err
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	errs := make(chan error, 2)
+
+	run := func() {
+		_, err := u.Do(context.Background(), func(_ context.Context, _ database.DBTX) (string, error) {
+			entered <- struct{}{}
+			<-release
+			return "ok", nil
 		})
+		errs <- err
 	}
+
+	go run()
+	go run()
+
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("expected both top-level calls to begin without nested transaction rejection")
+		}
+	}
+
+	close(release)
+
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	require.Equal(t, 2, mgr.beginCalls)
 }
 
-func BenchmarkUnitOfWork_Concurrent(b *testing.B) {
-	// Create a mock testing.T for setup
-	t := &testing.T{}
-	db := setupTestDB(t)
-	defer func() {
-		if err := db.Close(); err != nil {
-			b.Logf("failed to close database: %v", err)
-		}
-	}()
+func TestUnitOfWork_Do_FnErrorWithCancelledCtx_RollsBackWithFreshCtx(t *testing.T) {
+	captured := &ctxCapturingTx{fakeTx: &fakeTx{}}
+	mgr := &fakeManager{txFactory: func() database.Tx { return captured }}
+	u := uow.New[string](mgr)
 
-	db.SetMaxOpenConns(20)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-				_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES (?, ?)", "pending", 100.00)
-				return err
-			})
-		}
+	_, err := u.Do(ctx, func(ctx context.Context, _ database.DBTX) (string, error) {
+		return "", fmt.Errorf("fn: %w", ctx.Err())
 	})
+
+	require.Error(t, err)
+	require.True(t, captured.rolledBack, "rollback deve executar mesmo com ctx cancelado")
+	require.NotNil(t, captured.rollbackCtx, "rollback deve receber um ctx novo")
+	require.NoError(t, captured.rollbackErr, "ctx do rollback normal não pode chegar cancelado")
+}
+
+func TestUnitOfWork_Do_CommitFailureWithCancelledCtx_RollsBackWithFreshCtx(t *testing.T) {
+	captured := &ctxCapturingTx{fakeTx: &fakeTx{commitErr: errors.New("commit failed")}}
+	mgr := &fakeManager{txFactory: func() database.Tx { return captured }}
+	u := uow.New[string](mgr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := u.Do(ctx, func(_ context.Context, _ database.DBTX) (string, error) {
+		return "ok", nil
+	})
+
+	require.Error(t, err)
+	require.True(t, captured.rolledBack, "rollback defensivo após falha de commit deve executar")
+	require.NotNil(t, captured.rollbackCtx, "rollback deve receber um ctx novo")
+	require.NoError(t, captured.rollbackErr, "ctx do rollback após commit não pode chegar cancelado")
 }

@@ -1,319 +1,254 @@
 //go:build integration
-// +build integration
 
-package uow
+package uow_test
 
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"fmt"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/database"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/JailtonJunior94/devkit-go/pkg/database/manager"
+	"github.com/JailtonJunior94/devkit-go/pkg/database/postgres"
+	"github.com/JailtonJunior94/devkit-go/pkg/database/uow"
+	"github.com/stretchr/testify/require"
+	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// setupPostgresTestDB creates a real PostgreSQL database using testcontainers.
-// This tests actual PostgreSQL behavior including MVCC, deadlocks, and SSI.
-func setupPostgresTestDB(t *testing.T) *sql.DB {
+const pgImage = "postgres:16"
+
+// setupPostgres inicia um container Postgres e retorna um Manager conectado.
+// A tabela `items (id serial primary key, value text)` é criada antes de retornar.
+func setupPostgres(t *testing.T) manager.Manager {
+	t.Helper()
 	ctx := context.Background()
 
-	// Start PostgreSQL container
-	pgContainer, err := postgres.RunContainer(ctx,
-		testcontainers.WithImage("postgres:15-alpine"),
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second)),
-	)
-	if err != nil {
-		t.Fatalf("failed to start postgres container: %v", err)
+	req := tc.ContainerRequest{
+		Image:        pgImage,
+		ExposedPorts: []string{"5432/tcp"},
+		Env: map[string]string{
+			"POSTGRES_USER":     "test",
+			"POSTGRES_PASSWORD": "test",
+			"POSTGRES_DB":       "testdb",
+		},
+		WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(60 * time.Second),
 	}
 
+	container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err)
+
 	t.Cleanup(func() {
-		if err := pgContainer.Terminate(ctx); err != nil {
-			t.Logf("failed to terminate postgres container: %v", err)
+		if terr := container.Terminate(context.Background()); terr != nil {
+			t.Logf("container terminate: %v", terr)
 		}
 	})
 
-	// Get connection string
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("failed to get connection string: %v", err)
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	mapped, err := container.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	portNum, err := strconv.Atoi(mapped.Port())
+	require.NoError(t, err)
+
+	cfg := postgres.PostgresConfig{
+		Host:     host,
+		Port:     portNum,
+		User:     "test",
+		Password: "test",
+		Database: "testdb",
+		SSLMode:  "disable",
 	}
 
-	// Open connection
-	db, err := sql.Open("pgx", connStr)
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
+	mgr, err := manager.New(cfg)
+	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		_ = db.Close()
+		_ = mgr.Shutdown(context.Background())
 	})
 
-	// Verify connectivity
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatalf("failed to ping database: %v", err)
-	}
+	// Provisiona a tabela de teste.
+	dbtx := mgr.DBTX(ctx)
+	_, err = dbtx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, value TEXT NOT NULL)`)
+	require.NoError(t, err)
 
-	// Create test table with PostgreSQL syntax
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS test_orders (
-			id SERIAL PRIMARY KEY,
-			status TEXT NOT NULL,
-			total DECIMAL(10,2) NOT NULL
-		)
-	`)
-	if err != nil {
-		t.Fatalf("failed to create table: %v", err)
-	}
-
-	return db
+	return mgr
 }
 
-func TestIntegration_UnitOfWork_SuccessfulCommit(t *testing.T) {
-	db := setupPostgresTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+// TestIntegration_UoW_CommitPersistsRow verifica que um Do bem-sucedido confirma
+// a linha inserida e a torna visível fora da transação.
+func TestIntegration_UoW_CommitPersistsRow(t *testing.T) {
 	ctx := context.Background()
+	mgr := setupPostgres(t)
+	u := uow.New[int64](mgr)
 
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-		return err
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Verify data was committed
-	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("expected 1 row, got %d", count)
-	}
-}
-
-func TestIntegration_UnitOfWork_RollbackOnError(t *testing.T) {
-	db := setupPostgresTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	expectedErr := errors.New("business logic error")
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-		if err != nil {
-			return err
+	rowID, err := u.Do(ctx, func(ctx context.Context, tx database.DBTX) (int64, error) {
+		var id int64
+		row := tx.QueryRowContext(ctx, `INSERT INTO items (value) VALUES ($1) RETURNING id`, "committed")
+		if scanErr := row.Scan(&id); scanErr != nil {
+			return 0, scanErr
 		}
-		return expectedErr
+		return id, nil
 	})
 
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected error %v, got: %v", expectedErr, err)
-	}
+	require.NoError(t, err)
+	require.Positive(t, rowID)
 
-	// Verify data was rolled back
+	// Verifica se a linha está visível fora da transação.
 	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (rollback), got %d", count)
-	}
+	row := mgr.DBTX(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE id = $1`, rowID)
+	require.NoError(t, row.Scan(&count))
+	require.Equal(t, 1, count, "linha confirmada deve estar visível após o retorno de Do")
 }
 
-func TestIntegration_UnitOfWork_PanicRecoveryRollback(t *testing.T) {
-	db := setupPostgresTestDB(t)
-
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+// TestIntegration_UoW_RollbackDiscardsRow verifica que um erro retornado pela fn
+// causa rollback e a linha não aparece no banco de dados.
+func TestIntegration_UoW_RollbackDiscardsRow(t *testing.T) {
 	ctx := context.Background()
+	mgr := setupPostgres(t)
+	u := uow.New[struct{}](mgr)
 
+	_, err := u.Do(ctx, func(ctx context.Context, tx database.DBTX) (struct{}, error) {
+		_, execErr := tx.ExecContext(ctx, `INSERT INTO items (value) VALUES ($1)`, "to-be-rolled-back")
+		if execErr != nil {
+			return struct{}{}, execErr
+		}
+		return struct{}{}, fmt.Errorf("intentional error to trigger rollback")
+	})
+
+	require.Error(t, err)
+
+	var count int
+	row := mgr.DBTX(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE value = $1`, "to-be-rolled-back")
+	require.NoError(t, row.Scan(&count))
+	require.Equal(t, 0, count, "linha revertida não deve estar visível")
+}
+
+// TestIntegration_UoW_PanicRollsBack verifica que um pânico dentro da fn causa
+// rollback (a linha não é persistida) e o pânico é re-propagado.
+func TestIntegration_UoW_PanicRollsBack(t *testing.T) {
+	ctx := context.Background()
+	mgr := setupPostgres(t)
+	u := uow.New[struct{}](mgr)
+
+	recovered := false
 	func() {
 		defer func() {
-			_ = recover() // Catch panic to continue test
-		}()
-
-		_ = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-			_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-			if err != nil {
-				return err
+			if r := recover(); r != nil {
+				recovered = true
 			}
+		}()
+		_, _ = u.Do(ctx, func(ctx context.Context, tx database.DBTX) (struct{}, error) {
+			_, _ = tx.ExecContext(ctx, `INSERT INTO items (value) VALUES ($1)`, "panic-row")
 			panic("simulated panic")
 		})
 	}()
 
-	// Verify data was rolled back despite panic
+	require.True(t, recovered, "o pânico deve ser re-propagado")
+
 	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (panic rollback), got %d", count)
-	}
+	row := mgr.DBTX(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE value = $1`, "panic-row")
+	require.NoError(t, row.Scan(&count))
+	require.Equal(t, 0, count, "a linha inserida antes do pânico não deve estar visível após o rollback")
 }
 
-func TestIntegration_UnitOfWork_ContextCancellation(t *testing.T) {
-	db := setupPostgresTestDB(t)
+// TestIntegration_UoW_SerializableIsolation verifica que o isolamento Serializable
+// faz com que uma escrita concorrente conflitante falhe com um erro de serialização.
+func TestIntegration_UoW_SerializableIsolation(t *testing.T) {
+	ctx := context.Background()
+	mgr := setupPostgres(t)
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+	// Insere uma linha semente que ambas as transações lerão e tentarão atualizar.
+	_, err := mgr.DBTX(ctx).ExecContext(ctx, `INSERT INTO items (value) VALUES ('seed')`)
+	require.NoError(t, err)
 
-	// Create already cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	u1 := uow.New[struct{}](mgr, uow.WithIsolation(sql.LevelSerializable))
+	u2 := uow.New[struct{}](mgr, uow.WithIsolation(sql.LevelSerializable))
 
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		t.Error("function should not be executed with cancelled context")
-		return nil
-	})
+	// Abre a tx1 e lê a linha semente, mas ainda não faz o commit.
+	tx1Ready := make(chan struct{}, 1)
+	tx1Commit := make(chan struct{})
+	tx1Done := make(chan error, 1)
 
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
+	go func() {
+		_, txErr := u1.Do(ctx, func(ctx context.Context, tx database.DBTX) (struct{}, error) {
+			// Lê a linha semente para estabelecer um predicado de leitura para serialização.
+			rows, qErr := tx.QueryContext(ctx, `SELECT value FROM items WHERE value = 'seed'`)
+			if qErr != nil {
+				return struct{}{}, qErr
+			}
+			_ = rows.Close()
 
-func TestIntegration_UnitOfWork_ContextCancelledDuringExecution(t *testing.T) {
-	db := setupPostgresTestDB(t)
+			tx1Ready <- struct{}{} // sinaliza que a tx1 leu a linha
+			<-tx1Commit    // aguarda o sinal para proceder com o commit
 
-	uow, err := NewUnitOfWork(db)
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+			_, wErr := tx.ExecContext(ctx, `UPDATE items SET value = 'tx1' WHERE value = 'seed'`)
+			return struct{}{}, wErr
+		})
+		tx1Done <- txErr
+	}()
 
-	// Create context with short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	// Aguarda a tx1 abrir e ler, então a tx2 lê e escreve imediatamente.
+	<-tx1Ready
 
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		// Insert data
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-		if err != nil {
-			return err
+	_, tx2Err := u2.Do(ctx, func(ctx context.Context, tx database.DBTX) (struct{}, error) {
+		rows, qErr := tx.QueryContext(ctx, `SELECT value FROM items WHERE value = 'seed'`)
+		if qErr != nil {
+			return struct{}{}, qErr
 		}
-
-		// Simulate long-running operation
-		time.Sleep(200 * time.Millisecond)
-
-		// Try to insert more data
-		_, err = db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "completed", 200.00)
-		return err
+		_ = rows.Close()
+		_, wErr := tx.ExecContext(ctx, `UPDATE items SET value = 'tx2' WHERE value = 'seed'`)
+		return struct{}{}, wErr
 	})
 
-	// Should return context cancellation error
-	if err == nil {
-		t.Fatal("expected error for cancelled context during execution")
-	}
+	// Sinaliza a tx1 para proceder e fazer o commit; uma das duas deve falhar.
+	close(tx1Commit)
+	tx1Err := <-tx1Done
 
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
-	}
-
-	// Verify transaction was rolled back
-	var count int
-	queryErr := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if queryErr != nil {
-		t.Fatalf("failed to query: %v", queryErr)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 rows (rollback due to context cancellation), got %d", count)
-	}
+	// Pelo menos uma transação deve ter sido abortada pelo verificador de serialização.
+	bothSucceeded := tx1Err == nil && tx2Err == nil
+	require.False(t, bothSucceeded, "o isolamento serializable deve rejeitar pelo menos uma escrita conflitante")
 }
 
-func TestIntegration_UnitOfWork_SerializableIsolation(t *testing.T) {
-	db := setupPostgresTestDB(t)
-
-	// Test with Serializable isolation level
-	// PostgreSQL implements true SSI (Serializable Snapshot Isolation)
-	uow, err := NewUnitOfWork(db, WithIsolationLevel(sql.LevelSerializable))
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
+// TestIntegration_UoW_Concurrent executa 100 goroutines que inserem, cada uma, uma linha
+// dentro de sua própria UoW. Todas devem ser confirmadas com sucesso e limpas no -race.
+func TestIntegration_UoW_Concurrent(t *testing.T) {
 	ctx := context.Background()
+	mgr := setupPostgres(t)
 
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-		return err
-	})
+	const goroutines = 100
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
 
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	for i := range goroutines {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			u := uow.New[struct{}](mgr)
+			_, errs[idx] = u.Do(ctx, func(ctx context.Context, tx database.DBTX) (struct{}, error) {
+				_, err := tx.ExecContext(ctx, `INSERT INTO items (value) VALUES ($1)`, fmt.Sprintf("goroutine-%d", idx))
+				return struct{}{}, err
+			})
+		}(i)
 	}
 
-	// Verify data was committed
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "goroutine %d failed", i)
+	}
+
 	var count int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("expected 1 row, got %d", count)
-	}
-}
-
-func TestIntegration_UnitOfWork_ReadOnly(t *testing.T) {
-	db := setupPostgresTestDB(t)
-
-	// Insert test data first
-	_, err := db.Exec("INSERT INTO test_orders (status, total) VALUES ($1, $2)", "pending", 100.00)
-	if err != nil {
-		t.Fatalf("failed to insert test data: %v", err)
-	}
-
-	// Test read-only transaction
-	uow, err := NewUnitOfWork(db, WithReadOnly(true))
-	if err != nil {
-		t.Fatalf("failed to create UnitOfWork: %v", err)
-	}
-	ctx := context.Background()
-
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		var count int
-		return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_orders").Scan(&count)
-	})
-
-	if err != nil {
-		t.Fatalf("expected no error for read operation, got: %v", err)
-	}
-
-	// Verify read-only transaction rejects writes
-	err = uow.Do(ctx, func(ctx context.Context, db database.DBTX) error {
-		_, err := db.ExecContext(ctx, "INSERT INTO test_orders (status, total) VALUES ($1, $2)", "new", 200.00)
-		return err
-	})
-
-	// PostgreSQL should reject write in read-only transaction
-	if err == nil {
-		t.Error("expected error for write operation in read-only transaction")
-	}
+	row := mgr.DBTX(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE value LIKE 'goroutine-%'`)
+	require.NoError(t, row.Scan(&count))
+	require.Equal(t, goroutines, count)
 }

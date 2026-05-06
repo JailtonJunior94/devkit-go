@@ -19,11 +19,18 @@ var (
 )
 
 // Provider é uma implementação noop de observabilidade com overhead zero.
+// Implementa noopMarker para que detectores internos possam identificá-la via
+// type assertion para interface em vez de tipo concreto.
 type Provider struct {
 	tracer  *noopTracer
 	logger  *noopLogger
 	metrics *noopMetrics
 }
+
+// IsNoop satisfaz a interface noopMarker consumida por pkg/database/manager.
+// Permite que wrappers ou decorators sobre Provider também se declarem noop
+// implementando o mesmo método, sem precisar ser do tipo concreto *Provider.
+func (p *Provider) IsNoop() bool { return true }
 
 func NewProvider() *Provider {
 	return &Provider{

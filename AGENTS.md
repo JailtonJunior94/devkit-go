@@ -180,6 +180,16 @@ Cada skill lista suas próprias referências em `references/` com gatilhos de ca
 
 Ferramentas detectadas devem delegar para `AGENTS.md` como fonte canônica. Se existir divergência entre arquivos auxiliares e este documento, prevalece `AGENTS.md`.
 
+## Convenções de Teste
+
+O documento canônico de convenções de teste unitário está em `docs/testing/unit_test.md`. Ele define:
+- Framework (testify/require, testify/suite, testify/mock)
+- Estrutura AAA e table-driven
+- Naming em inglês e comportamental
+- Uso de mocks gerados por mockery v3
+- Obrigatoriedade de `-race`
+- Exemplos de referência (`pkg/observability`, `pkg/database`)
+
 ## Validação
 
 Antes de concluir uma alteração:
