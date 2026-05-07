@@ -201,6 +201,83 @@ func TestSecurityHeaders_ApplyDoesNotMutateOriginal(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders_With_DoesNotMutateOriginal(t *testing.T) {
+	original := DefaultSecurityHeaders()
+	originalSnapshot := original.ToMap()
+
+	derived := original.With("X-Frame-Options", "SAMEORIGIN")
+	derived = derived.With("X-Custom-Header", "value")
+
+	originalAfter := original.ToMap()
+
+	if got := originalAfter["X-Frame-Options"]; got != "DENY" {
+		t.Errorf("expected original X-Frame-Options to remain DENY, got %s", got)
+	}
+	if _, ok := originalAfter["X-Custom-Header"]; ok {
+		t.Error("expected original to not contain X-Custom-Header")
+	}
+	if len(originalAfter) != len(originalSnapshot) {
+		t.Errorf("expected original size %d, got %d", len(originalSnapshot), len(originalAfter))
+	}
+
+	derivedMap := derived.ToMap()
+	if got := derivedMap["X-Frame-Options"]; got != "SAMEORIGIN" {
+		t.Errorf("expected derived X-Frame-Options=SAMEORIGIN, got %s", got)
+	}
+	if got := derivedMap["X-Custom-Header"]; got != "value" {
+		t.Errorf("expected derived X-Custom-Header=value, got %s", got)
+	}
+}
+
+func TestSecurityHeaders_Without_DoesNotMutateOriginal(t *testing.T) {
+	original := DefaultSecurityHeaders()
+	derived := original.Without("X-Frame-Options")
+
+	if _, ok := original.ToMap()["X-Frame-Options"]; !ok {
+		t.Error("expected original to still contain X-Frame-Options")
+	}
+	if _, ok := derived.ToMap()["X-Frame-Options"]; ok {
+		t.Error("expected derived to not contain X-Frame-Options")
+	}
+}
+
+func TestSecurityHeaders_Apply_DeletesEmptyValueHeaders(t *testing.T) {
+	headers := DefaultSecurityHeaders()
+	w := httptest.NewRecorder()
+
+	// Pre-populate headers Apply should strip.
+	w.Header().Set("Server", "nginx/1.25")
+	w.Header().Set("X-Powered-By", "Express")
+
+	headers.Apply(w)
+
+	if got := w.Header().Get("Server"); got != "" {
+		t.Errorf("expected Server to be deleted, got %s", got)
+	}
+	if got := w.Header().Get("X-Powered-By"); got != "" {
+		t.Errorf("expected X-Powered-By to be deleted, got %s", got)
+	}
+
+	if _, ok := w.Header()["Server"]; ok {
+		t.Error("expected Server key to be absent from header map after Del")
+	}
+	if _, ok := w.Header()["X-Powered-By"]; ok {
+		t.Error("expected X-Powered-By key to be absent from header map after Del")
+	}
+}
+
+func TestSecurityHeaders_Apply_RestoresUserHeaderToEmptyViaDel(t *testing.T) {
+	custom := DefaultSecurityHeaders().With("X-Custom-Header", "")
+	w := httptest.NewRecorder()
+	w.Header().Set("X-Custom-Header", "previous-value")
+
+	custom.Apply(w)
+
+	if _, ok := w.Header()["X-Custom-Header"]; ok {
+		t.Error("expected X-Custom-Header to be deleted when configured value is empty")
+	}
+}
+
 // Helper function to check if a string contains a substring.
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || findSubstring(s, substr))

@@ -25,3 +25,9 @@ packages:
     interfaces:
       Migrator:
       Source:
+  github.com/JailtonJunior94/devkit-go/pkg/http_server/chi_server:
+    interfaces:
+      Router:
+  github.com/JailtonJunior94/devkit-go/pkg/http_server/server_fiber:
+    interfaces:
+      Router:

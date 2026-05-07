@@ -37,8 +37,8 @@ Garantir que mudanças preservem a arquitetura real do repositório: um toolkit 
 
 ### HTTP e Transporte
 
-- `pkg/http_server` e `pkg/httpserver` coexistem. Antes de alterar comportamento HTTP, confirmar em qual componente a mudança deve viver.
-- Não consolidar ou migrar esses componentes por inferência; isso exige decisão explícita.
+- `pkg/http_server` é o único componente HTTP do toolkit. Alterações de comportamento HTTP devem viver aqui.
+- Adapters disponíveis: `pkg/http_server/chi_server` (Chi) e `pkg/http_server/server_fiber` (Fiber), com código compartilhado em `pkg/http_server/common`.
 
 ### Infra Local
 

@@ -11,7 +11,7 @@ lint:
 .PHONY: mocks-clean mocks-generate mocks-reset mocks
 mocks-clean:
 	@echo "Removing generated mocks..."
-	find ./pkg/observability ./pkg/database -type d -name mocks -prune -exec rm -rf {} +
+	find ./pkg/observability ./pkg/database ./pkg/http_server -type d -name mocks -prune -exec rm -rf {} +
 
 mocks-generate:
 	@echo "Generating mocks..."

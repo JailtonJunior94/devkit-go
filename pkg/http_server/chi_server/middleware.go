@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	otelobs "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 )
 
 // contextKey is a type for context keys to avoid collisions.
@@ -25,6 +23,10 @@ const (
 
 type httpHookProvider interface {
 	HTTP() otelobs.HTTPInstrumentation
+}
+
+type routePatternSetter interface {
+	SetRoute(string)
 }
 
 // recoverMiddleware recovers from panics and logs them.
@@ -60,7 +62,7 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 
 				// Only write error if headers haven't been sent yet
 				if !rw.HeaderWritten() {
-					writeErrorResponse(w, r, http.StatusInternalServerError, "Internal server error")
+					writeStatusError(w, r, http.StatusInternalServerError, "Internal server error")
 				} else {
 					o11y.Logger().Warn(r.Context(),
 						"cannot send panic error response: headers already sent",
@@ -74,25 +76,38 @@ func recoverMiddleware(o11y observability.Observability) func(http.Handler) http
 	}
 }
 
-// requestIDMiddleware generates or propagates a request ID.
-func requestIDMiddleware() func(http.Handler) http.Handler {
+// requestIDMiddleware validates an incoming X-Request-ID against the
+// shared common.ValidateRequestID contract or generates a fresh value
+// via common.NewRequestID. When a non-empty incoming value is rejected,
+// it emits a structured warn log via pkg/observability with raw_length,
+// remote_addr, path and method — the raw value is never logged nor
+// echoed back to the client (RF-7.4, R-SEC-001).
+func requestIDMiddleware(o11y observability.Observability) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := r.Header.Get("X-Request-ID")
-
-			if strings.TrimSpace(requestID) == "" {
-				requestID = uuid.New().String()
+			raw := r.Header.Get(common.HeaderRequestID)
+			id, ok := common.ValidateRequestID(raw)
+			if !ok {
+				if raw != "" {
+					o11y.Logger().Warn(r.Context(), "invalid X-Request-ID rejected",
+						observability.Int("raw_length", len(raw)),
+						observability.String("remote_addr", r.RemoteAddr),
+						observability.String("path", r.URL.Path),
+						observability.String("method", r.Method),
+					)
+				}
+				id = common.NewRequestID()
 			}
 
-			ctx := context.WithValue(r.Context(), requestIDKey, requestID)
-			w.Header().Set("X-Request-ID", requestID)
+			ctx := context.WithValue(r.Context(), requestIDKey, id)
+			w.Header().Set(common.HeaderRequestID, id)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func observabilityMiddleware(o11y observability.Observability) func(http.Handler) http.Handler {
+func observabilityMiddleware(router chi.Routes, o11y observability.Observability) func(http.Handler) http.Handler {
 	hook := httpInstrumentation(o11y)
 	if hook == nil {
 		return func(next http.Handler) http.Handler {
@@ -108,7 +123,7 @@ func observabilityMiddleware(o11y observability.Observability) func(http.Handler
 
 			ctx, scope := hook.StartRequest(ctx, otelobs.HTTPRequest{
 				Method:        r.Method,
-				Route:         chiRoutePattern(ctx, r),
+				Route:         matchedChiRoutePattern(router, r),
 				Target:        r.URL.Path,
 				RemoteAddr:    r.RemoteAddr,
 				UserAgent:     r.UserAgent(),
@@ -121,7 +136,12 @@ func observabilityMiddleware(o11y observability.Observability) func(http.Handler
 			}
 
 			rw := newObservedResponseWriter(w)
-			defer finishObservedRequest(scope, rw)
+			defer func() {
+				if setter, ok := scope.(routePatternSetter); ok {
+					setter.SetRoute(chiRoutePattern(r.Context()))
+				}
+				finishObservedRequest(scope, rw)
+			}()
 
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})
@@ -136,42 +156,33 @@ func httpInstrumentation(o11y observability.Observability) otelobs.HTTPInstrumen
 	return provider.HTTP()
 }
 
-func chiRoutePattern(ctx context.Context, r *http.Request) string {
+func matchedChiRoutePattern(router chi.Routes, r *http.Request) string {
+	if router == nil || r == nil {
+		return "unmatched"
+	}
+
+	rctx := chi.NewRouteContext()
+	if pattern := router.Find(rctx, r.Method, r.URL.Path); pattern != "" {
+		return pattern
+	}
+
+	return "unmatched"
+}
+
+// chiRoutePattern returns the route pattern declared by chi for the
+// current request, or the literal "unmatched" when no route has been
+// matched (chi.RouteContext is nil or RoutePattern returns ""). This
+// guarantees the telemetry route label has cardinality bounded by the
+// number of registered patterns plus one (RF-6.2).
+func chiRoutePattern(ctx context.Context) string {
 	routeCtx := chi.RouteContext(ctx)
 	if routeCtx == nil {
-		return lowCardinalityRoute(r.URL.Path)
+		return "unmatched"
 	}
 	if route := routeCtx.RoutePattern(); route != "" {
 		return route
 	}
-	return lowCardinalityRoute(r.URL.Path)
-}
-
-func lowCardinalityRoute(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || path == "/" {
-		return path
-	}
-
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		if numericPathSegment(segment) {
-			segments[i] = "{param}"
-		}
-	}
-	return strings.Join(segments, "/")
-}
-
-func numericPathSegment(segment string) bool {
-	if segment == "" {
-		return false
-	}
-	for _, char := range segment {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
+	return "unmatched"
 }
 
 func finishObservedRequest(scope otelobs.HTTPRequestScope, rw *observedResponseWriter) {
@@ -241,102 +252,116 @@ func (rw *observedResponseWriter) bytesWritten() int64 {
 	return rw.bytes
 }
 
-// timeoutMiddleware applies a timeout to requests with race-free implementation.
-// IMPORTANT: Handlers MUST respect context cancellation to prevent goroutine leaks.
-// When ctx.Done() is signaled, handlers should stop processing immediately.
-func timeoutMiddleware(
-	globalTimeout time.Duration,
-	routeTimeouts map[string]time.Duration,
-) func(http.Handler) http.Handler {
+// timeoutMiddleware applies a global timeout to requests as a fallback for
+// routes registered directly against the underlying chi.Router (i.e. routes
+// that do NOT go through Server.RegisterHandler). Per-route timeouts are
+// installed via wrapWithTimeout in Server.RegisterHandler — this top-level
+// middleware deliberately does NOT consult routeTimeouts (RF-5.4) so that
+// the two paths remain orthogonal and there is a single source of truth for
+// the per-route value (the route registration site).
+func timeoutMiddleware(globalTimeout time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			timeout := globalTimeout
-
-			if routeTimeout, exists := routeTimeouts[r.URL.Path]; exists {
-				timeout = routeTimeout
-			}
-
-			ctx, cancel := context.WithTimeout(r.Context(), timeout)
+			ctx, cancel := context.WithTimeout(r.Context(), globalTimeout)
 			defer cancel()
 
-			// Wrap the ResponseWriter to detect if headers were written
-			tw := &timeoutWriter{ResponseWriter: w}
-
-			// Buffered channel prevents goroutine leak if we timeout before handler finishes
+			tw := newTimeoutWriter(w)
 			done := make(chan struct{}, 1)
+			panicCh := make(chan any, 1)
 
-			go func() {
-				defer func() {
-					// Recover any panics from the handler
-					if recovered := recover(); recovered != nil {
-						// Re-panic will be caught by the outer recover middleware
-						panic(recovered)
-					}
-					// Signal completion (non-blocking due to buffer)
-					select {
-					case done <- struct{}{}:
-					default:
-					}
-				}()
-				next.ServeHTTP(tw, r.WithContext(ctx))
-			}()
+			go runHandler(next, tw, r.WithContext(ctx), done, panicCh)
 
 			select {
 			case <-done:
-				// Handler completed successfully before timeout
 				return
+			case rec := <-panicCh:
+				// Re-panic in the request goroutine so the outer
+				// recoverMiddleware (deferred earlier in the same goroutine)
+				// can record and respond to it.
+				panic(rec)
 			case <-ctx.Done():
-				// Timeout occurred - context cancellation signals handler to stop
 				tw.mu.Lock()
-				defer tw.mu.Unlock()
-
-				// Only write timeout error if handler hasn't written anything yet
 				if !tw.written {
 					tw.written = true
 					tw.timedOut = true
-					writeErrorResponse(w, r, http.StatusRequestTimeout, "Request timeout exceeded")
-				}
-
-				// CRITICAL: Wait a short time for goroutine cleanup
-				// This gives the handler time to respect context cancellation
-				// Most well-behaved handlers will stop within 100ms
-				cleanupTimer := time.NewTimer(100 * time.Millisecond)
-				defer cleanupTimer.Stop()
-
-				select {
-				case <-done:
-					// Handler finished cleanup successfully
-				case <-cleanupTimer.C:
-					// Handler didn't respect context cancellation
-					// This is a handler bug, but we can't do much more
-					// The goroutine will eventually finish but may hold resources longer
+					tw.mu.Unlock()
+					// security/cors run BEFORE this middleware (see
+					// registerMiddlewares ordering), so headers like
+					// X-Frame-Options, CSP and HSTS are already on w.Header()
+					// when we reach this branch. Writing directly to w is
+					// safe because tw is now timedOut so the handler goroutine
+					// can no longer touch it.
+					writeStatusError(w, r, http.StatusRequestTimeout, "Request timeout exceeded")
+				} else {
+					tw.mu.Unlock()
 				}
 			}
 		})
 	}
 }
 
-// timeoutWriter wraps http.ResponseWriter to track if response was written.
+// runHandler runs next.ServeHTTP and translates panics into a value
+// delivered through panicCh so the parent goroutine can re-raise them
+// in a frame protected by the outer recoverMiddleware.
+func runHandler(next http.Handler, w http.ResponseWriter, r *http.Request, done chan<- struct{}, panicCh chan<- any) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			select {
+			case panicCh <- rec:
+			default:
+			}
+			return
+		}
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}()
+	next.ServeHTTP(w, r)
+}
+
+// timeoutWriter wraps http.ResponseWriter to coordinate writes between the
+// handler goroutine and the timeout goroutine. The wrapper buffers user
+// headers in a private http.Header map so concurrent calls to
+// w.Header().Set from the timeout goroutine and the handler goroutine never
+// touch the same underlying map (RF-4.2). Once timedOut is observed under
+// mu, WriteHeader/Write become no-ops and the buffered headers are dropped
+// so the timeout response written by the middleware is the only payload
+// that reaches the wire.
 type timeoutWriter struct {
 	http.ResponseWriter
 	mu       sync.Mutex
+	h        http.Header
 	written  bool
 	timedOut bool
+}
+
+func newTimeoutWriter(w http.ResponseWriter) *timeoutWriter {
+	return &timeoutWriter{
+		ResponseWriter: w,
+		h:              make(http.Header),
+	}
+}
+
+// Header returns the timeoutWriter's private header map. Headers set on it
+// are flushed to the underlying ResponseWriter on the first Write or
+// WriteHeader call as long as the request has not already timed out. After
+// a timeout, the buffered map is discarded and never leaks to the wire.
+func (tw *timeoutWriter) Header() http.Header {
+	return tw.h
 }
 
 func (tw *timeoutWriter) WriteHeader(code int) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
 
-	if tw.timedOut {
-		// Timeout already occurred, don't write
+	if tw.timedOut || tw.written {
 		return
 	}
 
-	if !tw.written {
-		tw.written = true
-		tw.ResponseWriter.WriteHeader(code)
-	}
+	tw.written = true
+	tw.flushHeadersLocked()
+	tw.ResponseWriter.WriteHeader(code)
 }
 
 func (tw *timeoutWriter) Write(b []byte) (int, error) {
@@ -344,15 +369,24 @@ func (tw *timeoutWriter) Write(b []byte) (int, error) {
 	defer tw.mu.Unlock()
 
 	if tw.timedOut {
-		// Timeout already occurred, don't write
 		return 0, http.ErrHandlerTimeout
 	}
 
 	if !tw.written {
 		tw.written = true
+		tw.flushHeadersLocked()
 	}
 
 	return tw.ResponseWriter.Write(b)
+}
+
+// flushHeadersLocked copies the buffered headers to the underlying
+// ResponseWriter. Caller MUST hold tw.mu.
+func (tw *timeoutWriter) flushHeadersLocked() {
+	dst := tw.ResponseWriter.Header()
+	for k, v := range tw.h {
+		dst[k] = v
+	}
 }
 
 // securityHeadersMiddleware adds comprehensive security headers to responses.
@@ -390,7 +424,7 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 
 			// Validate if origin is allowed
 			if !common.IsOriginAllowed(origin, allowedOrigins) {
-				writeErrorResponse(w, r, http.StatusForbidden, "origin not allowed")
+				writeStatusError(w, r, http.StatusForbidden, "origin not allowed")
 				return
 			}
 
@@ -433,7 +467,7 @@ func bodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 			// Check Content-Length as an early validation (optimization)
 			// but don't rely on it for security
 			if r.ContentLength > maxBytes {
-				writeErrorResponse(w, r, http.StatusRequestEntityTooLarge,
+				writeStatusError(w, r, http.StatusRequestEntityTooLarge,
 					fmt.Sprintf("Request body exceeds maximum size of %d bytes", maxBytes))
 				return
 			}
@@ -441,4 +475,78 @@ func bodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// wrapWithTimeout installs a per-route timeout decorator around next.
+// It is invoked from Server.RegisterHandler when the path has a timeout
+// configured via WithRouteTimeout. The middleware:
+//   - derives a child context with the per-route deadline (RF-5.4);
+//   - serves the handler in a child goroutine so the timeout path can run
+//     concurrently with the handler write path;
+//   - serializes 408 emission with handler writes via timeoutWriter.mu so
+//     the wire only ever sees a single response (RF-4.2);
+//   - waits up to s.timeoutCleanup for the handler goroutine to drain and
+//     records http_handler_timeout_leak_total when it does not (RF-4.3);
+//   - skips the leak counter entirely when s.timeoutCleanup <= 0 (RF-4.6).
+//
+// Panics inside the handler goroutine are re-panicked so the outer
+// recoverMiddleware can record them and emit the canonical 500 response.
+func wrapWithTimeout(s *Server, d time.Duration, next http.Handler, route string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+
+		tw := newTimeoutWriter(w)
+		done := make(chan struct{}, 1)
+		panicCh := make(chan any, 1)
+
+		go runHandler(next, tw, r.WithContext(ctx), done, panicCh)
+
+		select {
+		case <-done:
+			return
+		case rec := <-panicCh:
+			panic(rec)
+		case <-ctx.Done():
+			tw.mu.Lock()
+			if !tw.written {
+				tw.written = true
+				tw.timedOut = true
+				tw.mu.Unlock()
+				// security/cors run on the request goroutine BEFORE the chain
+				// reaches this per-route wrap (see registerMiddlewares
+				// ordering), so the underlying ResponseWriter already carries
+				// those headers. Writing through w here is safe: tw is now
+				// timedOut so the handler goroutine can no longer mutate the
+				// shared underlying writer.
+				writeTimeoutResponse(w, r)
+			} else {
+				tw.mu.Unlock()
+			}
+
+			if s.timeoutCleanup <= 0 {
+				return
+			}
+
+			timer := time.NewTimer(s.timeoutCleanup)
+			defer timer.Stop()
+			select {
+			case <-done:
+				return
+			case rec := <-panicCh:
+				// Late panic during cleanup — re-raise for outer recover.
+				panic(rec)
+			case <-timer.C:
+				s.recordTimeoutLeak(r.Context(), route, r.URL.Path)
+			}
+		}
+	})
+}
+
+// writeTimeoutResponse emits an RFC 7807 408 Request Timeout response.
+// chi_server is plain net/http; we deliberately do NOT route through
+// common.ProblemFromError (which understands *fiber.Error) so the chi
+// adapter stays free of fiber coupling.
+func writeTimeoutResponse(w http.ResponseWriter, r *http.Request) {
+	writeStatusError(w, r, http.StatusRequestTimeout, "Request timeout exceeded")
 }

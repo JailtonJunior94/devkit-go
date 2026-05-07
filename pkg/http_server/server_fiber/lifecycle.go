@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
 func (s *Server) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	s.observability.Logger().Info(ctx, "starting HTTP server",
 		observability.String("address", s.config.Address),
 		observability.String("service", s.config.ServiceName),
@@ -47,7 +50,10 @@ func (s *Server) Start(ctx context.Context) error {
 		)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Derive shutdown ctx from the parent ctx so that an externally provided
+	// deadline (tests, orchestration) is honored; ShutdownTimeout caps the
+	// upper bound to avoid hangs (RF-8.3).
+	shutdownCtx, cancel := context.WithTimeout(ctx, s.config.ShutdownTimeout)
 	defer cancel()
 
 	return s.Shutdown(shutdownCtx)

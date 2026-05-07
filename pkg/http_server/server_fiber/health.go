@@ -2,7 +2,6 @@ package serverfiber
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
@@ -13,6 +12,12 @@ import (
 
 // HealthCheckFunc is an alias for common.HealthCheckFunc for backward compatibility.
 type HealthCheckFunc = common.HealthCheckFunc
+
+const (
+	healthTimeout       = 5 * time.Second
+	readinessTimeout    = 3 * time.Second
+	healthMaxConcurrent = 10
+)
 
 func registerHealthChecks(
 	app *fiber.App,
@@ -31,8 +36,7 @@ func createHealthHandler(
 	checks map[string]common.HealthCheckFunc,
 ) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
-		defer cancel()
+		ctx := c.UserContext()
 
 		status := common.HealthStatus{
 			Status:      "healthy",
@@ -43,11 +47,13 @@ func createHealthHandler(
 			Checks:      make(map[string]common.CheckResult),
 		}
 
-		if len(checks) > 0 {
-			checkErrors := executeHealthChecks(ctx, checks, o11y, &status)
-			if checkErrors {
-				status.Status = "unhealthy"
-			}
+		results, hasErrors := common.ExecuteHealthChecks(ctx, checks, healthTimeout, healthMaxConcurrent)
+		if results != nil {
+			status.Checks = results
+		}
+		if hasErrors {
+			status.Status = "unhealthy"
+			logFailedChecks(ctx, o11y, results, "health check failed")
 		}
 
 		statusCode := fiber.StatusOK
@@ -59,142 +65,42 @@ func createHealthHandler(
 	}
 }
 
-func executeHealthChecks(
-	ctx context.Context,
-	checks map[string]common.HealthCheckFunc,
-	o11y observability.Observability,
-	status *common.HealthStatus,
-) bool {
-	if len(checks) == 0 {
-		return false
-	}
-
-	// Limit concurrent goroutines to prevent goroutine bomb
-	// Maximum 10 concurrent health checks at a time
-	const maxConcurrent = 10
-	semaphore := make(chan struct{}, maxConcurrent)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	checkErrors := false
-
-	for name, checkFunc := range checks {
-		wg.Add(1)
-
-		go func(checkName string, check common.HealthCheckFunc) {
-			defer wg.Done()
-
-			// Acquire semaphore (blocks if 10 goroutines already running)
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }() // Release semaphore when done
-			case <-ctx.Done():
-				// Context cancelled, abort
-				mu.Lock()
-				status.Checks[checkName] = common.CheckResult{
-					Status: "unhealthy",
-					Error:  "timeout",
-				}
-				checkErrors = true
-				mu.Unlock()
-				return
-			}
-
-			result := common.CheckResult{Status: "healthy"}
-			if err := check(ctx); err != nil {
-				result.Status = "unhealthy"
-				result.Error = err.Error()
-
-				mu.Lock()
-				checkErrors = true
-				mu.Unlock()
-
-				o11y.Logger().Warn(ctx, "health check failed",
-					observability.String("check", checkName),
-					observability.Error(err),
-				)
-			}
-
-			mu.Lock()
-			status.Checks[checkName] = result
-			mu.Unlock()
-		}(name, checkFunc)
-	}
-
-	wg.Wait()
-	return checkErrors
-}
-
 func createReadyHandler(
 	o11y observability.Observability,
 	checks map[string]common.HealthCheckFunc,
 ) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		ctx, cancel := context.WithTimeout(c.UserContext(), 3*time.Second)
-		defer cancel()
+		ctx := c.UserContext()
 
-		if len(checks) > 0 {
-			if hasCheckErrors := executeReadinessChecks(ctx, checks, o11y); hasCheckErrors {
-				return c.SendStatus(fiber.StatusServiceUnavailable)
-			}
+		results, hasErrors := common.ExecuteHealthChecks(ctx, checks, readinessTimeout, healthMaxConcurrent)
+		if hasErrors {
+			logFailedChecks(ctx, o11y, results, "readiness check failed")
+			return c.SendStatus(fiber.StatusServiceUnavailable)
 		}
 
 		return c.SendStatus(fiber.StatusOK)
 	}
 }
 
-func executeReadinessChecks(
-	ctx context.Context,
-	checks map[string]common.HealthCheckFunc,
-	o11y observability.Observability,
-) bool {
-	if len(checks) == 0 {
-		return false
-	}
-
-	// Limit concurrent goroutines to prevent goroutine bomb
-	const maxConcurrent = 10
-	semaphore := make(chan struct{}, maxConcurrent)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	checkErrors := false
-
-	for name, checkFunc := range checks {
-		wg.Add(1)
-		go func(checkName string, check common.HealthCheckFunc) {
-			defer wg.Done()
-
-			// Acquire semaphore
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				mu.Lock()
-				checkErrors = true
-				mu.Unlock()
-				return
-			}
-
-			if err := check(ctx); err != nil {
-				mu.Lock()
-				checkErrors = true
-				mu.Unlock()
-
-				o11y.Logger().Warn(ctx, "readiness check failed",
-					observability.String("check", checkName),
-					observability.Error(err),
-				)
-			}
-		}(name, checkFunc)
-	}
-
-	wg.Wait()
-	return checkErrors
-}
-
 func createLiveHandler() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
+	}
+}
+
+func logFailedChecks(
+	ctx context.Context,
+	o11y observability.Observability,
+	results map[string]common.CheckResult,
+	message string,
+) {
+	for name, result := range results {
+		if result.Status == "healthy" {
+			continue
+		}
+		o11y.Logger().Warn(ctx, message,
+			observability.String("check", name),
+			observability.String("error", result.Error),
+		)
 	}
 }

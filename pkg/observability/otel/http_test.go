@@ -126,6 +126,43 @@ func TestHTTPInstrumentationStartRequest(t *testing.T) {
 	}
 }
 
+func TestHTTPInstrumentationScopeSetRouteRebindsMetricsAndSpanAttrs(t *testing.T) {
+	t.Parallel()
+
+	tracer, spans := newHTTPTestTracer()
+	metrics := newRecordingMetrics()
+	instrumentation := newHTTPInstrumentation(tracer, metrics)
+
+	_, scope := instrumentation.StartRequest(context.Background(), HTTPRequest{
+		Method: "GET",
+		Route:  "unmatched",
+		Target: "/users/123",
+	})
+
+	setter, ok := scope.(interface{ SetRoute(string) })
+	require.True(t, ok)
+
+	setter.SetRoute("/users/{id}")
+	scope.Finish(HTTPResponse{StatusCode: 200})
+
+	ended := spans.Ended()
+	require.Len(t, ended, 1)
+
+	attrs := spanAttrs(ended[0].Attributes())
+	assert.Equal(t, "/users/{id}", attrs["http.route"])
+	assert.Equal(t, "/users/{id}", fieldValue(metrics.counters[httpRequestCountMetric].adds[0].fields, "http.route"))
+
+	require.Len(t, metrics.upDowns[httpRequestActiveMetric].adds, 4)
+	assert.Equal(t, int64(1), metrics.upDowns[httpRequestActiveMetric].adds[0].value)
+	assert.Equal(t, "unmatched", fieldValue(metrics.upDowns[httpRequestActiveMetric].adds[0].fields, "http.route"))
+	assert.Equal(t, int64(-1), metrics.upDowns[httpRequestActiveMetric].adds[1].value)
+	assert.Equal(t, "unmatched", fieldValue(metrics.upDowns[httpRequestActiveMetric].adds[1].fields, "http.route"))
+	assert.Equal(t, int64(1), metrics.upDowns[httpRequestActiveMetric].adds[2].value)
+	assert.Equal(t, "/users/{id}", fieldValue(metrics.upDowns[httpRequestActiveMetric].adds[2].fields, "http.route"))
+	assert.Equal(t, int64(-1), metrics.upDowns[httpRequestActiveMetric].adds[3].value)
+	assert.Equal(t, "/users/{id}", fieldValue(metrics.upDowns[httpRequestActiveMetric].adds[3].fields, "http.route"))
+}
+
 func TestHTTPInstrumentationProviderHook(t *testing.T) {
 	t.Parallel()
 

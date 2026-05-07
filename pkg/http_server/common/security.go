@@ -65,8 +65,9 @@ func DefaultSecurityHeaders() SecurityHeaders {
 	}
 }
 
-// With adds or updates a header value.
-// This allows customization of the security headers.
+// With returns a new SecurityHeaders with the given header value added or
+// updated. The receiver is not mutated, ensuring concurrent-safe sharing
+// of a default configuration across servers.
 //
 // Example:
 //
@@ -74,31 +75,47 @@ func DefaultSecurityHeaders() SecurityHeaders {
 //	headers = headers.With("Content-Security-Policy", "default-src 'self' https://cdn.example.com")
 //	headers = headers.With("X-Custom-Header", "value")
 func (s SecurityHeaders) With(key, value string) SecurityHeaders {
-	s.headers[key] = value
-	return s
+	clone := s.cloneHeaders()
+	clone[key] = value
+	return SecurityHeaders{headers: clone}
 }
 
-// Without removes a header.
-// Useful when you need to disable a specific security header.
+// Without returns a new SecurityHeaders with the given header removed.
+// The receiver is not mutated.
 //
 // Example:
 //
 //	headers := common.DefaultSecurityHeaders()
 //	headers = headers.Without("X-XSS-Protection") // Remove legacy header
 func (s SecurityHeaders) Without(key string) SecurityHeaders {
-	delete(s.headers, key)
-	return s
+	clone := s.cloneHeaders()
+	delete(clone, key)
+	return SecurityHeaders{headers: clone}
 }
 
-// Apply applies all security headers to an http.ResponseWriter.
-// This should be called before writing the response body.
+// Apply writes all configured security headers to w.
+// Headers configured with an empty value are removed via Header().Del,
+// which is the right behavior for stripping server identification headers
+// (Server, X-Powered-By).
 func (s SecurityHeaders) Apply(w http.ResponseWriter) {
+	header := w.Header()
 	for k, v := range s.headers {
-		// Only set non-empty headers
-		if v != "" || k == "X-Powered-By" || k == "Server" {
-			w.Header().Set(k, v)
+		if v == "" {
+			header.Del(k)
+			continue
 		}
+		header.Set(k, v)
 	}
+}
+
+// cloneHeaders returns an independent copy of the underlying map. It is
+// safe for use even when the receiver was zero-initialized.
+func (s SecurityHeaders) cloneHeaders() map[string]string {
+	clone := make(map[string]string, len(s.headers)+1)
+	for k, v := range s.headers {
+		clone[k] = v
+	}
+	return clone
 }
 
 // ToMap returns a copy of the headers map.

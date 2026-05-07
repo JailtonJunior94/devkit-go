@@ -35,3 +35,24 @@ linters:
   - govet
   - gocyclo
   - ineffassign
+  - forbidigo
+  settings:
+    forbidigo:
+      # Enforce structured logging rule R-O11Y-001 in pkg/http_server/ (RF-11.2).
+      # Repo-wide enforcement is a separate ticket.
+      forbid:
+        - pattern: "^log\\.Printf$"
+          msg: "use structured logging via pkg/observability (R-O11Y-001)"
+        - pattern: "^log\\.Println$"
+          msg: "use structured logging via pkg/observability (R-O11Y-001)"
+        - pattern: "^fmt\\.Println$"
+          msg: "use structured logging via pkg/observability (R-O11Y-001)"
+        - pattern: "^fmt\\.Printf$"
+          msg: "use structured logging via pkg/observability (R-O11Y-001)"
+  exclusions:
+    rules:
+      # Restrict forbidigo gate to pkg/http_server/ only (RF-11.2 scope).
+      # All packages below are explicitly excluded; repo-wide gate is a separate ticket.
+      - linters:
+          - forbidigo
+        path: "pkg/(database|encrypt|entity|events|httpclient|linq|logger|messaging|nullable|observability|responses|vos)/"

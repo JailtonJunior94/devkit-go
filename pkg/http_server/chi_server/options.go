@@ -129,3 +129,34 @@ func WithOTelMetrics() Option {
 		s.config.EnableOTelMetrics = true
 	}
 }
+
+// WithErrorHandler overrides the default ErrorHandler used by
+// handlers registered through Server.RegisterHandler. Errors returned
+// by the user Handler are passed to fn together with the request
+// context and the underlying http.ResponseWriter.
+func WithErrorHandler(fn ErrorHandler) Option {
+	return func(s *Server) {
+		s.errorHandler = fn
+	}
+}
+
+// WithShutdownTimeout sets the deadline used by Shutdown when invoked
+// from Start. The timeout is applied via context.WithTimeout deriving
+// from the parent context, preserving its deadline (RF-8.2, RF-8.3).
+func WithShutdownTimeout(d time.Duration) Option {
+	return func(s *Server) {
+		s.config.ShutdownTimeout = d
+	}
+}
+
+// WithTimeoutCleanup configures how long the per-route timeout middleware
+// waits for the handler goroutine to drain after a 408 has been written.
+// Passing d <= 0 disables the leak detector entirely: the timeout response
+// is still sent but http_handler_timeout_leak_total is never incremented
+// even if the handler ignores ctx.Done() (RF-4.6). The default applied by
+// New is 100ms when this option is not provided (RF-4.5).
+func WithTimeoutCleanup(d time.Duration) Option {
+	return func(s *Server) {
+		s.timeoutCleanup = d
+	}
+}

@@ -1,13 +1,16 @@
 package chiserver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/fake"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability/noop"
 	otelobs "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 	"github.com/go-chi/chi/v5"
@@ -35,7 +38,7 @@ func TestSharedObservabilityMiddleware_Chi(t *testing.T) {
 				_, _ = w.Write([]byte("ok"))
 			},
 			wantStatus:        http.StatusAccepted,
-			wantRoute:         "/users/{param}",
+			wantRoute:         "/users/{id}",
 			wantRequestID:     "req-123",
 			wantCorrelationID: "corr-456",
 		},
@@ -46,7 +49,7 @@ func TestSharedObservabilityMiddleware_Chi(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 			},
 			wantStatus: http.StatusInternalServerError,
-			wantRoute:  "/users/{param}",
+			wantRoute:  "/users/{id}",
 		},
 	}
 
@@ -198,4 +201,219 @@ func TestRecordingHTTPRequestScope_RecordsOnlyNonNilErrors(t *testing.T) {
 
 	require.Len(t, scope.errors, 1)
 	assert.ErrorIs(t, scope.errors[0], expected)
+}
+
+// --- Recover middleware (ported from legacy httpserver/middlewares_test.go) ---
+
+func TestChiServer_RecoverMiddleware_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	provider := fake.NewProvider()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	wrapped := recoverMiddleware(provider)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "OK", rec.Body.String())
+}
+
+// --- CORS middleware (ported from legacy httpserver/middlewares_test.go) ---
+
+func TestChiServer_CorsMiddleware_SetsBasicHeaders(t *testing.T) {
+	t.Parallel()
+
+	handler := corsMiddleware("*")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Wildcard CORS: Access-Control-Allow-Origin must be "*"
+	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.NotEmpty(t, rec.Header().Get("Access-Control-Allow-Methods"))
+	assert.NotEmpty(t, rec.Header().Get("Access-Control-Allow-Headers"))
+}
+
+func TestChiServer_CorsMiddleware_HandlesPreflight(t *testing.T) {
+	t.Parallel()
+
+	handlerCalled := false
+	handler := corsMiddleware("https://example.com")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+	}))
+
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.False(t, handlerCalled, "handler must not be called for preflight")
+}
+
+func TestChiServer_CorsMiddleware_SpecificOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		requestOrigin string
+		wantStatus    int
+		wantOrigin    string
+	}{
+		{
+			name:          "allowed specific origin is echoed back",
+			requestOrigin: "https://example.com",
+			wantStatus:    http.StatusOK,
+			wantOrigin:    "https://example.com",
+		},
+		{
+			name:          "disallowed origin is rejected with 403",
+			requestOrigin: "https://evil.com",
+			wantStatus:    http.StatusForbidden,
+			wantOrigin:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := corsMiddleware("https://example.com")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Origin", tt.requestOrigin)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantOrigin != "" {
+				assert.Equal(t, tt.wantOrigin, rec.Header().Get("Access-Control-Allow-Origin"))
+			}
+		})
+	}
+}
+
+// TestChiServer_CorsMiddleware_RejectsCRLFInOrigin covers RF-1.5 mandatory
+// scenario: an Origin header with CRLF injection must not be echoed to the
+// client. Because the injected origin does not match any allowed origin, the
+// middleware returns 403 and never reflects the raw value (runtime path).
+func TestChiServer_CorsMiddleware_RejectsCRLFInOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		origin string
+	}{
+		{name: "CRLF inject via \\r\\n", origin: "https://example.com\r\nX-Injected: evil"},
+		{name: "LF inject via \\n", origin: "https://example.com\nX-Injected: evil"},
+		{name: "CR inject via \\r", origin: "https://example.com\rX-Injected: evil"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := corsMiddleware("https://example.com")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			// Set origin directly on the header map to bypass net/http sanitization
+			// that strips CRLF before the middleware sees it via r.Header.Get.
+			req.Header["Origin"] = []string{tt.origin}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			// The CRLF-injected origin must NOT match the allowed origin,
+			// so the middleware must reject it with 403.
+			assert.Equal(t, http.StatusForbidden, rec.Code,
+				"origin with CRLF must be rejected: %q", tt.origin)
+
+			// The raw injected value must not appear in any response header.
+			for k, vals := range rec.Header() {
+				for _, v := range vals {
+					assert.NotContains(t, v, tt.origin,
+						"raw CRLF origin must not be echoed in header %s", k)
+				}
+			}
+		})
+	}
+}
+
+// --- Security headers middleware (ported from legacy httpserver/middlewares_test.go) ---
+
+func TestChiServer_SecurityHeadersMiddleware_SetsExpectedHeaders(t *testing.T) {
+	t.Parallel()
+
+	handler := securityHeadersMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	tests := []struct {
+		header   string
+		expected string
+	}{
+		{"X-Content-Type-Options", "nosniff"},
+		{"X-Frame-Options", "DENY"},
+		{"X-XSS-Protection", "1; mode=block"},
+		{"Referrer-Policy", "strict-origin-when-cross-origin"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.header, func(t *testing.T) {
+			assert.Equal(t, tt.expected, rec.Header().Get(tt.header))
+		})
+	}
+}
+
+// --- Body limit middleware (ported from legacy httpserver coverage gap) ---
+
+func TestChiServer_BodyLimitMiddleware_AcceptsWithinLimit(t *testing.T) {
+	t.Parallel()
+
+	const limit = 1024
+	handler := bodyLimitMiddleware(limit)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.Repeat("a", limit-1)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestChiServer_BodyLimitMiddleware_RejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	const limit = 64
+	handler := bodyLimitMiddleware(limit)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Content-Length exceeds limit — early rejection path.
+	body := strings.Repeat("b", limit+1)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	req.ContentLength = int64(len(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }

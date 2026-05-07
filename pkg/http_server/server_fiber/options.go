@@ -43,6 +43,15 @@ func WithIdleTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithShutdownTimeout sets the maximum time the server waits for graceful
+// shutdown before returning. Mirrors chi_server.WithShutdownTimeout for
+// adapter parity (RF-8.2, RF-9.1).
+func WithShutdownTimeout(timeout time.Duration) Option {
+	return func(s *Server) {
+		s.config.ShutdownTimeout = timeout
+	}
+}
+
 func WithBodyLimit(limit int) Option {
 	return func(s *Server) {
 		s.config.BodyLimit = limit
@@ -104,6 +113,15 @@ func WithServiceName(name string) Option {
 func WithServiceVersion(version string) Option {
 	return func(s *Server) {
 		s.config.ServiceVersion = version
+	}
+}
+
+// WithEnvironment sets the environment label propagated to logs and health
+// payloads (development, staging, production, ...). Mirrors
+// chi_server.WithEnvironment for adapter parity (RF-9.1).
+func WithEnvironment(env string) Option {
+	return func(s *Server) {
+		s.config.Environment = env
 	}
 }
 

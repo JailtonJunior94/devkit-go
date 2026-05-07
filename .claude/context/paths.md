@@ -6,8 +6,7 @@
   - `pkg/observability/`: contratos + implementações OTel/noop/fake
   - `pkg/database/`: abstrações de banco, postgres, uow e otelsql
   - `pkg/messaging/`: contratos base e adapters Kafka/RabbitMQ
-  - `pkg/http_server/`: adapters HTTP Chi/Fiber e código compartilhado
-  - `pkg/httpserver/`: servidor HTTP Chi-based alternativo
+  - `pkg/http_server/`: adapters HTTP Chi/Fiber e código compartilhado (`chi_server`, `server_fiber`, `common`)
   - `pkg/httpclient/`: cliente HTTP observável
   - `pkg/migration/`, `pkg/events/`, `pkg/vos/`, `pkg/entity/`, `pkg/logger/`
 - **Infra auxiliar:** `deployment/` e `docker-compose.yml`

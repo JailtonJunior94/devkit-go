@@ -25,6 +25,10 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("expected IdleTimeout 120s, got %v", cfg.IdleTimeout)
 	}
 
+	if cfg.ShutdownTimeout != 30*time.Second {
+		t.Errorf("expected ShutdownTimeout 30s, got %v", cfg.ShutdownTimeout)
+	}
+
 	if cfg.BodyLimit != 4*1024*1024 {
 		t.Errorf("expected BodyLimit 4MB, got %d", cfg.BodyLimit)
 	}
@@ -194,5 +198,84 @@ func TestConfigValidate_CORSEnabledWithOrigins(t *testing.T) {
 	err := cfg.Validate()
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
+	}
+}
+
+func TestConfig_Validate_RejectsZeroShutdownTimeout(t *testing.T) {
+	tests := []struct {
+		name  string
+		value time.Duration
+	}{
+		{name: "zero", value: 0},
+		{name: "negative", value: -1 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.ServiceName = "test"
+			cfg.ServiceVersion = "1.0.0"
+			cfg.Environment = "dev"
+			cfg.ShutdownTimeout = tc.value
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected error for shutdown timeout %v", tc.value)
+			}
+			if !strings.Contains(err.Error(), "shutdown timeout must be positive") {
+				t.Errorf("expected 'shutdown timeout must be positive' error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_RejectsInvalidCORSOrigins(t *testing.T) {
+	tests := []struct {
+		name        string
+		origins     string
+		wantErrPart string
+	}{
+		{
+			name:        "wildcard combined with explicit origin",
+			origins:     "*,https://example.com",
+			wantErrPart: "invalid CORS origins",
+		},
+		{
+			name:        "wildcard combined with explicit origin (reversed)",
+			origins:     "https://example.com,*",
+			wantErrPart: "invalid CORS origins",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.ServiceName = "test"
+			cfg.ServiceVersion = "1.0.0"
+			cfg.Environment = "dev"
+			cfg.EnableCORS = true
+			cfg.CORSOrigins = tc.origins
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected error for origins %q", tc.origins)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrPart) {
+				t.Errorf("expected error to contain %q, got %v", tc.wantErrPart, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_AcceptsWildcardCORSOrigin(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ServiceName = "test"
+	cfg.ServiceVersion = "1.0.0"
+	cfg.Environment = "dev"
+	cfg.EnableCORS = true
+	cfg.CORSOrigins = "*"
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error for wildcard origin, got %v", err)
 	}
 }

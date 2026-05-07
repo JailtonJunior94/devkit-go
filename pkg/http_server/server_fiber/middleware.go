@@ -1,18 +1,19 @@
 package serverfiber
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 	otelobs "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
+	fibermwtimeout "github.com/gofiber/fiber/v2/middleware/timeout"
 )
+
+const requestIDLocalKey = "requestID"
 
 // recoverMiddleware recovers from panics and logs detailed error information.
 // It captures the stack trace and logs it via observability for debugging.
@@ -31,30 +32,34 @@ func recoverMiddleware(o11y observability.Observability) fiber.Handler {
 					observability.Any("panic", r),
 				}
 
-				if requestID, ok := c.Locals("requestID").(string); ok {
+				if requestID, ok := c.Locals(requestIDLocalKey).(string); ok {
 					fields = append(fields, observability.String("request_id", requestID))
 				}
 
 				o11y.Logger().Error(c.UserContext(), "recovered from panic in HTTP handler", fields...)
 
-				// Check if response was already sent (status code != 0 means headers sent)
-				// In Fiber, if status is 0, headers haven't been sent yet
-				if c.Response().StatusCode() == 0 {
-					_ = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-						"code":    fiber.StatusInternalServerError,
-						"message": "Internal Server Error",
-					})
-				} else {
-					// Headers already sent, cannot send error response
-					var reqID string
-					if rid, ok := c.Locals("requestID").(string); ok {
-						reqID = rid
-					}
-					o11y.Logger().Warn(c.UserContext(),
-						"cannot send panic error response: headers already sent",
-						observability.String("request_id", reqID),
-					)
+				requestID, _ := c.Locals(requestIDLocalKey).(string)
+				problem := common.ProblemDetail{
+					Type:      "https://httpstatuses.com/500",
+					Title:     common.GetStatusText(fiber.StatusInternalServerError),
+					Status:    fiber.StatusInternalServerError,
+					Detail:    "Internal server error",
+					Instance:  c.Path(),
+					Timestamp: time.Now().UTC(),
+					RequestID: requestID,
 				}
+
+				// Fiber buffers the full response before sending, so it is always safe to
+				// overwrite status and body here even if the handler wrote a partial response
+				// before panicking.
+				body, err := json.Marshal(problem)
+				if err != nil {
+					_ = c.Status(fiber.StatusInternalServerError).SendString("internal server error")
+					return
+				}
+				c.Status(fiber.StatusInternalServerError)
+				c.Set(fiber.HeaderContentType, problemContentType)
+				_ = c.Send(body)
 			}
 		}()
 
@@ -62,16 +67,28 @@ func recoverMiddleware(o11y observability.Observability) fiber.Handler {
 	}
 }
 
-func requestIDMiddleware() fiber.Handler {
+// requestIDMiddleware validates an inbound X-Request-ID via common.ValidateRequestID.
+// Invalid non-empty values are replaced with a freshly generated id and a warn log
+// is emitted with metadata only — the raw value is never echoed in the log payload
+// or in the response, preventing log injection and information leakage.
+func requestIDMiddleware(o11y observability.Observability) fiber.Handler {
+	logger := o11y.Logger()
 	return func(c *fiber.Ctx) error {
-		requestID := c.Get("X-Request-ID")
-
-		if requestID == "" {
-			requestID = uuid.New().String()
+		raw := c.Get(common.HeaderRequestID)
+		id, ok := common.ValidateRequestID(raw)
+		if !ok {
+			if raw != "" {
+				logger.Warn(c.UserContext(), "invalid X-Request-ID rejected",
+					observability.Int("raw_length", len(raw)),
+					observability.String("remote_addr", c.IP()),
+					observability.String("path", c.Path()),
+					observability.String("method", c.Method()),
+				)
+			}
+			id = common.NewRequestID()
 		}
-
-		c.Locals("requestID", requestID)
-		c.Set("X-Request-ID", requestID)
+		c.Locals(requestIDLocalKey, id)
+		c.Set(common.HeaderRequestID, id)
 
 		return c.Next()
 	}
@@ -79,6 +96,10 @@ func requestIDMiddleware() fiber.Handler {
 
 type httpHookProvider interface {
 	HTTP() otelobs.HTTPInstrumentation
+}
+
+type routePatternSetter interface {
+	SetRoute(string)
 }
 
 func observabilityMiddleware(o11y observability.Observability) fiber.Handler {
@@ -90,10 +111,10 @@ func observabilityMiddleware(o11y observability.Observability) fiber.Handler {
 	}
 
 	return func(c *fiber.Ctx) error {
-		requestID, _ := c.Locals("requestID").(string)
+		requestID, _ := c.Locals(requestIDLocalKey).(string)
 		ctx, scope := hook.StartRequest(c.UserContext(), otelobs.HTTPRequest{
 			Method:        c.Method(),
-			Route:         fiberRoutePattern(c),
+			Route:         matchedFiberRoutePattern(c),
 			Target:        c.Path(),
 			RemoteAddr:    c.IP(),
 			UserAgent:     c.Get("User-Agent"),
@@ -105,7 +126,12 @@ func observabilityMiddleware(o11y observability.Observability) fiber.Handler {
 			return c.Next()
 		}
 
-		defer finishFiberObservedRequest(scope, c)
+		defer func() {
+			if setter, ok := scope.(routePatternSetter); ok {
+				setter.SetRoute(fiberRoutePattern(c))
+			}
+			finishFiberObservedRequest(scope, c)
+		}()
 
 		err := c.Next()
 		if err != nil {
@@ -124,11 +150,47 @@ func httpInstrumentation(o11y observability.Observability) otelobs.HTTPInstrumen
 	return provider.HTTP()
 }
 
-func fiberRoutePattern(c *fiber.Ctx) string {
-	if route := c.Route(); route != nil && route.Path != "" && route.Path != "/" {
-		return route.Path
+func matchedFiberRoutePattern(c *fiber.Ctx) string {
+	if c == nil || c.App() == nil {
+		return "unmatched"
 	}
-	return lowCardinalityRoute(c.Path())
+
+	method := c.Method()
+	path := c.Path()
+	cfg := c.App().Config()
+	for _, registered := range c.App().GetRoutes(true) {
+		if registered.Method != method {
+			continue
+		}
+		if fiber.RoutePatternMatch(path, registered.Path, cfg) {
+			return registered.Path
+		}
+	}
+
+	return "unmatched"
+}
+
+// fiberRoutePattern returns the matched route's registered pattern (for example
+// "/users/:id"). It returns "unmatched" when no concrete handler route was
+// matched, which keeps the metric label cardinality bounded.
+//
+// fiber rewrites Route.Method on Use middlewares to the actual HTTP method,
+// and c.Route() falls back to a synthetic Route with empty Handlers when no
+// layer matched. Distinguishing a real handler match from an active Use layer
+// therefore requires consulting the registered route table (filtered to skip
+// Use middlewares).
+func fiberRoutePattern(c *fiber.Ctx) string {
+	route := c.Route()
+	if route == nil || route.Path == "" || len(route.Handlers) == 0 {
+		return "unmatched"
+	}
+	method, path := route.Method, route.Path
+	for _, registered := range c.App().GetRoutes(true) {
+		if registered.Method == method && registered.Path == path {
+			return path
+		}
+	}
+	return "unmatched"
 }
 
 func fiberStatusCode(c *fiber.Ctx, err error) int {
@@ -136,12 +198,21 @@ func fiberStatusCode(c *fiber.Ctx, err error) int {
 		return statusCode
 	}
 	if err != nil {
-		if fiberErr, ok := err.(*fiber.Error); ok {
+		var fiberErr *fiber.Error
+		if asFiber(err, &fiberErr) {
 			return fiberErr.Code
 		}
 		return fiber.StatusInternalServerError
 	}
 	return c.Response().StatusCode()
+}
+
+func asFiber(err error, target **fiber.Error) bool {
+	if e, ok := err.(*fiber.Error); ok {
+		*target = e
+		return true
+	}
+	return false
 }
 
 type observedStatusCodeKey struct{}
@@ -162,102 +233,25 @@ func finishFiberObservedRequest(scope otelobs.HTTPRequestScope, c *fiber.Ctx) {
 	})
 }
 
-func lowCardinalityRoute(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || path == "/" {
-		return path
+// makeTimeoutHandler wraps next with the official fiber timeout middleware
+// (fibermwtimeout.NewWithContext). When d <= 0, next is returned unwrapped
+// to keep the zero-cost path explicit.
+//
+// The official middleware applies context.WithTimeout to c.UserContext() and
+// maps a context.DeadlineExceeded returned by the handler chain to
+// fiber.ErrRequestTimeout. It does NOT spawn a goroutine to run the handler,
+// so the previous bug of touching *fiber.Ctx after recycling is gone.
+//
+// Trade-off intentionally accepted (PRD spec-version 7 / ADR-002):
+// NewWithContext does NOT interrupt a handler that ignores ctx.Done(); a
+// hung handler keeps the response goroutine blocked until the *fiber.App
+// WriteTimeout fires. Handlers are expected to honor c.UserContext() done
+// signals; the server-level WriteTimeout is the last-resort guard.
+func makeTimeoutHandler(d time.Duration, next fiber.Handler) fiber.Handler {
+	if d <= 0 {
+		return next
 	}
-
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		if numericPathSegment(segment) {
-			segments[i] = "{param}"
-		}
-	}
-	return strings.Join(segments, "/")
-}
-
-func numericPathSegment(segment string) bool {
-	if segment == "" {
-		return false
-	}
-	for _, char := range segment {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// timeoutMiddleware applies request timeout with proper cleanup.
-// IMPORTANT: Handlers MUST respect context cancellation to prevent goroutine leaks.
-// When ctx.Done() is signaled, handlers should stop processing immediately.
-func timeoutMiddleware(globalTimeout time.Duration, routeTimeouts map[string]time.Duration) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		timeout := globalTimeout
-		if routeTimeouts != nil {
-			if routeTimeout, ok := routeTimeouts[c.Path()]; ok {
-				timeout = routeTimeout
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(c.UserContext(), timeout)
-		defer cancel()
-
-		// Set context with timeout so handlers can check ctx.Done()
-		c.SetUserContext(ctx)
-
-		type result struct {
-			err error
-		}
-
-		// Buffered channel prevents goroutine leak if we timeout before handler finishes
-		resultChan := make(chan result, 1)
-
-		go func() {
-			defer func() {
-				// Recover any panics from the handler
-				if recovered := recover(); recovered != nil {
-					// Re-panic will be caught by the outer recover middleware
-					panic(recovered)
-				}
-			}()
-
-			err := c.Next()
-			// Non-blocking send (due to buffered channel)
-			select {
-			case resultChan <- result{err: err}:
-				// Result sent successfully
-			case <-ctx.Done():
-				// Context cancelled, don't block
-			}
-		}()
-
-		select {
-		case res := <-resultChan:
-			// Handler completed within timeout
-			return res.err
-		case <-ctx.Done():
-			// Timeout exceeded - context cancellation signals handler to stop
-
-			// CRITICAL: Wait a short time for goroutine cleanup
-			// This gives the handler time to respect context cancellation
-			// Most well-behaved handlers will stop within 100ms
-			cleanupTimer := time.NewTimer(100 * time.Millisecond)
-			defer cleanupTimer.Stop()
-
-			select {
-			case <-resultChan:
-				// Handler finished cleanup successfully
-			case <-cleanupTimer.C:
-				// Handler didn't respect context cancellation
-				// This is a handler bug, but we can't do much more
-			}
-
-			// Return timeout error to client
-			return fiber.NewError(fiber.StatusRequestTimeout, "request timeout exceeded")
-		}
-	}
+	return fibermwtimeout.NewWithContext(next, d)
 }
 
 // securityHeadersMiddleware adds comprehensive security headers to responses.
@@ -277,32 +271,36 @@ func securityHeadersMiddleware() fiber.Handler {
 	}
 }
 
+// corsMiddleware enforces a fail-closed CORS policy using the shared helpers in
+// pkg/http_server/common (single source of truth across adapters). origins is a
+// comma-separated value or "*". An invalid configuration is a programmer error;
+// we panic during setup (fail-fast) so misconfigurations cannot silently fall
+// through to a permissive runtime. Server.New runs Config.Validate before this
+// middleware is constructed, so reaching the panic here means an internal
+// bypass of validation and must surface immediately. Mirrors chi_server's
+// corsMiddleware behavior for cross-adapter parity.
 func corsMiddleware(origins string) fiber.Handler {
-	// Parse allowed origins
-	allowedOrigins := parseOrigins(origins)
+	allowedOrigins, err := common.ParseOrigins(origins)
+	if err != nil {
+		panic(fmt.Sprintf("invalid CORS configuration: %v", err))
+	}
 
 	return func(c *fiber.Ctx) error {
 		origin := c.Get("Origin")
 
-		// If no Origin header, skip CORS
 		if origin == "" {
 			return c.Next()
 		}
 
-		// Validate if origin is allowed
-		if !isOriginAllowed(origin, allowedOrigins) {
+		if !common.IsOriginAllowed(origin, allowedOrigins) {
 			return fiber.NewError(fiber.StatusForbidden, "origin not allowed")
 		}
 
-		// SECURITY: Never use wildcard (*) with credentials
-		// If wildcard is needed, it must be set explicitly and credentials disabled
+		// SECURITY: Never use wildcard (*) with credentials.
 		if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
 			c.Set("Access-Control-Allow-Origin", "*")
-			// Do NOT set Access-Control-Allow-Credentials with wildcard
 		} else {
-			// Set specific origin (not wildcard)
 			c.Set("Access-Control-Allow-Origin", origin)
-			// Credentials can be allowed with specific origins
 			c.Set("Access-Control-Allow-Credentials", "true")
 		}
 
@@ -316,96 +314,4 @@ func corsMiddleware(origins string) fiber.Handler {
 
 		return c.Next()
 	}
-}
-
-// parseOrigins splits comma-separated origins.
-func parseOrigins(origins string) []string {
-	if origins == "" {
-		return []string{}
-	}
-
-	// Handle wildcard
-	if origins == "*" {
-		return []string{"*"}
-	}
-
-	// Split by comma and trim spaces
-	var result []string
-	for _, origin := range splitAndTrim(origins, ",") {
-		if origin != "" {
-			result = append(result, origin)
-		}
-	}
-
-	return result
-}
-
-// isOriginAllowed checks if the origin is in the allowed list.
-func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	if len(allowedOrigins) == 0 {
-		return false
-	}
-
-	// Check for wildcard
-	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-		return true
-	}
-
-	// Check exact match
-	for _, allowed := range allowedOrigins {
-		if origin == allowed {
-			return true
-		}
-	}
-
-	return false
-}
-
-// splitAndTrim splits a string by delimiter and trims each part.
-func splitAndTrim(s, sep string) []string {
-	parts := []string{}
-	for _, part := range splitString(s, sep) {
-		trimmed := trimSpace(part)
-		if trimmed != "" {
-			parts = append(parts, trimmed)
-		}
-	}
-	return parts
-}
-
-func splitString(s, sep string) []string {
-	if s == "" {
-		return []string{}
-	}
-
-	var result []string
-	current := ""
-
-	for i := 0; i < len(s); i++ {
-		if i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
-			result = append(result, current)
-			current = ""
-			i += len(sep) - 1
-		} else {
-			current += string(s[i])
-		}
-	}
-
-	result = append(result, current)
-	return result
-}
-
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-
-	return s[start:end]
 }

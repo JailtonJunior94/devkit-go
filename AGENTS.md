@@ -21,7 +21,7 @@ Isso significa:
 ### Evidências
 
 - `go.mod` único na raiz.
-- `pkg/` concentra componentes independentes por capacidade: `observability`, `database`, `messaging`, `httpserver`, `http_server`, `vos`, `events`, `migration`.
+- `pkg/` concentra componentes independentes por capacidade: `observability`, `database`, `messaging`, `http_server`, `vos`, `events`, `migration`.
 - Não há `go.work`, múltiplos `go.mod`, `apps/`, `services/` ou `cmd/` de aplicações independentes.
 - O `README.md` descreve o projeto como uma coleção de pacotes Go reutilizáveis.
 
@@ -68,7 +68,6 @@ Não tratar este repositório como Clean Architecture global em `internal/{modul
 │   ├── database/                # DBTX + postgres/uow/otelsql
 │   ├── messaging/               # contratos + kafka/rabbitmq
 │   ├── http_server/             # adapters HTTP Chi/Fiber + shared common
-│   ├── httpserver/              # servidor HTTP Chi-based alternativo
 │   ├── httpclient/              # cliente HTTP observável
 │   ├── migration/               # migrações
 │   ├── events/                  # eventos in-process
@@ -95,7 +94,7 @@ Fluxos principais:
 - `pkg/observability` -> base para `pkg/httpclient`, `pkg/http_server/*`, `pkg/messaging/rabbitmq`, `pkg/observability/otel`, `pkg/observability/noop`, `pkg/observability/fake`
 - `pkg/database` -> base para `pkg/database/uow`
 - `pkg/messaging` -> base para `pkg/messaging/kafka`
-- `pkg/vos` -> shared kernel leve para `pkg/entity`, `pkg/logger`, `pkg/httpserver`
+- `pkg/vos` -> shared kernel leve para `pkg/entity`, `pkg/logger`
 - `pkg/http_server/common` -> base compartilhada para `pkg/http_server/chi_server` e `pkg/http_server/server_fiber`
 
 Regras de dependência:
@@ -132,7 +131,7 @@ Regras de dependência:
 3. Ao editar `pkg/`, preserve a API pública do pacote salvo quando a mudança declarar explicitamente quebra ou evolução contratual.
 4. Antes de criar um novo pacote de topo em `pkg/`, verifique se a mudança cabe em um componente existente.
 5. Ao adicionar dependência entre componentes de `pkg/`, explicite por que a direção é necessária e verifique risco de acoplamento indevido.
-6. `pkg/httpserver` e `pkg/http_server` coexistem no repositório; antes de alterar ou expandir comportamento HTTP, confirme em qual dos dois componentes a mudança deve viver.
+6. `pkg/http_server` é o único componente HTTP do toolkit; alterações de comportamento HTTP devem viver nele.
 7. Infraestrutura local em `deployment/` e `docker-compose.yml` serve a desenvolvimento, observabilidade e testes; não trate esses diretórios como boundary de aplicação.
 
 ## Contrato de carga base

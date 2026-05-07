@@ -1,201 +1,139 @@
-# DevKit Go - Observabilidade
+# Observability Toolkit
 
-Uma camada de observabilidade unificada para aplicações Go, fornecendo logs estruturados de alta performance, métricas e rastreamento (tracing) com integração nativa ao OpenTelemetry.
+![devkit-go banner](https://raw.githubusercontent.com/JailtonJunior94/devkit-go/main/assets/banner.png)
 
-## Objetivo
+O `pkg/observability` é o coração da telemetria no `devkit-go`. Ele fornece uma interface unificada para **Logs Estruturados**, **Métricas** e **Distributed Tracing**, integrada nativamente com o ecossistema OpenTelemetry (OTel).
 
-O pacote `observability` fornece uma interface padronizada para coleta de telemetria em microserviços. Foi projetado para alta performance, utilizando técnicas como campos com união discriminada para evitar alocações de memória (boxing) em caminhos críticos (hot paths).
+## Índice
 
-## Principais Recursos
+- [Segurança](#segurança)
+- [Contexto](#contexto)
+- [Instalação](#instalação)
+- [Uso](#uso)
+    - [Inicializando o Provider](#inicializando-o-provider)
+    - [Tracer (Tracing)](#tracer-tracing)
+    - [Logger (Logging Estruturado)](#logger-logging-estruturado)
+    - [Metrics (Métricas)](#metrics-métricas)
+- [Configuração](#configuração)
+    - [Segurança e Compliance](#segurança-e-compliance)
+- [Performance](#performance)
+- [API](#api)
+- [Contribuição](#contribuição)
+- [Licença](#licença)
 
-- **Alta Performance**: Campos com alocação zero para tipos comuns (string, int, bool, etc.).
-- **Nativo OpenTelemetry**: Exportadores OTLP integrados para gRPC e HTTP.
-- **API Unificada**: Configuração única para Logger, Tracer e Metrics.
-- **Foco em Contexto**: Suporte nativo ao `context.Context` do Go para propagação de rastreamento.
-- **Agnóstico a Framework**: Fácil de integrar com qualquer framework HTTP ou biblioteca de mensageria.
+## Segurança
 
----
+Este pacote impõe regras rigorosas para proteção de dados e integridade do sistema (R-SEC-001):
+- **TLS Obrigatório em Produção**: Conexões inseguras (`Insecure: true`) são bloqueadas se o ambiente for detectado como `production` ou `prod`.
+- **Sanitização de PII**: Opcionalmente permite o redaction de campos sensíveis (senhas, tokens) e truncamento de valores excessivamente longos.
+- **TLS Mínimo 1.2**: Se um `TLSConfig` customizado for fornecido, a versão mínima de TLS permitida é 1.2.
 
-## Início Rápido
+## Contexto
 
-### 1. Inicializar o Provider
+A observabilidade moderna exige correlação entre logs, métricas e traces. Este toolkit abstrai a complexidade do OpenTelemetry SDK, oferecendo uma API simplificada que garante que todas as telemetrias compartilhem o mesmo contexto de recurso (Resource Attributes) e propagação de contexto.
+
+## Instalação
+
+```bash
+go get github.com/JailtonJunior94/devkit-go/pkg/observability
+```
+
+## Uso
+
+### Inicializando o Provider
+
+O `Provider` é o ponto de entrada principal que configura os exportadores OTLP (gRPC ou HTTP).
 
 ```go
 import (
-    "context"
-    "log"
-    "github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
+	"context"
+	"github.com/JailtonJunior94/devkit-go/pkg/observability/otel"
 )
 
 func main() {
-    ctx := context.Background()
+	ctx := context.Background()
+	cfg := otel.DefaultConfig("meu-servico")
+	cfg.OTLPEndpoint = "otel-collector:4317"
+	cfg.Environment = "production"
 
-    // 1. Configurar o provider
-    config := otel.DefaultConfig("meu-servico")
-    config.OTLPEndpoint = "localhost:4317"
-    config.Environment = "production"
-
-    // 2. Criar o provider
-    provider, err := otel.NewProvider(ctx, config)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // 3. Garantir o shutdown gracioso
-    defer func() {
-        if err := provider.Shutdown(context.Background()); err != nil {
-            log.Printf("falha ao desligar observabilidade: %v", err)
-        }
-    }()
-
-    // 4. Obter as ferramentas
-    logger := provider.Logger()
-    tracer := provider.Tracer()
-    metrics := provider.Metrics()
+	provider, err := otel.NewProvider(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer provider.Shutdown(ctx)
+	
+	// Use provider.Logger(), provider.Tracer(), provider.Metrics()
 }
 ```
 
----
+### Tracer (Tracing)
 
-## 🪵 Logger (Logs Estruturados)
-
-O logger utiliza uma abordagem estruturada com campos tipados para maximizar a performance.
-
-### Uso
+Inicie spans para rastrear a execução de funções e chamadas remotas.
 
 ```go
-import "github.com/JailtonJunior94/devkit-go/pkg/observability"
+tracer := provider.Tracer()
+ctx, span := tracer.Start(ctx, "processar-pedido", observability.WithAttributes(
+	observability.String("pedido.id", "123"),
+))
+defer span.End()
 
-// Log com campos tipados
-logger.Info(ctx, "usuário autenticado", 
-    observability.String("user_id", "123"),
-    observability.Int("attempt", 1),
+// ... lógica de negócio
+```
+
+### Logger (Logging Estruturado)
+
+Logs ricos em contexto e com alta performance.
+
+```go
+logger := provider.Logger()
+logger.Info(ctx, "pedido processado com sucesso",
+	observability.String("pedido.id", "123"),
+	observability.Float64("pedido.valor", 99.90),
 )
-
-// Criar um logger com campos persistentes (contexto)
-childLogger := logger.With(observability.String("component", "auth"))
-childLogger.Debug(ctx, "processando login")
 ```
 
-### Melhores Práticas
-- **Use Campos Tipados**: Prefira `observability.String()`, `observability.Int()`, etc., em vez de `observability.Any()` para evitar o "boxing" de interfaces e alocações desnecessárias.
-- **Contexto é Obrigatório**: Sempre passe o `context.Context` para vincular os logs aos traces ativos.
-- **Evite ConsoleLog em Produção**: A opção `ConsoleLog: true` utiliza travas síncronas que podem impactar a performance. Use apenas para desenvolvimento local.
+### Metrics (Métricas)
 
----
-
-## 📊 Métricas
-
-Suporta os instrumentos padrão do OpenTelemetry: Counters, Histograms e Gauges.
-
-### Uso
+Colete indicadores chave de performance (KPIs).
 
 ```go
-// 1. Criar instrumentos
-requestCounter := metrics.Counter("http_requests_total", "Total de requisições", "{request}")
-durationHistogram := metrics.Histogram("request_duration", "Latência da requisição", "s")
-
-// 2. Registrar dados
-requestCounter.Increment(ctx, observability.String("method", "GET"))
-durationHistogram.Record(ctx, 0.45, observability.String("method", "GET"))
+metrics := provider.Metrics()
+counter := metrics.Counter("pedidos_total", "Total de pedidos processados", "1")
+counter.Increment(ctx, observability.String("status", "sucesso"))
 ```
 
----
+## Configuração
 
-## 🔍 Tracing (Rastreamento)
+| Campo | Descrição | Padrão |
+|-------|-----------|---------|
+| `ServiceName` | Nome do serviço | Obrigatório |
+| `OTLPEndpoint`| Endereço do Collector | `localhost:4317` |
+| `OTLPProtocol`| Protocolo (`grpc` ou `http`) | `grpc` |
+| `Insecure`    | Permite conexão sem TLS (não em prod) | `false` |
+| `TraceSampleRate`| Taxa de amostragem (0.0 a 1.0) | `1.0` |
+| `ConsoleLog`  | Escreve JSON no stdout (apenas dev) | `false` |
+| `MetricExportInterval` | Intervalo de exportação (segundos) | `60` |
 
-API de rastreamento simplificada construída sobre o OpenTelemetry.
+### Segurança e Compliance
 
-### Uso
+Para garantir a conformidade com padrões de segurança, o toolkit valida o `TLSConfig`. Recomenda-se o uso de gRPC (porta 4317) para melhor performance em redes internas.
 
-```go
-// Iniciar um novo span
-ctx, span := tracer.Start(ctx, "ProcessarPedido")
-defer span.End()
+## Performance
 
-// Adicionar atributos/eventos
-span.SetAttributes(observability.String("order_id", "ABC"))
-span.AddEvent("validacao_concluida")
+O toolkit utiliza um sistema de **Fields com Union Discriminada**. Isso significa que para os tipos mais comuns (`string`, `int`, `int64`, `float64`, `bool`), não há alocação na heap (boxing de interface{}), reduzindo drasticamente a pressão no Garbage Collector em caminhos críticos (hot paths).
 
-if err := validateOrder(); err != nil {
-    span.RecordError(err)
-    span.SetStatus(observability.StatusCodeError, err.Error())
-}
-```
+## API
 
----
+A interface `Observability` fornece acesso aos três pilares:
+- `Tracer()`: Interface para gestão de spans.
+- `Logger()`: Interface para logs estruturados com suporte a níveis (Debug, Info, Warn, Error).
+- `Metrics()`: Interface para criação de instrumentos (Counters, Gauges, Histograms).
+- `Shutdown(ctx)`: Garante o flush de todos os dados pendentes antes da aplicação encerrar.
 
-## 🌐 Microserviços HTTP
+## Contribuição
 
-Para manter o rastreamento em chamadas HTTP, utilize a `HTTPInstrumentation` integrada.
+Contribuições são bem-vindas! Certifique-se de que novos recursos incluam testes de validação e sigam os padrões de performance estabelecidos.
 
-### Requisições de Entrada (Servidor)
+## Licença
 
-Envolva seus handlers usando a instrumentação para extrair automaticamente o contexto do trace e registrar métricas HTTP.
-
-```go
-instr := provider.HTTP()
-
-// Dentro do seu middleware ou handler:
-req := otel.HTTPRequest{
-    Method: r.Method,
-    Route:  "/users/:id",
-    Target: r.URL.Path,
-}
-
-ctx, scope := instr.StartRequest(r.Context(), req)
-defer scope.Finish(otel.HTTPResponse{StatusCode: 200})
-
-// Continue com a lógica usando o contexto atualizado
-logger.Info(ctx, "processando requisição") 
-```
-
----
-
-## 📩 Mensageria (Propagação de Contexto)
-
-Para sistemas de mensageria (Kafka, RabbitMQ, etc.), você deve realizar a **Injeção** e **Extração** do contexto manualmente.
-
-### Produtor (Injetar)
-
-```go
-// Criar um transportador (ex: baseado em mapa de headers)
-carrier := make(otel.TextMapCarrier)
-
-// Injetar o contexto atual no carrier
-provider.Inject(ctx, carrier)
-
-// Envie os headers do carrier junto com sua mensagem
-// ex: kafkaMsg.Headers = carrierToKafkaHeaders(carrier)
-```
-
-### Consumidor (Extrair)
-
-```go
-// Extrair os headers da mensagem recebida para um carrier
-carrier := otel.TextMapCarrier(headersExtraidos)
-
-// Extrair o contexto do carrier
-ctx, correlation := provider.Extract(ctx, carrier)
-
-// Use o novo contexto para todas as operações subsequentes
-ctx, span := tracer.Start(ctx, "processar_mensagem")
-defer span.End()
-```
-
----
-
-## 🛠 Melhores Práticas e Recomendações
-
-1. **Shutdown Gracioso**: Sempre chame `provider.Shutdown(ctx)` quando a aplicação for encerrada para garantir que todos os spans e métricas pendentes sejam enviados ao coletor.
-2. **Tipo de Span**: Ao iniciar spans, use `WithSpanKind(observability.SpanKindClient)` para chamadas externas e `SpanKindServer` para fluxos de entrada.
-3. **Tratamento de Erros**: Use `span.RecordError(err)` para garantir que exceções sejam rastreadas corretamente em seu backend (ex: Jaeger, Tempo).
-4. **Cardinalidade de Atributos**: Evite usar valores de alta cardinalidade (como IDs de usuários ou e-mails) como **Labels de Métricas**. Use-os em **Campos de Log** ou **Atributos de Trace**.
-5. **Sanitização**: Ative `config.Sanitize = true` se seus logs puderem conter dados sensíveis (PII), ciente do pequeno impacto na performance.
-
----
-
-## Documentação Relacionada
-
-- [Documentação OpenTelemetry Go](https://opentelemetry.io/docs/instrumentation/go/)
-- [Especificação OTLP](https://opentelemetry.io/docs/specs/otlp/)
+[MIT](LICENSE)

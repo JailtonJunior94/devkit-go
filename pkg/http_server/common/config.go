@@ -14,9 +14,10 @@ type Config struct {
 	Address string
 
 	// Timeout configuration
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	ShutdownTimeout time.Duration
 
 	// Security configuration
 	BodyLimit int // Maximum request body size in bytes
@@ -46,6 +47,7 @@ func DefaultConfig() Config {
 		ReadTimeout:        30 * time.Second,
 		WriteTimeout:       30 * time.Second,
 		IdleTimeout:        120 * time.Second,
+		ShutdownTimeout:    30 * time.Second,
 		BodyLimit:          4 * 1024 * 1024, // 4MB
 		ServiceName:        "unknown-service",
 		ServiceVersion:     "unknown",
@@ -86,12 +88,21 @@ func (c Config) Validate() error {
 		return fmt.Errorf("idle timeout must be positive, got %v", c.IdleTimeout)
 	}
 
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("shutdown timeout must be positive, got %v", c.ShutdownTimeout)
+	}
+
 	if c.BodyLimit <= 0 {
 		return fmt.Errorf("body limit must be positive, got %d", c.BodyLimit)
 	}
 
-	if c.EnableCORS && strings.TrimSpace(c.CORSOrigins) == "" {
-		return errors.New("CORS origins are required when CORS is enabled")
+	if c.EnableCORS {
+		if strings.TrimSpace(c.CORSOrigins) == "" {
+			return errors.New("CORS origins are required when CORS is enabled")
+		}
+		if _, err := ParseOrigins(c.CORSOrigins); err != nil {
+			return fmt.Errorf("invalid CORS origins: %w", err)
+		}
 	}
 
 	return nil

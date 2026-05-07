@@ -43,7 +43,7 @@ func New(o11y observability.Observability, opts ...Option) (*Server, error) {
 
 	errorHandler := srv.customErrorHandler
 	if errorHandler == nil {
-		errorHandler = defaultErrorHandler
+		errorHandler = defaultErrorHandler(o11y)
 	}
 
 	// SECURITY: BodyLimit is enforced natively by Fiber
@@ -84,7 +84,7 @@ func (s *Server) registerMiddlewares() {
 	s.app.Use(recoverMiddleware(s.observability))
 
 	// 2. Request ID middleware - must run before observability to propagate request IDs
-	s.app.Use(requestIDMiddleware())
+	s.app.Use(requestIDMiddleware(s.observability))
 
 	// 3. Shared HTTP observability - tracing and metrics are delegated to the runtime hook
 	if s.config.EnableTracing || s.config.EnableOTelMetrics {
@@ -96,9 +96,16 @@ func (s *Server) registerMiddlewares() {
 		)
 	}
 
-	// 4. Timeout middleware - enforce request timeouts
+	// 4. Global timeout middleware via the official fiber middleware/timeout.
+	// Applies cfg.ReadTimeout to the entire chain as a fallback for routes
+	// registered directly through *fiber.App (e.g., RegisterRouters). Routes
+	// registered via Server.RegisterHandler get an additional inner wrap with
+	// a per-route timeout when WithRouteTimeout was set; the inner shorter
+	// deadline derives from the outer ctx and fires first as expected.
 	if s.config.ReadTimeout > 0 {
-		s.app.Use(timeoutMiddleware(s.config.ReadTimeout, s.routeTimeouts))
+		s.app.Use(makeTimeoutHandler(s.config.ReadTimeout, func(c *fiber.Ctx) error {
+			return c.Next()
+		}))
 	}
 
 	// 5. Security headers middleware
@@ -125,6 +132,26 @@ func (s *Server) RegisterRouters(routers ...Router) *Server {
 
 	s.observability.Logger().Info(context.Background(), "routers registered", observability.Int("count", len(routers)))
 
+	return s
+}
+
+// RegisterHandler installs handler at method+path. When WithRouteTimeout(path, d)
+// was applied before this call, the handler is wrapped with
+// makeTimeoutHandler(d, handler) so that route gets the shorter per-route
+// deadline. Otherwise no inner wrap is applied: the global timeout middleware
+// already installed in registerMiddlewares (when cfg.ReadTimeout > 0) covers
+// the route, and double-wrapping with the same ReadTimeout would only churn
+// context derivations without changing semantics.
+//
+// The official fiber timeout middleware does NOT interrupt a hung handler
+// (see makeTimeoutHandler godoc): handlers must honor c.UserContext().Done()
+// to surface a 408. cfg.WriteTimeout on *fiber.App is the last-resort guard
+// for handlers that ignore cancellation.
+func (s *Server) RegisterHandler(method, path string, handler fiber.Handler) *Server {
+	if rt, ok := s.routeTimeouts[path]; ok {
+		handler = makeTimeoutHandler(rt, handler)
+	}
+	s.app.Add(method, path, handler)
 	return s
 }
 

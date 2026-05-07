@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/http_server/common"
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -44,7 +43,11 @@ func (s *Server) Start(ctx context.Context) error {
 			observability.String("signal", sig.String()))
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	parent := ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	shutdownCtx, cancel := context.WithTimeout(parent, s.config.ShutdownTimeout)
 	defer cancel()
 
 	return s.Shutdown(shutdownCtx)
