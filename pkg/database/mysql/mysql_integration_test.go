@@ -34,7 +34,10 @@ func setupMySQL(t *testing.T) manager.Manager {
 			"MYSQL_PASSWORD":      "test",
 			"MYSQL_DATABASE":      "testdb",
 		},
-		WaitingFor: wait.ForListeningPort("3306/tcp").WithStartupTimeout(90 * time.Second),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("3306/tcp"),
+			wait.ForLog("port: 3306  MySQL Community Server"),
+		).WithDeadline(90 * time.Second),
 	}
 
 	container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Corrigido
+
+- Testes de integração de `pkg/database/migration`, `pkg/database/mysql`, `pkg/database/manager` e `pkg/database/uow` substituíram `wait.ForListeningPort` por `wait.ForAll(port + log)` para aguardar a prontidão real do banco antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria, mas PostgreSQL e MySQL ainda estavam inicializando, causando falhas intermitentes (`connection reset by peer`, `invalid connection`).
+
 ### Adicionado
 
 - `pkg/http_server/chi_server`: tipos `Handler` / `ErrorHandler` / `Middleware` + `Server.RegisterHandler(method, path, handler, mws...)` para handlers que retornam `error`; `adaptHandler` armazena o path da requisição no contexto para que `ErrorHandler` construa o campo `instance` do RFC 7807 sem precisar de `*http.Request`.
