@@ -36,10 +36,9 @@ func setupPostgres(t *testing.T) manager.Manager {
 			"POSTGRES_PASSWORD": "test",
 			"POSTGRES_DB":       "testdb",
 		},
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("5432/tcp"),
-			wait.ForLog("database system is ready to accept connections"),
-		).WithDeadline(60 * time.Second),
+		WaitingFor: wait.ForLog("database system is ready to accept connections").
+			WithOccurrence(2).
+			WithStartupTimeout(60 * time.Second),
 	}
 
 	container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
