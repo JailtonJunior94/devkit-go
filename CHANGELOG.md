@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-05-08
+
 ### Corrigido
 
 - Testes de integração de `pkg/database/migration`, `pkg/database/mysql`, `pkg/database/manager` e `pkg/database/uow` substituíram `wait.ForListeningPort` por `wait.ForAll(port + log)` para aguardar a prontidão real do banco antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria, mas PostgreSQL e MySQL ainda estavam inicializando, causando falhas intermitentes (`connection reset by peer`, `invalid connection`).
@@ -117,6 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `httpserver` package deprecated: usar `pkg/http_server/chi_server` ou `pkg/http_server/server_fiber` (removido em v0.3.0)
 - `pkg/logger`: preferir o logger exposto por `pkg/observability`
 
+[v0.4.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/JailtonJunior94/devkit-go/releases/tag/v0.1.0
