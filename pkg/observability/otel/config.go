@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -62,6 +63,14 @@ type Config struct {
 
 	// PropagationHeaders com zero value usa observability.DefaultPropagationHeaders().
 	PropagationHeaders observability.PropagationHeaders
+
+	// ExtraLogHandlers are composed before the OTLP bridge handler in registration order.
+	// Each handler receives every slog.Record before the base OTLP handler does.
+	ExtraLogHandlers []slog.Handler
+
+	// ExtraSpanProcessors are registered after the default BatchSpanProcessor in
+	// registration order. Each processor's OnEnd is called for every ended span.
+	ExtraSpanProcessors []sdktrace.SpanProcessor
 }
 
 func DefaultConfig(serviceName string) *Config {
@@ -129,9 +138,12 @@ func validateSecurityConfig(config *Config) error {
 	return nil
 }
 
-func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
+func NewProvider(ctx context.Context, config *Config, opts ...Option) (*Provider, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
+	}
+	for _, opt := range opts {
+		opt(config)
 	}
 	if err := validateConfig(config); err != nil {
 		return nil, err
@@ -178,11 +190,16 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 
 	sampler := p.createTraceSampler()
 
-	p.tracerProvider = sdktrace.NewTracerProvider(
+	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sampler),
 		sdktrace.WithBatcher(exporter),
-	)
+	}
+	for _, sp := range p.config.ExtraSpanProcessors {
+		tpOpts = append(tpOpts, sdktrace.WithSpanProcessor(sp))
+	}
+
+	p.tracerProvider = sdktrace.NewTracerProvider(tpOpts...)
 
 	otel.SetTracerProvider(p.tracerProvider)
 	p.runtime.shutdown.register(shutdownStep{

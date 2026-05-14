@@ -93,6 +93,7 @@ func (r *runtime) initializeComponents() {
 		r.provider.loggerProvider,
 		cfg.Sanitize,
 		cfg.ConsoleLog,
+		cfg.ExtraLogHandlers,
 	)
 	r.provider.metrics = newOtelMetrics(
 		r.provider.meterProvider.Meter(cfg.ServiceName),
