@@ -112,6 +112,7 @@ func BenchmarkLoggerInfoNoFields(b *testing.B) {
 		loggerProvider,
 		false,
 		false,
+		nil,
 	)
 	ctx := contextWithBenchTraceAndCorrelation(b)
 
@@ -132,6 +133,7 @@ func BenchmarkLoggerInfoWithFields(b *testing.B) {
 		loggerProvider,
 		false,
 		false,
+		nil,
 	)
 	ctx := contextWithBenchTraceAndCorrelation(b)
 	fields := []observability.Field{

@@ -180,6 +180,7 @@ func TestAppendCorrelationAttrsUsesSpanContext(t *testing.T) {
 		loggerProvider,
 		false,
 		false,
+		nil,
 	)
 
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
@@ -258,6 +259,7 @@ func TestLoggerCorrelationFields(t *testing.T) {
 				loggerProvider,
 				false,
 				false,
+				nil,
 			)
 
 			ctx := ContextWithCorrelation(context.Background(), tt.correlation)

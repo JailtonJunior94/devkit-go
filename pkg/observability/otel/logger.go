@@ -109,9 +109,10 @@ func newOtelLogger(
 	loggerProvider *sdklog.LoggerProvider,
 	sanitize bool,
 	console bool,
+	extraHandlers []slog.Handler,
 ) *otelLogger {
 	return &otelLogger{
-		bridgeLogger:  createBridgeLogger(serviceName, loggerProvider),
+		bridgeLogger:  createBridgeLogger(serviceName, loggerProvider, extraHandlers),
 		consoleLogger: createSlogLogger(level, format, os.Stdout),
 		serviceName:   serviceName,
 		environment:   environment,
@@ -123,10 +124,62 @@ func newOtelLogger(
 	}
 }
 
-func createBridgeLogger(serviceName string, provider *sdklog.LoggerProvider) *slog.Logger {
-	return slog.New(otelslog.NewHandler(serviceName,
-		otelslog.WithLoggerProvider(provider),
-	))
+func createBridgeLogger(serviceName string, provider *sdklog.LoggerProvider, extra []slog.Handler) *slog.Logger {
+	bridge := otelslog.NewHandler(serviceName, otelslog.WithLoggerProvider(provider))
+	if len(extra) == 0 {
+		return slog.New(bridge)
+	}
+	handlers := make([]slog.Handler, 0, len(extra)+1)
+	handlers = append(handlers, extra...)
+	handlers = append(handlers, bridge)
+	return slog.New(newMultiHandler(handlers...))
+}
+
+// multiHandler fans out slog.Records to all registered handlers in order.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func newMultiHandler(handlers ...slog.Handler) *multiHandler {
+	return &multiHandler{handlers: handlers}
+}
+
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var firstErr error
+	for _, h := range m.handlers {
+		if !h.Enabled(ctx, r.Level) {
+			continue
+		}
+		if err := h.Handle(ctx, r); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	out := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		out[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: out}
+}
+
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	out := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		out[i] = h.WithGroup(name)
+	}
+	return &multiHandler{handlers: out}
 }
 
 func createSlogLogger(level observability.LogLevel, format observability.LogFormat, output io.Writer) *slog.Logger {
