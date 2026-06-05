@@ -1,0 +1,4 @@
+status: done
+report_path: .specs/prd-smoke-acp/1.0_execution_report.md
+summary: "CountVowels(s string) int adicionada a pkg/strutil com testes table-driven; RF-01 atendido; review APPROVED."
+timestamp: 2026-05-23T11:46:40Z

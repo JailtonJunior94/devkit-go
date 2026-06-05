@@ -1,5 +1,11 @@
 # Principios de Lifecycle (Cross-Linguagem)
 
+<!-- TL;DR
+Princípios de ciclo de vida cross-linguagem: ordem de inicialização explícita, fail-fast em dependências obrigatórias e graceful shutdown com SIGTERM/SIGINT.
+Keywords: lifecycle, inicialização, shutdown, sigterm, fail-fast, readiness, cross-linguagem
+Load complete when: tarefa envolve startup, shutdown ou ordem de inicialização de serviços em qualquer linguagem.
+-->
+
 ## Inicializacao
 - Ordem explicita: config -> logger -> telemetry -> database -> cache -> messaging -> server.
 - Fail fast se dependencia obrigatoria indisponivel na inicializacao.
@@ -16,7 +22,7 @@
 ## Riscos Universais
 - Shutdown abrupto = 502 no load balancer.
 - Timeout > terminationGracePeriodSeconds = kill forcado.
-- Leak de goroutines/tasks/threads sem cancelamento.
+- Leak de goroutines, tasks ou threads sem cancelamento.
 - Telemetry perdida por falta de flush.
 - Consumer commitando offset de mensagem nao-processada.
 

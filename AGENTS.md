@@ -1,217 +1,220 @@
+<!-- governance-schema: 1.0.0 -->
 # Regras para Agentes de IA
 
-Este diretório centraliza regras para uso com agentes de IA em tarefas reais de análise, alteração e validação de código.
+Este diretorio centraliza regras para uso com agentes de IA em tarefas reais de analise, alteracao e validacao de codigo.
 
 ## Objetivo
 
-Use estas instruções para manter consistência, segurança e qualidade ao trabalhar com código, configuração, validação e evolução de sistemas.
+Use estas instrucoes para manter consistencia, seguranca e qualidade ao trabalhar com codigo, configuracao, validacao e evolucao de sistemas.
 
-## Arquitetura
+## Arquitetura: monolito
 
-### Classificação
+O projeto aparenta ser um monolito unico. A governanca deve privilegiar coesao local, limites de pacote claros e crescimento incremental da estrutura.
 
-O repositório deve ser tratado como **monolito modular orientado a toolkit**.
+Stack detectada: Go.
+Frameworks detectados: Fiber, gRPC.
 
-Isso significa:
+## Estrutura de Pastas
 
-1. Existe um único módulo Go na raiz (`go.mod`) e um pipeline único de validação.
-2. O repositório publica um conjunto de pacotes reutilizáveis sob `pkg/`, não múltiplos serviços independentes.
-3. As fronteiras relevantes são **entre pacotes e componentes reutilizáveis**, não entre deploys ou workspaces.
-
-### Evidências
-
-- `go.mod` único na raiz.
-- `pkg/` concentra componentes independentes por capacidade: `observability`, `database`, `messaging`, `http_server`, `vos`, `events`, `migration`.
-- Não há `go.work`, múltiplos `go.mod`, `apps/`, `services/` ou `cmd/` de aplicações independentes.
-- O `README.md` descreve o projeto como uma coleção de pacotes Go reutilizáveis.
-
-### Padrão arquitetural predominante
-
-O padrão predominante é **package-by-component**, com uso localizado de **ports/adapters** dentro de alguns componentes.
-
-Exemplos:
-
-- `pkg/observability` expõe contratos centrais, enquanto `pkg/observability/otel`, `pkg/observability/noop` e `pkg/observability/fake` são implementações.
-- `pkg/database` expõe a abstração `DBTX`, enquanto `pkg/database/postgres`, `pkg/database/postgres_otelsql` e `pkg/database/uow` a especializam.
-- `pkg/messaging` define contratos base, enquanto `pkg/messaging/kafka` e `pkg/messaging/rabbitmq` implementam adapters concretos.
-- `pkg/http_server/common` concentra configuração e comportamento compartilhado entre `chi_server` e `server_fiber`.
-
-Não tratar este repositório como Clean Architecture global em `internal/{module}`. Essa premissa não descreve a estrutura atual e introduz regras erradas.
-
-## Stack detectada
-
-- Linguagem principal: Go
-- HTTP: Chi e Fiber
-- Observabilidade: OpenTelemetry, Prometheus, Jaeger, Grafana, Loki
-- Banco e persistência: `database/sql`, pgx, otelsql, golang-migrate
-- Mensageria: Kafka e RabbitMQ
-- Logging: Zap
-- Testes: Go test, Testify, Testcontainers
-- Qualidade: golangci-lint, govulncheck, mockery
-- Infra auxiliar: Docker Compose e Terraform
-
-## Mapa das Pastas Mais Importantes
-
-```text
+```
 .
-├── AGENTS.md
-├── .agents/skills/              # skills e referências canônicas
-├── .claude/                     # contexto, regras, commands, agents e hooks para Claude
-├── .codex/config.toml           # metadados de skills para Codex
-├── .github/                     # workflows, agents, skills e instruções do Copilot
-├── deployment/
-│   ├── iac/                     # Terraform
-│   ├── observability/           # collector, Prometheus, Grafana
-│   └── strimzi/                 # manifests Kafka
-├── pkg/
-│   ├── observability/           # contratos + impls OTel/noop/fake
-│   ├── database/                # DBTX + postgres/uow/otelsql
-│   ├── messaging/               # contratos + kafka/rabbitmq
-│   ├── http_server/             # adapters HTTP Chi/Fiber + shared common
-│   ├── httpclient/              # cliente HTTP observável
-│   ├── migration/               # migrações
-│   ├── events/                  # eventos in-process
-│   ├── vos/                     # value objects
-│   ├── entity/                  # base entity
-│   ├── logger/                  # logger abstraído
-│   ├── responses/               # helpers HTTP
-│   ├── encrypt/                 # hashing e segurança
-│   ├── nullable/                # tipos nullable
-│   └── linq/                    # utilitários genéricos
-└── scripts/lib/                 # scripts auxiliares
+.ai_spec_harness.json
+.env
+.github
+.github/agents
+.github/agents/bugfix.agent.md
+.github/agents/prd-writer.agent.md
+.github/agents/project-analyzer.agent.md
+.github/agents/refactorer.agent.md
+.github/agents/reviewer.agent.md
+.github/agents/task-executor.agent.md
+.github/agents/task-planner.agent.md
+.github/agents/technical-specification-writer.agent.md
+.github/copilot-instructions.md
+.github/hooks
+.github/hooks/post-execute-task.sh
+.github/hooks/post-wave.sh
+.github/hooks/pre-execute-all-tasks.sh
+.github/hooks/subagent-stop-wrapper.sh
+.github/hooks/validate-governance.sh
+.github/hooks/validate-preload.sh
+.github/skills
+.github/skills/agent-governance
+.github/skills/agent-governance/SKILL.md
+.github/skills/agent-governance/references
+.github/skills/agent-governance/references/bug-schema.json
+.github/skills/agent-governance/references/ddd.md
+.github/skills/agent-governance/references/enforcement-matrix.md
+.github/skills/agent-governance/references/error-handling.md
+.github/skills/agent-governance/references/messaging.md
+.github/skills/agent-governance/references/observability.md
+.github/skills/agent-governance/references/persistence.md
+.github/skills/agent-governance/references/security-app.md
+.github/skills/agent-governance/references/security.md
+.github/skills/agent-governance/references/shared-architecture.md
+.github/skills/agent-governance/references/shared-lifecycle.md
+.github/skills/agent-governance/references/shared-patterns.md
+.github/skills/agent-governance/references/shared-testing.md
+.github/skills/agent-governance/references/testing.md
+.github/skills/agent-governance/scripts
+.github/skills/agent-governance/scripts/detect-architecture.sh
+.github/skills/agent-governance/scripts/detect-toolchain.sh
+.github/skills/agent-governance/triggers
+.github/skills/agent-governance/triggers/go.yaml
+.github/skills/agent-governance/triggers/node.yaml
+.github/skills/agent-governance/triggers/python.yaml
+.github/skills/analyze-project
+.github/skills/analyze-project/SKILL.md
+.github/skills/analyze-project/assets
+.github/skills/analyze-project/assets/agents-template.md
+.github/skills/analyze-project/assets/ai-tool-template.md
+.github/skills/analyze-project/scripts
+.github/skills/analyze-project/scripts/generate-governance.sh
+.github/skills/bugfix
+.github/skills/bugfix/SKILL.md
+.github/skills/bugfix/assets
+.github/skills/bugfix/assets/bugfix-report-template.md
+.github/skills/bugfix/references
+.github/skills/bugfix/references/canonical-bug-format.md
+.github/skills/bugfix/scripts
+.github/skills/bugfix/scripts/validate-bug-input.py
+.github/skills/confluence-changelog-publisher
+.github/skills/confluence-changelog-publisher/SKILL.md
+.github/skills/create-prd
+.github/skills/create-prd/SKILL.md
+.github/skills/create-prd/assets
+.github/skills/create-prd/assets/prd-template.md
+.github/skills/create-tasks
+.github/skills/create-tasks/SKILL.md
+.github/skills/create-tasks/assets
+.github/skills/create-tasks/assets/task-template.md
+.github/skills/create-tasks/assets/tasks-template.md
+.github/skills/create-technical-specification
+.github/skills/create-technical-specification/SKILL.md
+.github/skills/create-technical-specification/assets
+.github/skills/create-technical-specification/assets/adr-template.md
+.github/skills/create-technical-specification/assets/techspec-template.md
+.github/skills/execute-all-tasks
+.github/skills/execute-all-tasks/SKILL.md
+.github/skills/execute-all-tasks/assets
 ```
 
-## Fluxo de Dependências
+## Padrao Arquitetural
 
-As dependências devem respeitar o seguinte sentido:
+Padrao arquitetural nao inferido com alta confianca; assumir composicao simples e dependencias explicitas.
 
-1. Pacotes de contrato e shared kernel não devem depender de adapters concretos.
-2. Adapters concretos podem depender de contratos base e de utilitários compartilhados.
-3. Exemplos e testes de integração podem depender dos pacotes publicados, mas não devem definir a arquitetura principal.
+### Fluxo de Dependencias
 
-Fluxos principais:
-
-- `pkg/observability` -> base para `pkg/httpclient`, `pkg/http_server/*`, `pkg/messaging/rabbitmq`, `pkg/observability/otel`, `pkg/observability/noop`, `pkg/observability/fake`
-- `pkg/database` -> base para `pkg/database/uow`
-- `pkg/messaging` -> base para `pkg/messaging/kafka`
-- `pkg/vos` -> shared kernel leve para `pkg/entity`, `pkg/logger`
-- `pkg/http_server/common` -> base compartilhada para `pkg/http_server/chi_server` e `pkg/http_server/server_fiber`
-
-Regras de dependência:
-
-1. `pkg/observability`, `pkg/database`, `pkg/messaging` e `pkg/vos` devem permanecer independentes de adapters de transporte e deploy.
-2. Evite dependências circulares entre pacotes de `pkg/`.
-3. Se um pacote existe para expor contrato público, prefira depender dele em vez de depender de um subpacote concreto.
-4. Infra local em `deployment/` e `docker-compose.yml` não deve ditar desenho interno dos pacotes.
+- Transporte e adapters devem depender de casos de uso ou servicos explicitos, nao do contrario.
+- Dominio nao deve conhecer detalhes de HTTP, banco, filas, serializacao ou drivers.
+- Infraestrutura pode implementar contratos consumidos pela aplicacao, preservando dependencia para dentro.
 
 ## Modo de trabalho
 
 1. Entender o contexto antes de editar qualquer arquivo.
-2. Preferir a menor mudança segura que resolva a causa raiz.
-3. Preservar arquitetura, convenções e fronteiras já existentes no contexto analisado.
-4. Não introduzir abstrações, camadas ou dependências sem demanda concreta.
-5. Atualizar ou adicionar testes quando houver mudança de comportamento.
-6. Rodar validações proporcionais à mudança.
-7. Registrar bloqueios e suposições explicitamente quando o contexto estiver incompleto.
+2. Preferir a menor mudanca segura que resolva a causa raiz.
+3. Preservar arquitetura, convencoes e fronteiras ja existentes no contexto analisado.
+4. Nao introduzir abstracoes, camadas ou dependencias sem demanda concreta.
+5. Atualizar ou adicionar testes quando houver mudanca de comportamento.
+6. Rodar validacoes proporcionais a mudanca.
+7. Registrar bloqueios e suposicoes explicitamente quando o contexto estiver incompleto.
 
 ## Diretrizes de Estrutura
 
-1. Priorize entendimento do código e do contexto atual antes de propor refatorações.
-2. Respeite padrões existentes de nomenclatura, organização e tratamento de erro.
-3. Defina estrutura simples, evolutiva e com defaults explícitos.
-4. Evite reescritas amplas quando uma alteração localizada resolver o problema.
-5. Estabeleça contratos, testes e comandos de validação cedo quando eles ainda não existirem.
-6. Considere risco de regressão como restrição principal.
-7. Evite overengineering disfarçado de arquitetura futura.
+1. Priorize entendimento do codigo e do contexto atual antes de propor refatoracoes.
+2. Respeite padroes existentes de nomenclatura, organizacao e tratamento de erro.
+3. Defina estrutura simples, evolutiva e com defaults explicitos.
+4. Evite reescritas amplas quando uma alteracao localizada resolver o problema.
+5. Estabeleca contratos, testes e comandos de validacao cedo quando eles ainda nao existirem.
+6. Considere risco de regressao como restricao principal.
+7. Evite overengineering disfarcado de arquitetura futura.
 
-## Regras Contextuais para Este Repositório
+## Regras por Arquitetura
 
-1. Trate `AGENTS.md` como fonte canônica de governança; arquivos de `.claude/`, `.github/` e `.codex/` devem delegar para ele em vez de duplicar regras.
-2. Não assumir `internal/{module}` ou uma divisão global `domain/application/infrastructure`; isso não reflete a estrutura atual.
-3. Ao editar `pkg/`, preserve a API pública do pacote salvo quando a mudança declarar explicitamente quebra ou evolução contratual.
-4. Antes de criar um novo pacote de topo em `pkg/`, verifique se a mudança cabe em um componente existente.
-5. Ao adicionar dependência entre componentes de `pkg/`, explicite por que a direção é necessária e verifique risco de acoplamento indevido.
-6. `pkg/http_server` é o único componente HTTP do toolkit; alterações de comportamento HTTP devem viver nele.
-7. Infraestrutura local em `deployment/` e `docker-compose.yml` serve a desenvolvimento, observabilidade e testes; não trate esses diretórios como boundary de aplicação.
-
-## Contrato de carga base
-
-Toda skill que altera código deve carregar, como primeiro passo, a seguinte base obrigatória:
-
-1. Ler este `AGENTS.md`.
-2. Ler `.agents/skills/agent-governance/SKILL.md`.
-
-Essa base define governança para análise, alteração e validação, carregamento sob demanda de regras de DDD, erros, segurança e testes, e critérios mínimos de preservação arquitetural, risco e validação proporcional.
-
-Skills individuais devem declarar apenas cargas adicionais específicas ao seu contexto.
+1. Preservar coesao local e dependencia unidirecional entre packages.
+2. Evitar helpers transversais que escondam regra de negocio ou IO.
+3. Crescer a estrutura apenas quando o codigo atual ja nao comportar a mudanca com clareza.
 
 ## Regras por Linguagem
 
-Para tarefas que alteram código Go, carregar também:
+Para tarefas que alteram codigo, carregar a skill:
+
+- `.agents/skills/agent-governance/SKILL.md`
+
+Para tarefas que alteram codigo Go, carregar tambem:
 
 - `.agents/skills/go-implementation/SKILL.md`
 
-Para tarefas que alteram código Node/TypeScript, carregar também:
-
-- `.agents/skills/node-implementation/SKILL.md`
-
-Para tarefas que alteram código Python, carregar também:
-
-- `.agents/skills/python-implementation/SKILL.md`
-
-Para tarefas de revisão ou refatoração incremental de design em Go guiadas por heurísticas de object calisthenics, carregar também:
+Para tarefas de revisao ou refatoracao incremental de design em Go guiadas por heuristicas de object calisthenics, carregar tambem:
 
 - `.agents/skills/object-calisthenics-go/SKILL.md`
 
-Para tarefas de correção de bugs com remediação e teste de regressão, carregar também:
+Para tarefas de correcao de bugs com remediacao e teste de regressao, carregar tambem:
 
 - `.agents/skills/bugfix/SKILL.md`
 
-## Referências
+### Composicao Multi-Linguagem
 
-Cada skill lista suas próprias referências em `references/` com gatilhos de carregamento no respectivo `SKILL.md`. Não duplicar a listagem aqui. Consultar o `SKILL.md` da skill ativa para saber quais referências carregar e em que condição.
+Em projetos com mais de uma linguagem (ex: monorepo Go + Node), carregar apenas a skill da linguagem afetada pela mudanca. Se a tarefa cruzar linguagens, carregar ambas e aplicar a validacao de cada stack nos arquivos correspondentes. Nao misturar convencoes de uma linguagem em arquivos de outra.
 
-## Ferramentas de IA Detectadas
+## Referencias
 
-- Claude Code: presente em `.claude/`
-- Codex: presente em `.codex/config.toml`
-- GitHub/Copilot: presente em `.github/`
+Cada skill lista suas proprias referencias em `references/` com gatilhos de carregamento no respectivo `SKILL.md`. Nao duplicar a listagem aqui — consultar o SKILL.md da skill ativa para saber quais referencias carregar e em que condicao.
 
-Ferramentas detectadas devem delegar para `AGENTS.md` como fonte canônica. Se existir divergência entre arquivos auxiliares e este documento, prevalece `AGENTS.md`.
+## Notas por Ferramenta
 
-## Convenções de Teste
+- **Claude Code**: skills pre-carregadas via `.claude/skills/`, hooks via `.claude/hooks/`, agents delegados via `.claude/agents/`.
+- **Gemini CLI**: commands em `.gemini/commands/*.toml` apontam para skills canonicas. Sem hooks ou agents nativos — o modelo deve seguir as instrucoes procedurais do SKILL.md carregado.
+- **Codex**: le `AGENTS.md` como instrucao de sessao. Entradas em `.codex/config.toml` sao metadados para `upgrade.sh`, nao spec oficial do Codex CLI. O agente deve seguir as instrucoes de `AGENTS.md` para descobrir e carregar skills.
+- **Copilot**: `.github/copilot-instructions.md` como instrucao principal. `.github/agents/` sao wrappers. Sem hooks nativos — compliance depende do modelo seguir as instrucoes.
 
-O documento canônico de convenções de teste unitário está em `docs/testing/unit_test.md`. Ele define:
-- Framework (testify/require, testify/suite, testify/mock)
-- Estrutura AAA e table-driven
-- Naming em inglês e comportamental
-- Uso de mocks gerados por mockery v3
-- Obrigatoriedade de `-race`
-- Exemplos de referência (`pkg/observability`, `pkg/database`)
+### Matrix de Enforcement
 
-## Validação
+| Capacidade | Claude Code | Gemini CLI | Codex | Copilot |
+|---|---|---|---|---|
+| Carga base automatica | hook PreToolUse | procedural | procedural | procedural |
+| Protecao de governanca | hook PostToolUse | procedural | procedural | procedural |
+| Skills pre-carregadas | sim (symlinks) | sim (commands) | nao | sim (agents) |
+| Enforcement programatico | sim (hooks) | nao | nao | nao |
+| Validacao de evidencias | script | procedural | procedural | procedural |
 
-Antes de concluir uma alteração:
+Ferramentas sem enforcement programatico dependem do modelo seguir instrucoes procedurais. A compliance nessas ferramentas e best-effort.
 
-1. Seguir a Etapa 4 de `.agents/skills/agent-governance/SKILL.md`.
-2. Rodar formatter nos arquivos alterados quando aplicável.
-3. Rodar testes direcionados primeiro, depois ampliar o escopo se o risco justificar.
-4. Registrar ausência de comando quando o projeto não oferecer o passo esperado.
+## Economia de Contexto
 
-Comandos reais detectados neste repositório:
+Carregar o minimo necessario para a tarefa reduz custo de tokens em 35-50%:
 
-- `make lint`
-- `make test`
-- `make test-integration`
-- `make vulncheck`
-- `go test ./...`
-- `go test -tags=integration ./...`
+| Complexidade | Criterio | O que carregar |
+|---|---|---|
+| `trivial` | Rename, typo, import, formatacao | Apenas AGENTS.md |
+| `standard` | Bug fix, novo metodo, refactor local | AGENTS.md + TL;DR das references afetadas |
+| `complex` | Nova feature, interface publica, migracao | AGENTS.md + referencias completas |
 
-## Restrições
+- Classificar a complexidade **antes** de carregar qualquer referencia.
+- Quando a reference tiver bloco `<!-- TL;DR ... -->`, preferir o TL;DR ao documento completo em tarefas standard.
+- Override explicito via `--complexity=<nivel>` prevalece sobre classificacao automatica.
 
-1. Não inventar contexto ausente.
-2. Não assumir versão de linguagem, framework ou runtime sem verificar.
-3. Não alterar comportamento público sem deixar isso explícito.
-4. Não usar exemplos como cópia cega; adaptar ao contexto real.
-5. Não impor arquitetura diferente da atual sem demanda explícita.
-6. Não tratar helpers, exemplos ou infraestrutura local como prova de que existe uma aplicação única em produção neste repositório.
+## Validacao
+
+Antes de concluir uma alteracao:
+
+Seguir Etapa 4 de `.agents/skills/agent-governance/SKILL.md` como base canonica.
+
+Comandos detectados no projeto (Go):
+1. Rodar fmt: `gofmt -w .`.
+2. Rodar test: `go test ./...`.
+3. Rodar lint: `golangci-lint run`.
+
+## Restricoes
+
+1. Nao inventar contexto ausente.
+2. Nao assumir versao de linguagem, framework ou runtime sem verificar.
+3. Nao alterar comportamento publico sem deixar isso explicito.
+4. Nao usar exemplos como copia cega; adaptar ao contexto real.
+
+
+### Controle de profundidade de invocacao
+
+- Skills que invocam outros skills (execute-task, refactor) devem verificar profundidade via `scripts/lib/check-invocation-depth.sh`.
+- Limite padrao: 2 niveis. Configuravel via `AI_INVOCATION_MAX`.
+- Variaveis de ambiente: `AI_INVOCATION_DEPTH` (corrente), `AI_INVOCATION_MAX` (limite).

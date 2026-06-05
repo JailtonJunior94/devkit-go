@@ -8,7 +8,6 @@
 Definir precedência, resolução de conflitos e critérios de evidência para uso com agentes de IA.
 
 ## Fonte de Verdade
-- `AGENTS.md` como fonte canônica de arquitetura e governança do repositório.
 - Processos detalhados: `.agents/skills/`
 - Regras transversais: `.claude/rules/`
 - Referências de governança: `.agents/skills/agent-governance/references/`
@@ -25,7 +24,6 @@ Se duas regras do mesmo nível conflitarem:
 - prevalece `hard` sobre `guideline`
 - se a severidade empatar, prevalece a regra mais restritiva para correção, segurança e determinismo
 - convenção explícita local prevalece sobre o guia da Uber quando documentada nas referências
-- `AGENTS.md` prevalece sobre contexto ou regra auxiliar que descreva arquitetura divergente do repositório atual
 - `go-implementation` prevalece sobre `object-calisthenics-go` quando houver conflito — object calisthenics é ferramenta de revisão e heurística de design, não substitui as diretrizes de implementação. Exemplo prático: `architecture.md` define "preferir tipos concretos por padrão"; OC regra #3 sugere "encapsular primitivos de domínio". Neste caso, encapsular apenas quando o valor carregar invariante de domínio (ex: `OrderID`, `Email`), não para primitivos sem regra de validação
 
 ## Política de Evidência

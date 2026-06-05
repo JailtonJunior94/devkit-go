@@ -1,64 +1,109 @@
 ---
 name: execute-task
-version: 1.0.0
-depends_on: [review]
-description: Executa uma tarefa de implementação aprovada por meio de codificação, validação, revisão e captura de evidências. Use quando um arquivo de tarefa estiver pronto para implementação e fechamento com testes, lint e evidência de revisão. Não use para planejamento, refatorações amplas sem tarefa ou exploração especulativa de código.
+version: 1.5.0
+depends_on: [review, bugfix, agent-governance]
+description: Executa uma tarefa de implementação aprovada via codificação, validação, revisão e captura de evidências. Carrega skills processuais declaradas em `## Skills Necessárias` (formato canônico estrito) + skills de linguagem inferidas do diff. Use quando um task file estiver pronto para implementação. Não use para planejamento.
 ---
 
 # Executar Tarefa
 
 ## Procedimentos
 
-**Etapa 1: Validar a elegibilidade da tarefa**
-1. Verificar profundidade de invocação: `source scripts/lib/check-invocation-depth.sh || { echo "failed: depth limit exceeded"; exit 1; }` — parar se o limite for atingido.
-2. Confirmar que `tasks/prd-<feature-slug>/tasks.md`, o arquivo de tarefa alvo, `prd.md` e `techspec.md` estão presentes.
-3. Executar gate de cobertura de RF: `ai-spec check-spec-drift tasks/prd-<feature-slug>/tasks.md` — parar com `blocked` se houver RFs não cobertos.
-4. Selecionar a primeira tarefa elegível apenas quando o usuário não tiver escolhido uma explicitamente.
-5. Confirmar que todas as dependências da tarefa estão em `done`.
-6. Parar com `needs_input` ou `blocked` se a tarefa não for elegível para execução.
+**Etapa 1: Validar elegibilidade**
+1. **Resolver lib de profundidade (B1, fallback agnóstico)**: procurar `check-invocation-depth.sh` na ordem `.agents/lib/` → `scripts/lib/`. Primeira existente vence. Garante bootstrap em projetos que copiam apenas `.agents/`:
+   ```bash
+   _depth_lib=""
+   for d in .agents/lib scripts/lib; do
+     [[ -r "$d/check-invocation-depth.sh" ]] && { _depth_lib="$d/check-invocation-depth.sh"; break; }
+   done
+   [[ -n "$_depth_lib" ]] || { echo "failed: check-invocation-depth.sh ausente em .agents/lib/ e scripts/lib/ — vendor a lib ou rode 'ai-spec-harness install'"; exit 1; }
+   source "$_depth_lib" || { echo "failed: depth limit exceeded"; exit 1; }
+   ```
+   Fallback de método (sem `source`): `bash "$_depth_lib"` + `eval`.
+2. **Gate de binário `ai-spec` (B2, sem degradação silenciosa)**: se a Etapa 1.3 abaixo for executar (`AI_PREFLIGHT_DONE` ausente), validar presença do binário antes:
+   ```bash
+   if [[ -z "${AI_PREFLIGHT_DONE:-}" ]] && ! command -v ai-spec >/dev/null 2>&1; then
+     echo "needs_input: binário 'ai-spec' não encontrado no PATH. Instale via 'brew install ai-spec-harness' (ou 'go install github.com/ai-spec-harness/ai-spec-harness/cmd/ai_spec_harness@latest'), OU exporte AI_PREFLIGHT_DONE=1 quando o orquestrador já validou drift e skills lock."
+     exit 1
+   fi
+   ```
+   Sem o binário a skill **deve parar com `needs_input`** — não prosseguir em modo legado silencioso. Princípio: governança acima de automação mágica.
+3. **Pre-flight gates condicionais (F8)**:
+   - `AI_PREFLIGHT_DONE=1` exportada → pular gates (orquestrador já validou).
+   - Senão: `ai-spec skills --verify` (`blocked` se ≠0); `ai-spec check-spec-drift .specs/prd-<slug>/tasks.md` (`blocked` se RF não coberto).
+4. Derivar `<slug>` do path. Ambíguo → `needs_input`.
+5. Confirmar `tasks.md`, task file alvo, `prd.md`, `techspec.md` presentes.
+6. Selecionar primeira tarefa elegível só se usuário não escolheu.
+7. Confirmar deps em `done` → senão `blocked`.
 
-**Etapa 2: Carregar o contexto de implementação**
-1. Ler por completo o arquivo de tarefa selecionado, `prd.md` e `techspec.md`.
-2. Verificar coerência temporal: se `prd.md` ou `techspec.md` foram modificados após a criação de `tasks.md`, avisar o usuário que os artefatos de origem podem ter divergido e perguntar se deseja continuar ou re-gerar as tarefas. Parar com `needs_input` se o usuário não confirmar.
-3. Confirmar que o contrato de carga base definido em `AGENTS.md` foi cumprido.
-4. Se a tarefa tocar código Go, ler também `.agents/skills/go-implementation/SKILL.md` e carregar apenas as referências exigidas pela mudança.
-5. Se a tarefa tocar código Node/TypeScript, ler também `.agents/skills/node-implementation/SKILL.md` e carregar apenas as referências exigidas pela mudança.
-6. Se a tarefa tocar código Python, ler também `.agents/skills/python-implementation/SKILL.md` e carregar apenas as referências exigidas pela mudança.
-7. Mapear objetivo da tarefa, critérios de aceitação, subtarefas e arquivos-alvo antes de editar.
+**Etapa 2: Carregar contexto**
+1. Ler task file, `prd.md`, `techspec.md` por completo.
+2. **Coerência temporal**: prd/techspec modificado após tasks.md → avisar drift; `needs_input` se usuário não confirmar.
+3. Confirmar AGENTS.md base contract.
+4. **Detecção de linguagem (F1)**:
+   - Inspecionar `Arquivos Relevantes`: Go (`*.go`), Node (`*.ts/.tsx/.js/.jsx/.mjs`), Python (`*.py`).
+   - Linguagem detectada → ler `.agents/skills/<linguagem>-implementation/SKILL.md`. Skill ausente → `needs_input`.
+   - **Tarefas non-code** (docs, configs, SQL, shell, MD): nenhuma skill de linguagem; prosseguir.
+5. **Skills processuais declaradas (F6+F16+F28)**:
+   - Parsear seção `## Skills Necessárias` (gerada por `create-tasks` v1.4+).
+   - **Normalizar antes de validar**: trim, colapsar espaços, aceitar separadores equivalentes (` — `, ` - `, `:`) e reformatar mentalmente para `^- \`([a-z0-9-]+)\` — .+$`. Linha semanticamente ambígua → `failed: malformed Skills Necessárias entry on task <id>: <linha>`.
+   - Conteúdo canônico `Nenhuma além das auto-carregadas (governance + linguagem).` = vazio. Variações vazias equivalentes (`Nenhuma.`, `N/A`, `nenhuma`) = vazio com warning.
+   - Ler coluna `Skills` em `tasks.md` (`—` = vazio).
+   - **Sync gate (sem união silenciosa)**: divergente → `failed: skills sync drift on task <id> — file=<S_file> table=<S_table>`.
+   - Ambas vazias: prosseguir (retrocompatível).
+   - UMA fonte vazia outra preenchida: `failed: skills declaration missing in <fonte>`.
+   - Para cada skill: validar `.agents/skills/<skill>/SKILL.md` existe (`needs_input` se não); ler description + procedimentos; refs sob demanda.
+   - **Regras agnósticas**: nunca inferir por heurística textual; nunca carregar não-declaradas; descoberta via `ls .agents/skills/`.
+6. Mapear objetivo, critérios, subtarefas, arquivos-alvo antes de editar.
 
-**Etapa 3: Executar a etapa de implementação**
-1. Seguir a ordem das subtarefas definida no arquivo de tarefa.
-2. Implementar testes junto com as mudanças de produção.
-3. Preferir os pontos de entrada de validação documentados no repositório:
-   - `task test`, `task lint`, `task fmt` quando disponíveis
-   - caso contrário, usar `make test`, `make lint`, `make fmt` ou o equivalente documentado
-4. Rodar validação direcionada após subtarefas relevantes, não apenas no final.
-5. Registrar comandos executados e arquivos alterados para o relatório.
-6. Parar com `needs_input` se uma decisão obrigatória ou entrada faltante bloquear a conclusão segura.
+**Etapa 3: Implementação**
+1. Seguir ordem das subtarefas. Implementar testes junto com produção.
+2. Resolver entrypoint (parar no primeiro): `task test|lint|fmt` → `make test|lint|fmt` → nativo (`go test ./... && go vet`, `pnpm test && pnpm lint`, `pytest && ruff check`). Nenhum → `needs_input`.
+3. Validação direcionada após cada subtarefa, não só no final.
+4. Registrar comandos e arquivos. `needs_input` se decisão obrigatória bloquear.
 
-**Etapa 4: Executar a etapa de validação e aprovação**
-1. Seguir Etapa 4 de `.agents/skills/agent-governance/SKILL.md`.
-2. Rodar os comandos de teste e lint do projeto inteiro quando o escopo da tarefa justificar.
-3. Verificar cada critério de aceitação com evidência explícita.
-5. Invocar a habilidade `review` para o diff produzido e incluir `prd.md` e `techspec.md` como contexto de revisão.
-6. Se `review` retornar `REJECTED` com bugs no formato canônico, invocar a skill `bugfix` para corrigir os achados dentro do escopo da tarefa.
-7. Após `bugfix`, rerodar as validações necessárias e uma nova revisão.
-8. Aceitar apenas `APPROVED` ou `APPROVED_WITH_REMARKS` como veredito de revisão aprovador final.
+**Etapa 4: Validação + revisão (F24)**
+1. Seguir Etapa 4 de `agent-governance`.
+2. Teste/lint do pacote afetado (mandatório). Suíte completa (`hard`) se diff cruzar pacote, alterar API pública, ou tocar config compartilhada.
+3. Verificar critérios com evidência explícita.
+4. Invocar `review` com prd.md + techspec.md como contexto.
+5. **Mapear veredito**:
+   - `APPROVED` → Etapa 5.
+   - `APPROVED_WITH_REMARKS` → **inspecionar severidade (F24)**: parsear remarks procurando `[critical]`, `[security]`, `[blocker]`, `[high]` (case-insensitive). Tag crítica → escalar para `blocked: APPROVED_WITH_REMARKS contém remark crítico — <remark>`; NÃO seguir Etapa 5; NÃO bugfix; devolver ao humano. Sem tag crítica → Etapa 5; remarks vão para "Riscos Residuais".
+   - `REJECTED` com bugs canônicos → `bugfix` no escopo, rerodar validações + nova review.
+   - `REJECTED` sem formato canônico → `failed`.
+   - `BLOCKED` → `blocked`; **não** invocar `bugfix`.
+6. Final aceito apenas: `APPROVED`, OU `APPROVED_WITH_REMARKS` confirmado sem remarks críticos.
 
-**Etapa 5: Persistir as evidências**
-1. Ler `assets/task-execution-report-template.md`.
-2. Atualizar o status da tarefa em `tasks.md` para `done` apenas depois que implementação, validação e revisão tiverem sido concluídas com sucesso.
-3. Salvar o relatório como `tasks/prd-<feature-slug>/[num]_execution_report.md`.
-4. Rodar `.claude/scripts/validate-task-evidence.sh` contra o relatório salvo.
-5. Se o validador de evidências falhar, retornar `blocked` e descrever a evidência ausente.
+**Etapa 5: Persistir evidências (F25 checkpoint)**
+1. Salvar `.specs/prd-<slug>/[num]_execution_report.md` (overwrite com `# Generated: <ISO-8601 UTC>` no header — F36) a partir de `assets/task-execution-report-template.md`.
+2. Rodar validador de evidências (resolver: `.claude/scripts/...` → `.agents/scripts/...` → `scripts/...`). Nenhum → `failed`. Falha → `blocked`; não mutar tasks.md.
+3. **Checkpoint YAML antes de mutar tasks.md (F25)**:
+   - `mkdir -p .specs/prd-<slug>/.checkpoints/`.
+   - Escrever `.checkpoints/<num>.yaml.tmp` com `status`, `report_path`, `summary`, `timestamp` (ISO-8601 UTC).
+   - `mv -n .yaml.tmp .yaml` atômico. Completo ou inexistente, nunca parcial.
+4. **Só após checkpoint persistido**, mutar tasks.md para `done`.
+5. **Lock atômico em tasks.md (F3+F32)** quando invocador é `execute-all-tasks` em wave paralela:
+   - POSIX: `flock -x -w 30 .specs/prd-<slug>/tasks.md.lock -c '<edit>'`.
+   - Sem `flock`: temp + `mv -n` atômico.
+   - Fallback final (Windows nativo, containers minimal): escrever em `.specs/prd-<slug>/.partials/tasks.md.<num>.partial`; orquestrador consolida na sua Etapa 5.
+   - Lock falha em 30s → `failed: tasks.md lock timeout`.
 
-**Etapa 6: Encerrar explicitamente**
-1. Informar o status da tarefa, os resultados de validação, o veredito do revisor e o caminho do relatório.
-2. Retornar `done`, `blocked`, `failed` ou `needs_input` usando apenas nomes de estado canônicos.
+**Etapa 6: Encerrar**
+Retornar `done`, `blocked`, `failed` ou `needs_input` (canônico) com path do relatório, validações e veredito do reviewer.
+
+## Paralelismo e Subagentes
+
+Spawn APENAS se: (1) saída excede o que principal precisa reter, (2) trabalho independente, (3) custo de spawn < custo de bruto no contexto. Não spawnar para: arquivo já carregado; sequencial dependente; paralelas tool calls (Bash/Edit) já resolvem.
+
+Aplicação: Etapa 2 (refs grandes multi-linguagem), Etapa 3 (subtarefas em pacotes distintos). Etapa 4: `task test`+`task lint` paralelos via Bash, sem subagente. Etapa 5: sempre inline. Registrar em "Comandos Executados" como `subagent[<desc>] -> <resumo>`.
 
 ## Tratamento de Erros
 
-* Se o arquivo de tarefa estiver desatualizado em relação ao codebase ou à especificação técnica, parar e expor o descompasso antes de editar código.
-* Se a automação do repositório não tiver entrypoints `task` ou `make`, descobrir e usar os comandos locais documentados em vez de adivinhar.
-* Se as validações falharem, tentar apenas uma remediação limitada. Se a falha apontar para um problema de desenho mais profundo, parar e retornar `failed` com o comando bloqueante exato e um diagnóstico curto.
-* Respeitar o limite de profundidade de invocação definido em `.agents/skills/agent-governance/SKILL.md`. Se review invocar bugfix e bugfix precisar de nova review, esta é a profundidade máxima — não re-invocar bugfix a partir dessa segunda review.
+* Task file desatualizado vs código/spec → parar e expor antes de editar.
+* Validação falha → uma remediação limitada; falha mais profunda → `failed` com comando bloqueante + diagnóstico.
+* Respeitar depth limit de `agent-governance`. Cadeia review → bugfix → review é máxima.
+
+## Resolução de paths
+
+`.specs/prd-<slug>/` resolve para `${AI_TASKS_ROOT:-.specs}/${AI_PRD_PREFIX:-prd-}<slug>/`. Configurar em `.claude/config.yaml`/`.agents/config.yaml` (`tasks_root`, `prd_prefix`, `evidence_dir`, `coverage_threshold`, `language_default`). Vars exportadas por `check-invocation-depth.sh`, resolvido em cascata `.agents/lib/` → `scripts/lib/` (vendor canônico em `.agents/lib/`, mirror legado em `scripts/lib/`). `AI_TOOL` validado contra `{claude, codex, gemini, copilot}`; inválido → unset (modo agnóstico).

@@ -1,27 +1,47 @@
 ---
 name: agent-governance
-version: 1.0.0
+version: 1.1.0
 description: Orquestra regras de governanca, DDD, tratamento de erros, seguranca e testes para tarefas com agentes de IA. Use quando a tarefa exigir aplicar padroes obrigatorios antes de analisar, editar ou validar codigo. Nao use para tarefas casuais sem alteracao de codigo nem para substituir skills especificas de linguagem.
 ---
 
 # Governanca para Agentes
+
+## Niveis de Complexidade
+
+Antes de carregar referencias, classificar a complexidade da tarefa para evitar carregamento desnecessario.
+Override explicito via `--complexity=<nivel>` prevalece sobre a classificacao automatica.
+
+| Nivel      | Criterio                                                                 | Referencias carregadas                                 |
+|------------|--------------------------------------------------------------------------|--------------------------------------------------------|
+| `trivial`  | Sem mudanca de comportamento: rename, typo, import, formatacao            | Nenhuma — apenas AGENTS.md                             |
+| `standard` | Mudanca localizada com testes: novo metodo, fix de bug, refactor local    | TL;DR de `error-handling.md` e `testing.md` (bloco `<!-- TL;DR -->`) |
+| `complex`  | Mudanca transversal: nova feature, interface publica, migracao            | Todas as referencias (comportamento atual)             |
+
+**Economia estimada:** ~2.500 tokens por ciclo trivial vs complex (reducao de 15-25%).
 
 ## Procedimentos
 
 **Etapa 1: Carregar contexto base**
 1. Confirmar que o contrato de carga base definido em `AGENTS.md` foi cumprido.
 2. Identificar se a tarefa afeta modelagem de dominio, fluxo de erro, seguranca, validacao ou testes.
-3. Aplicar a menor mudanca segura que preserve arquitetura, convencoes e fronteiras existentes.
+3. Classificar o nivel de complexidade da tarefa (trivial / standard / complex) antes de carregar referencias.
+4. Aplicar a menor mudanca segura que preserve arquitetura, convencoes e fronteiras existentes.
 
-**Etapa 2: Carregar referencias sob demanda**
-1. Ler `references/ddd.md` quando a tarefa alterar entidades, value objects, aggregate roots, transicoes de estado ou regras de aplicacao.
-2. Ler `references/error-handling.md` quando a tarefa criar, propagar, encapsular, comparar ou apresentar erros.
-3. Ler `references/security.md` quando a tarefa envolver filesystem, subprocessos, segredos, configuracao, runtime, input externo ou dependencias.
-4. Ler `references/testing.md` quando a tarefa alterar comportamento, validadores, runtime, adapters, persistencia ou gates de validacao.
-5. Ler `references/shared-lifecycle.md` quando a tarefa envolver inicializacao, shutdown, signal handling ou drain de conexoes — principios universais aplicaveis a qualquer linguagem.
-6. Ler `references/shared-testing.md` quando a tarefa envolver estrategia de testes cross-linguagem — principios de unit/integration test aplicaveis a qualquer stack.
-7. Ler `references/shared-architecture.md` quando a tarefa envolver decisoes arquiteturais cross-linguagem — DI, organizacao de modulos, sinais de excesso.
-8. Ler `references/shared-patterns.md` quando a tarefa envolver patterns recorrentes cross-linguagem — Repository, Factory, DI, Value Objects, Error Handling.
+**Etapa 2: Carregar referencias sob demanda (respeitando o nivel de complexidade)**
+
+- **`trivial`**: nao carregar nenhuma referencia — AGENTS.md e suficiente.
+- **`standard`**: em tarefas triviais, carregar apenas TL;DR de references. Para standard, carregar TL;DR das referencias diretamente ligadas a superficie alterada:
+  - `references/error-handling.md` (preferir bloco `<!-- TL;DR -->`) quando a tarefa criar, propagar ou tratar erros.
+  - `references/testing.md` (preferir bloco `<!-- TL;DR -->`) quando a tarefa alterar comportamento testavel.
+- **`complex`**: carregar todas as referencias aplicaveis:
+  1. Ler `references/ddd.md` quando a tarefa alterar entidades, value objects, aggregate roots, transicoes de estado ou regras de aplicacao.
+  2. Ler `references/error-handling.md` quando a tarefa criar, propagar, encapsular, comparar ou apresentar erros.
+  3. Ler `references/security.md` quando a tarefa envolver filesystem, subprocessos, segredos, configuracao, runtime, input externo ou dependencias.
+  4. Ler `references/testing.md` quando a tarefa alterar comportamento, validadores, runtime, adapters, persistencia ou gates de validacao.
+  5. Ler `references/shared-lifecycle.md` quando a tarefa envolver inicializacao, shutdown, signal handling ou drain de conexoes.
+  6. Ler `references/shared-testing.md` quando a tarefa envolver estrategia de testes cross-linguagem.
+  7. Ler `references/shared-architecture.md` quando a tarefa envolver decisoes arquiteturais cross-linguagem.
+  8. Ler `references/shared-patterns.md` quando a tarefa envolver patterns recorrentes cross-linguagem.
 
 **Etapa 3: Executar com controle**
 1. Preservar comportamento publico existente, salvo quando a mudanca explicitar a alteracao.
@@ -38,15 +58,20 @@ description: Orquestra regras de governanca, DDD, tratamento de erros, seguranca
 
 ## Controle de Profundidade de Invocacao
 
-Quando uma skill invoca outra (ex: execute-task -> review -> bugfix), incrementar `AI_INVOCATION_DEPTH` e verificar o limite antes de prosseguir:
+Quando uma skill invoca outra (ex: execute-task -> review -> bugfix), incrementar `AI_INVOCATION_DEPTH` e verificar o limite antes de prosseguir. Resolver `check-invocation-depth.sh` em cascata para suportar projetos que copiam apenas `.agents/` (B1):
 
 ```bash
-source scripts/lib/check-invocation-depth.sh || { echo "failed: depth limit exceeded"; exit 1; }
+_depth_lib=""
+for d in .agents/lib scripts/lib; do
+  [[ -r "$d/check-invocation-depth.sh" ]] && { _depth_lib="$d/check-invocation-depth.sh"; break; }
+done
+[[ -n "$_depth_lib" ]] || { echo "failed: check-invocation-depth.sh ausente em .agents/lib/ e scripts/lib/"; exit 1; }
+source "$_depth_lib" || { echo "failed: depth limit exceeded"; exit 1; }
 ```
 
 Se `AI_INVOCATION_DEPTH` exceder 2 (o limite padrao de `AI_INVOCATION_MAX`), parar a cadeia e retornar `failed` com diagnostico: "limite de profundidade de invocacao atingido". Isso previne loops entre review e bugfix.
 
-O script `scripts/lib/check-invocation-depth.sh` gerencia o contador automaticamente quando sourced ou chamado como subprocesso.
+O script `check-invocation-depth.sh` (vendor canônico em `.agents/lib/`, mirror legado em `scripts/lib/`) gerencia o contador automaticamente quando sourced ou chamado como subprocesso.
 
 ## Tratamento de Erros
 * Se a tarefa nao deixar claro quais referencias carregar, aplicar `AGENTS.md` como baseline e ler apenas os arquivos tematicos diretamente ligados a superficie alterada.

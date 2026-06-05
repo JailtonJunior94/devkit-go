@@ -1,24 +1,19 @@
 # Claude Code
 
-Use `AGENTS.md` como fonte canônica de instruções deste repositório.
+Use `AGENTS.md` como fonte canonica das regras deste repositorio.
 
-## Instruções
+## Instrucoes
 
-1. Ler `AGENTS.md` no início da sessão.
-2. Antes de editar código, carregar `.agents/skills/agent-governance/SKILL.md`.
-3. Ao alterar código Go, carregar também `.agents/skills/go-implementation/SKILL.md`.
-4. Carregar skills de planejamento apenas quando a tarefa pedir explicitamente análise de projeto, PRD, especificação técnica ou decomposição em tarefas.
-5. Tratar o repositório como toolkit Go em monolito modular, com fronteiras relevantes entre pacotes de `pkg/`.
-6. Preservar a API pública dos pacotes salvo quando a mudança explicitar alteração contratual.
-7. Validar alterações com os comandos reais detectados no projeto, proporcionalmente ao risco.
+1. Ler `AGENTS.md` no inicio da sessao.
+2. `.claude/skills/` sao symlinks para `.agents/skills/` — a fonte de verdade e sempre `.agents/skills/`.
+3. `.claude/agents/` sao wrappers leves que delegam para a habilidade canonica.
+4. Em tarefas de execucao, carregar apenas `AGENTS.md`, `agent-governance` e a skill operacional da linguagem ou atividade afetada.
+5. Skills de planejamento (`analyze-project`, `create-prd`, `create-technical-specification`, `create-tasks`) entram apenas quando a tarefa pedir esse fluxo explicitamente.
+6. Carregar referencias adicionais apenas quando a tarefa exigir.
+7. Preservar estilo, arquitetura e fronteiras existentes antes de propor mudancas.
+8. Validar mudancas com comandos proporcionais ao risco.
 
-## Validação
+## Stack
 
-- `make lint`
-- `make test`
-- `make test-integration`
-- `make vulncheck`
-
-## Observação
-
-Arquivos em `.claude/context/` e `.claude/rules/` são auxiliares. Em caso de conflito, prevalece `AGENTS.md`.
+- Projeto com contexto Go detectado: carregar `.agents/skills/go-implementation/SKILL.md` ao alterar codigo Go.
+- Validar a versao declarada em `go.mod` antes de introduzir APIs da linguagem ou novas dependencias.

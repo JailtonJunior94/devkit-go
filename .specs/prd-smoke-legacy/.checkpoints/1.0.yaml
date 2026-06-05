@@ -1,0 +1,4 @@
+status: done
+report_path: .specs/prd-smoke-legacy/1.0_execution_report.md
+summary: "Truncate(s string, n int) string adicionado a pkg/strutil; RF-01 atendido; 6 casos table-driven; review APPROVED"
+timestamp: 2026-05-23T11:44:59Z
