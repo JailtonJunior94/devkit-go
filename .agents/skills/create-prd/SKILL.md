@@ -1,6 +1,6 @@
 ---
 name: create-prd
-version: 1.3.0
+version: 1.4.0
 description: Cria documentos de requisitos do produto a partir de solicitações de funcionalidade. Use quando uma funcionalidade precisar de escopo, objetivos, restrições e requisitos funcionais numerados antes do desenho técnico. Detecta artefatos downstream (techspec, tasks) ao evoluir PRD existente e exige confirmação para evitar drift silencioso. Não use para planejamento de implementação, mudanças de código ou decisões de arquitetura técnica.
 ---
 
@@ -32,6 +32,7 @@ description: Cria documentos de requisitos do produto a partir de solicitações
    - restrições e conformidade
    - critérios de sucesso mensuráveis
 2. Parar após no máximo duas rodadas de esclarecimento.
+   - **Ambiguidade material** (escopo/fronteira/objetivo com caminhos divergentes): aplicar `.agents/skills/agent-governance/references/multiple-choice-protocol.md` (2–5 opções, "(Recomendado)", uma pergunta por turno). Não usar em pontos triviais.
 3. Se ainda faltarem respostas objetivas ou houver contradições, retornar `needs_input`, listar os pontos em aberto e não redigir o PRD final.
 
 **Etapa 3: Carregar apenas o contexto necessário para escrever bem**

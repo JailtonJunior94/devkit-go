@@ -11,12 +11,12 @@ import (
 //
 // Reference: https://datatracker.ietf.org/doc/html/rfc7807
 type ProblemDetail struct {
-	Type      string    `json:"type"`               // URI reference that identifies the problem type
-	Title     string    `json:"title"`              // Short, human-readable summary
-	Status    int       `json:"status"`             // HTTP status code
-	Detail    string    `json:"detail,omitempty"`   // Human-readable explanation specific to this occurrence
-	Instance  string    `json:"instance"`           // URI reference for the specific occurrence
-	Timestamp time.Time `json:"timestamp"`          // When the error occurred
+	Type      string    `json:"type"`                 // URI reference that identifies the problem type
+	Title     string    `json:"title"`                // Short, human-readable summary
+	Status    int       `json:"status"`               // HTTP status code
+	Detail    string    `json:"detail,omitempty"`     // Human-readable explanation specific to this occurrence
+	Instance  string    `json:"instance"`             // URI reference for the specific occurrence
+	Timestamp time.Time `json:"timestamp"`            // When the error occurred
 	RequestID string    `json:"request_id,omitempty"` // Request ID for tracing
 }
 

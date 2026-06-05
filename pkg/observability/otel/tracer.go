@@ -34,24 +34,24 @@ type noopOtelSpan struct{}
 
 var (
 	globalNoopOtelSpan    observability.Span        = noopOtelSpan{}
-	globalNoopOtelSpanCtx observability.SpanContext  = noopOtelSpanCtx{}
+	globalNoopOtelSpanCtx observability.SpanContext = noopOtelSpanCtx{}
 )
 
-func (noopOtelSpan) End()                                                   {}
-func (noopOtelSpan) SetAttributes(_ ...observability.Field)                 {}
-func (noopOtelSpan) SetStatus(_ observability.StatusCode, _ string)         {}
-func (noopOtelSpan) RecordError(_ error, _ ...observability.Field)          {}
-func (noopOtelSpan) AddEvent(_ string, _ ...observability.Field)            {}
-func (noopOtelSpan) Context() observability.SpanContext                     { return globalNoopOtelSpanCtx }
-func (noopOtelSpan) TraceID() string                                        { return "" }
-func (noopOtelSpan) SpanID() string                                         { return "" }
-func (noopOtelSpan) IsSampled() bool                                        { return false }
+func (noopOtelSpan) End()                                           {}
+func (noopOtelSpan) SetAttributes(_ ...observability.Field)         {}
+func (noopOtelSpan) SetStatus(_ observability.StatusCode, _ string) {}
+func (noopOtelSpan) RecordError(_ error, _ ...observability.Field)  {}
+func (noopOtelSpan) AddEvent(_ string, _ ...observability.Field)    {}
+func (noopOtelSpan) Context() observability.SpanContext             { return globalNoopOtelSpanCtx }
+func (noopOtelSpan) TraceID() string                                { return "" }
+func (noopOtelSpan) SpanID() string                                 { return "" }
+func (noopOtelSpan) IsSampled() bool                                { return false }
 
 type noopOtelSpanCtx struct{}
 
-func (noopOtelSpanCtx) TraceID() string  { return "" }
-func (noopOtelSpanCtx) SpanID() string   { return "" }
-func (noopOtelSpanCtx) IsSampled() bool  { return false }
+func (noopOtelSpanCtx) TraceID() string { return "" }
+func (noopOtelSpanCtx) SpanID() string  { return "" }
+func (noopOtelSpanCtx) IsSampled() bool { return false }
 
 type otelTracer struct {
 	tracer oteltrace.Tracer
@@ -203,9 +203,9 @@ type otelSpanContext struct {
 	ctx oteltrace.SpanContext
 }
 
-func (c *otelSpanContext) TraceID() string  { return c.ctx.TraceID().String() }
-func (c *otelSpanContext) SpanID() string   { return c.ctx.SpanID().String() }
-func (c *otelSpanContext) IsSampled() bool  { return c.ctx.IsSampled() }
+func (c *otelSpanContext) TraceID() string { return c.ctx.TraceID().String() }
+func (c *otelSpanContext) SpanID() string  { return c.ctx.SpanID().String() }
+func (c *otelSpanContext) IsSampled() bool { return c.ctx.IsSampled() }
 
 func convertSpanKind(kind observability.SpanKind) oteltrace.SpanKind {
 	switch kind {

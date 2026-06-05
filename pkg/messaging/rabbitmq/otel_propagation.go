@@ -9,21 +9,22 @@ import (
 // InjectTraceContext injects W3C trace context into RabbitMQ message headers.
 //
 // How it works:
-//   1. Uses the global TextMapPropagator (configured via otel.SetTextMapPropagator)
-//   2. Injects traceparent and tracestate headers into the map
-//   3. Modifies the headers map in-place
+//  1. Uses the global TextMapPropagator (configured via otel.SetTextMapPropagator)
+//  2. Injects traceparent and tracestate headers into the map
+//  3. Modifies the headers map in-place
 //
 // W3C Trace Context Format:
 //   - traceparent: 00-{trace-id}-{span-id}-{trace-flags}
 //   - tracestate: vendor-specific trace state (optional)
 //
 // Example:
-//   Before: headers = map[string]interface{}{"content_type": "application/json"}
-//   After:  headers = map[string]interface{}{
-//     "content_type": "application/json",
-//     "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-//     "tracestate": "rojo=00f067aa0ba902b7",
-//   }
+//
+//	Before: headers = map[string]interface{}{"content_type": "application/json"}
+//	After:  headers = map[string]interface{}{
+//	  "content_type": "application/json",
+//	  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+//	  "tracestate": "rojo=00f067aa0ba902b7",
+//	}
 //
 // Usage:
 //
@@ -43,9 +44,9 @@ func InjectTraceContext(ctx context.Context, headers map[string]interface{}) {
 // ExtractTraceContext extracts W3C trace context from RabbitMQ message headers.
 //
 // How it works:
-//   1. Uses the global TextMapPropagator (configured via otel.SetTextMapPropagator)
-//   2. Reads traceparent and tracestate headers from the map
-//   3. Returns a new context with the extracted span context
+//  1. Uses the global TextMapPropagator (configured via otel.SetTextMapPropagator)
+//  2. Reads traceparent and tracestate headers from the map
+//  3. Returns a new context with the extracted span context
 //
 // Trace Correlation:
 //   - If traceparent exists: Returns context with parent span context

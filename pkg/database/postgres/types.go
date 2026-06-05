@@ -23,10 +23,10 @@ type pgxRows struct {
 	rows pgx.Rows
 }
 
-func (r *pgxRows) Next() bool              { return r.rows.Next() }
-func (r *pgxRows) Scan(dest ...any) error  { return r.rows.Scan(dest...) }
-func (r *pgxRows) Err() error              { return r.rows.Err() }
-func (r *pgxRows) Close() error            { r.rows.Close(); return nil }
+func (r *pgxRows) Next() bool             { return r.rows.Next() }
+func (r *pgxRows) Scan(dest ...any) error { return r.rows.Scan(dest...) }
+func (r *pgxRows) Err() error             { return r.rows.Err() }
+func (r *pgxRows) Close() error           { r.rows.Close(); return nil }
 
 // pgxRow envolve o pgx.Row para satisfazer o database.Row.
 type pgxRow struct {

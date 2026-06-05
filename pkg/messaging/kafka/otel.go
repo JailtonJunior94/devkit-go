@@ -10,8 +10,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Instrumentation holds OpenTelemetry instrumentation state.
@@ -151,11 +151,11 @@ func NewInstrumentation(serviceName string) (*Instrumentation, error) {
 // InstrumentPublish wraps a publish operation with tracing and metrics.
 //
 // Behavior:
-//   1. Creates a producer span with OpenTelemetry Semantic Conventions
-//   2. Injects W3C trace context into message headers (traceparent, tracestate)
-//   3. Executes the publish function
-//   4. Records metrics (duration, count, errors)
-//   5. Ends the span with appropriate status
+//  1. Creates a producer span with OpenTelemetry Semantic Conventions
+//  2. Injects W3C trace context into message headers (traceparent, tracestate)
+//  3. Executes the publish function
+//  4. Records metrics (duration, count, errors)
+//  5. Ends the span with appropriate status
 //
 // Trace Context Propagation:
 //   - The injected traceparent header allows consumers to create child spans
@@ -223,11 +223,11 @@ func (i *Instrumentation) InstrumentPublish(
 // InstrumentConsume wraps a consume operation with tracing and metrics.
 //
 // Behavior:
-//   1. Extracts parent trace context from message headers (if present)
-//   2. Creates a consumer span as CHILD of the producer span (enables correlation)
-//   3. Executes the consume function
-//   4. Records metrics (duration, count)
-//   5. Ends the span with appropriate status
+//  1. Extracts parent trace context from message headers (if present)
+//  2. Creates a consumer span as CHILD of the producer span (enables correlation)
+//  3. Executes the consume function
+//  4. Records metrics (duration, count)
+//  5. Ends the span with appropriate status
 //
 // Trace Hierarchy:
 //

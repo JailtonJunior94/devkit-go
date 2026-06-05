@@ -39,5 +39,5 @@ var errSentinel = errNew("sentinel error")
 
 type sentinelError string
 
-func errNew(s string) error       { return sentinelError(s) }
+func errNew(s string) error           { return sentinelError(s) }
 func (e sentinelError) Error() string { return string(e) }

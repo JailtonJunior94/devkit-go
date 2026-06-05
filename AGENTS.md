@@ -1,220 +1,110 @@
 <!-- governance-schema: 1.0.0 -->
 # Regras para Agentes de IA
 
-Este diretorio centraliza regras para uso com agentes de IA em tarefas reais de analise, alteracao e validacao de codigo.
+Este arquivo e a fonte canonica de governanca para agentes neste repositorio. Use-o para trabalhar com codigo, configuracao, documentacao e validacao sem inventar contexto.
 
-## Objetivo
+## Contexto do Projeto
 
-Use estas instrucoes para manter consistencia, seguranca e qualidade ao trabalhar com codigo, configuracao, validacao e evolucao de sistemas.
+- Arquitetura detectada: monolito Go.
+- Frameworks detectados: Fiber e gRPC.
+- Versao Go: verificar sempre em `go.mod` antes de usar APIs de linguagem, runtime ou dependencias.
+- Governanca instalada via `ai-spec-harness 0.27.1`; neste ambiente o binario no PATH e `ai-spec`.
+- Nao usar o manifesto local como versao efetiva da CLI quando ele divergir de `ai-spec version`.
 
-## Arquitetura: monolito
+## Fluxo Operacional
 
-O projeto aparenta ser um monolito unico. A governanca deve privilegiar coesao local, limites de pacote claros e crescimento incremental da estrutura.
+1. Ler este arquivo antes de analisar ou alterar arquivos.
+2. Inspecionar o contexto real com comandos locais antes de propor mudancas.
+3. Preservar arquitetura, estilo, nomes e fronteiras existentes.
+4. Preferir a menor mudanca segura que resolva a causa raiz.
+5. Nao introduzir camadas, dependencias ou abstracoes sem necessidade demonstrada.
+6. Atualizar ou adicionar testes quando houver mudanca de comportamento.
+7. Rodar validacoes proporcionais ao risco.
+8. Registrar bloqueios, falhas de ferramenta e suposicoes explicitamente.
 
-Stack detectada: Go.
-Frameworks detectados: Fiber, gRPC.
+## Arquitetura
 
-## Estrutura de Pastas
+- Transporte e adapters dependem de casos de uso ou servicos explicitos, nunca o inverso.
+- Dominio nao conhece HTTP, banco, filas, serializacao, drivers ou detalhes de infraestrutura.
+- Infraestrutura implementa contratos consumidos pela aplicacao, mantendo dependencia para dentro.
+- Crescer a estrutura apenas quando o codigo atual nao comportar a mudanca com clareza.
+- Evitar helpers transversais que escondam regra de negocio ou IO.
 
-```
-.
-.ai_spec_harness.json
-.env
-.github
-.github/agents
-.github/agents/bugfix.agent.md
-.github/agents/prd-writer.agent.md
-.github/agents/project-analyzer.agent.md
-.github/agents/refactorer.agent.md
-.github/agents/reviewer.agent.md
-.github/agents/task-executor.agent.md
-.github/agents/task-planner.agent.md
-.github/agents/technical-specification-writer.agent.md
-.github/copilot-instructions.md
-.github/hooks
-.github/hooks/post-execute-task.sh
-.github/hooks/post-wave.sh
-.github/hooks/pre-execute-all-tasks.sh
-.github/hooks/subagent-stop-wrapper.sh
-.github/hooks/validate-governance.sh
-.github/hooks/validate-preload.sh
-.github/skills
-.github/skills/agent-governance
-.github/skills/agent-governance/SKILL.md
-.github/skills/agent-governance/references
-.github/skills/agent-governance/references/bug-schema.json
-.github/skills/agent-governance/references/ddd.md
-.github/skills/agent-governance/references/enforcement-matrix.md
-.github/skills/agent-governance/references/error-handling.md
-.github/skills/agent-governance/references/messaging.md
-.github/skills/agent-governance/references/observability.md
-.github/skills/agent-governance/references/persistence.md
-.github/skills/agent-governance/references/security-app.md
-.github/skills/agent-governance/references/security.md
-.github/skills/agent-governance/references/shared-architecture.md
-.github/skills/agent-governance/references/shared-lifecycle.md
-.github/skills/agent-governance/references/shared-patterns.md
-.github/skills/agent-governance/references/shared-testing.md
-.github/skills/agent-governance/references/testing.md
-.github/skills/agent-governance/scripts
-.github/skills/agent-governance/scripts/detect-architecture.sh
-.github/skills/agent-governance/scripts/detect-toolchain.sh
-.github/skills/agent-governance/triggers
-.github/skills/agent-governance/triggers/go.yaml
-.github/skills/agent-governance/triggers/node.yaml
-.github/skills/agent-governance/triggers/python.yaml
-.github/skills/analyze-project
-.github/skills/analyze-project/SKILL.md
-.github/skills/analyze-project/assets
-.github/skills/analyze-project/assets/agents-template.md
-.github/skills/analyze-project/assets/ai-tool-template.md
-.github/skills/analyze-project/scripts
-.github/skills/analyze-project/scripts/generate-governance.sh
-.github/skills/bugfix
-.github/skills/bugfix/SKILL.md
-.github/skills/bugfix/assets
-.github/skills/bugfix/assets/bugfix-report-template.md
-.github/skills/bugfix/references
-.github/skills/bugfix/references/canonical-bug-format.md
-.github/skills/bugfix/scripts
-.github/skills/bugfix/scripts/validate-bug-input.py
-.github/skills/confluence-changelog-publisher
-.github/skills/confluence-changelog-publisher/SKILL.md
-.github/skills/create-prd
-.github/skills/create-prd/SKILL.md
-.github/skills/create-prd/assets
-.github/skills/create-prd/assets/prd-template.md
-.github/skills/create-tasks
-.github/skills/create-tasks/SKILL.md
-.github/skills/create-tasks/assets
-.github/skills/create-tasks/assets/task-template.md
-.github/skills/create-tasks/assets/tasks-template.md
-.github/skills/create-technical-specification
-.github/skills/create-technical-specification/SKILL.md
-.github/skills/create-technical-specification/assets
-.github/skills/create-technical-specification/assets/adr-template.md
-.github/skills/create-technical-specification/assets/techspec-template.md
-.github/skills/execute-all-tasks
-.github/skills/execute-all-tasks/SKILL.md
-.github/skills/execute-all-tasks/assets
-```
+## Skills Obrigatorias
 
-## Padrao Arquitetural
+Para tarefas que alteram codigo ou governanca:
 
-Padrao arquitetural nao inferido com alta confianca; assumir composicao simples e dependencias explicitas.
+- Carregar `.agents/skills/agent-governance/SKILL.md`.
 
-### Fluxo de Dependencias
+Para tarefas que alteram codigo Go:
 
-- Transporte e adapters devem depender de casos de uso ou servicos explicitos, nao do contrario.
-- Dominio nao deve conhecer detalhes de HTTP, banco, filas, serializacao ou drivers.
-- Infraestrutura pode implementar contratos consumidos pela aplicacao, preservando dependencia para dentro.
+- Carregar `.agents/skills/go-implementation/SKILL.md`.
+- Consultar referencias e exemplos de Go apenas sob demanda.
+- Nao escrever comentarios em codigo Go novo ou alterado.
 
-## Modo de trabalho
+Para tarefas especificas:
 
-1. Entender o contexto antes de editar qualquer arquivo.
-2. Preferir a menor mudanca segura que resolva a causa raiz.
-3. Preservar arquitetura, convencoes e fronteiras ja existentes no contexto analisado.
-4. Nao introduzir abstracoes, camadas ou dependencias sem demanda concreta.
-5. Atualizar ou adicionar testes quando houver mudanca de comportamento.
-6. Rodar validacoes proporcionais a mudanca.
-7. Registrar bloqueios e suposicoes explicitamente quando o contexto estiver incompleto.
-
-## Diretrizes de Estrutura
-
-1. Priorize entendimento do codigo e do contexto atual antes de propor refatoracoes.
-2. Respeite padroes existentes de nomenclatura, organizacao e tratamento de erro.
-3. Defina estrutura simples, evolutiva e com defaults explicitos.
-4. Evite reescritas amplas quando uma alteracao localizada resolver o problema.
-5. Estabeleca contratos, testes e comandos de validacao cedo quando eles ainda nao existirem.
-6. Considere risco de regressao como restricao principal.
-7. Evite overengineering disfarcado de arquitetura futura.
-
-## Regras por Arquitetura
-
-1. Preservar coesao local e dependencia unidirecional entre packages.
-2. Evitar helpers transversais que escondam regra de negocio ou IO.
-3. Crescer a estrutura apenas quando o codigo atual ja nao comportar a mudanca com clareza.
-
-## Regras por Linguagem
-
-Para tarefas que alteram codigo, carregar a skill:
-
-- `.agents/skills/agent-governance/SKILL.md`
-
-Para tarefas que alteram codigo Go, carregar tambem:
-
-- `.agents/skills/go-implementation/SKILL.md`
-
-Para tarefas de revisao ou refatoracao incremental de design em Go guiadas por heuristicas de object calisthenics, carregar tambem:
-
-- `.agents/skills/object-calisthenics-go/SKILL.md`
-
-Para tarefas de correcao de bugs com remediacao e teste de regressao, carregar tambem:
-
-- `.agents/skills/bugfix/SKILL.md`
-
-### Composicao Multi-Linguagem
-
-Em projetos com mais de uma linguagem (ex: monorepo Go + Node), carregar apenas a skill da linguagem afetada pela mudanca. Se a tarefa cruzar linguagens, carregar ambas e aplicar a validacao de cada stack nos arquivos correspondentes. Nao misturar convencoes de uma linguagem em arquivos de outra.
-
-## Referencias
-
-Cada skill lista suas proprias referencias em `references/` com gatilhos de carregamento no respectivo `SKILL.md`. Nao duplicar a listagem aqui — consultar o SKILL.md da skill ativa para saber quais referencias carregar e em que condicao.
-
-## Notas por Ferramenta
-
-- **Claude Code**: skills pre-carregadas via `.claude/skills/`, hooks via `.claude/hooks/`, agents delegados via `.claude/agents/`.
-- **Gemini CLI**: commands em `.gemini/commands/*.toml` apontam para skills canonicas. Sem hooks ou agents nativos — o modelo deve seguir as instrucoes procedurais do SKILL.md carregado.
-- **Codex**: le `AGENTS.md` como instrucao de sessao. Entradas em `.codex/config.toml` sao metadados para `upgrade.sh`, nao spec oficial do Codex CLI. O agente deve seguir as instrucoes de `AGENTS.md` para descobrir e carregar skills.
-- **Copilot**: `.github/copilot-instructions.md` como instrucao principal. `.github/agents/` sao wrappers. Sem hooks nativos — compliance depende do modelo seguir as instrucoes.
-
-### Matrix de Enforcement
-
-| Capacidade | Claude Code | Gemini CLI | Codex | Copilot |
-|---|---|---|---|---|
-| Carga base automatica | hook PreToolUse | procedural | procedural | procedural |
-| Protecao de governanca | hook PostToolUse | procedural | procedural | procedural |
-| Skills pre-carregadas | sim (symlinks) | sim (commands) | nao | sim (agents) |
-| Enforcement programatico | sim (hooks) | nao | nao | nao |
-| Validacao de evidencias | script | procedural | procedural | procedural |
-
-Ferramentas sem enforcement programatico dependem do modelo seguir instrucoes procedurais. A compliance nessas ferramentas e best-effort.
+- Bug fix com remediacao e teste de regressao: carregar `.agents/skills/bugfix/SKILL.md`.
+- Review de codigo: carregar `.agents/skills/review/SKILL.md`.
+- Refatoracao incremental: carregar `.agents/skills/refactor/SKILL.md`.
+- Refatoracao Go guiada por object calisthenics: carregar `.agents/skills/object-calisthenics-go/SKILL.md`.
 
 ## Economia de Contexto
 
-Carregar o minimo necessario para a tarefa reduz custo de tokens em 35-50%:
+Classificar a complexidade antes de carregar referencias:
 
-| Complexidade | Criterio | O que carregar |
+| Complexidade | Criterio | Contexto |
 |---|---|---|
-| `trivial` | Rename, typo, import, formatacao | Apenas AGENTS.md |
-| `standard` | Bug fix, novo metodo, refactor local | AGENTS.md + TL;DR das references afetadas |
-| `complex` | Nova feature, interface publica, migracao | AGENTS.md + referencias completas |
+| `trivial` | Rename, typo, import ou formatacao sem comportamento | Apenas este arquivo |
+| `standard` | Bug fix, novo metodo ou refactor local | Este arquivo + TL;DR das referencias afetadas |
+| `complex` | Nova feature, interface publica, migracao ou mudanca transversal | Este arquivo + referencias completas aplicaveis |
 
-- Classificar a complexidade **antes** de carregar qualquer referencia.
-- Quando a reference tiver bloco `<!-- TL;DR ... -->`, preferir o TL;DR ao documento completo em tarefas standard.
-- Override explicito via `--complexity=<nivel>` prevalece sobre classificacao automatica.
+- Quando uma referencia tiver bloco `<!-- TL;DR -->`, preferir esse bloco em tarefas `standard`.
+- Override explicito `--complexity=<nivel>` prevalece sobre a classificacao automatica.
+- Se mais de uma skill puder ser usada, carregar o conjunto minimo que cobre a tarefa.
+
+## ai-spec-harness 0.27.1
+
+- Confirmar a CLI real com `ai-spec version` e `ai-spec --help`; o output deve identificar `ai-spec-harness 0.27.1`.
+- Usar `ai-spec inspect .` e `ai-spec doctor .` para diagnostico da instalacao.
+- Usar `ai-spec verify . --tools all --langs go --by-cli` para verificar skills instaladas.
+- Usar `ai-spec skills check` somente para checagem de versoes de skills externas quando aplicavel.
+- Usar `ai-spec check-spec-drift <tasks.md|diretorio-prd>` para drift entre `prd.md`, `techspec.md` e `tasks.md`.
+- Nao assumir comandos historicos sem confirmar na ajuda da versao instalada.
+- Nao tentar invocar `ai-spec-harness` diretamente se esse nome nao existir no PATH; usar `ai-spec`, que aponta para `/opt/homebrew/Cellar/ai-spec/0.27.1/bin/ai-spec`.
+- Nao seguir em modo degradado quando `verify`, `doctor` ou drift de spec falharem sem registrar a falha.
+
+## Ferramentas
+
+- Claude Code: `CLAUDE.md` deve importar este arquivo e conter apenas deltas especificos do Claude.
+- Codex: este arquivo e lido como instrucao de sessao; `.codex/config.toml` e metadado local, nao fonte canonica.
+- Gemini CLI: `GEMINI.md` deve apontar para este arquivo e comandos em `.gemini/commands/*.toml` devem delegar para skills canonicas.
+- Copilot: `.github/copilot-instructions.md` deve permanecer curto e apontar para esta governanca.
+- Skills canonicas vivem em `.agents/skills/`; copias ou symlinks em `.claude/skills/` e `.github/skills/` nao devem divergir intencionalmente.
 
 ## Validacao
 
-Antes de concluir uma alteracao:
+Antes de concluir mudancas, escolher comandos proporcionais ao risco:
 
-Seguir Etapa 4 de `.agents/skills/agent-governance/SKILL.md` como base canonica.
+- Governanca ai-spec-harness: `ai-spec lint .`, `ai-spec doctor .`, `ai-spec inspect .`, `ai-spec verify . --tools all --langs go --by-cli`.
+- Drift de especificacao: `ai-spec check-spec-drift <tasks.md|diretorio-prd>`.
+- Go: `gofmt` nos arquivos alterados, testes direcionados primeiro e `go test ./...` quando proporcional.
+- Lint Go: `golangci-lint run` quando disponivel e proporcional ao risco.
 
-Comandos detectados no projeto (Go):
-1. Rodar fmt: `gofmt -w .`.
-2. Rodar test: `go test ./...`.
-3. Rodar lint: `golangci-lint run`.
+Nao rodar formatadores mutantes em todo o repositorio quando a tarefa nao alterou codigo da stack afetada.
 
 ## Restricoes
 
-1. Nao inventar contexto ausente.
-2. Nao assumir versao de linguagem, framework ou runtime sem verificar.
-3. Nao alterar comportamento publico sem deixar isso explicito.
-4. Nao usar exemplos como copia cega; adaptar ao contexto real.
+- Nao inventar requisitos, arquitetura, versao de linguagem, runtime ou comportamento de ferramenta.
+- Nao alterar comportamento publico sem explicitar a alteracao.
+- Nao reverter mudancas existentes do usuario sem pedido explicito.
+- Nao copiar exemplos sem adaptar ao contexto real.
+- Nao usar documentacao nao oficial como fonte obrigatoria quando houver fonte oficial aplicavel.
 
+## Controle de Profundidade
 
-### Controle de profundidade de invocacao
+Skills que invocam outras skills devem verificar `scripts/lib/check-invocation-depth.sh` ou `.agents/lib/check-invocation-depth.sh`.
 
-- Skills que invocam outros skills (execute-task, refactor) devem verificar profundidade via `scripts/lib/check-invocation-depth.sh`.
-- Limite padrao: 2 niveis. Configuravel via `AI_INVOCATION_MAX`.
-- Variaveis de ambiente: `AI_INVOCATION_DEPTH` (corrente), `AI_INVOCATION_MAX` (limite).
+- Limite padrao: `AI_INVOCATION_MAX=2`.
+- Profundidade corrente: `AI_INVOCATION_DEPTH`.
+- Ao atingir o limite, parar a cadeia e registrar o bloqueio em vez de contornar.

@@ -1,19 +1,13 @@
+@AGENTS.md
+
 # Claude Code
 
-Use `AGENTS.md` como fonte canonica das regras deste repositorio.
+Use `AGENTS.md` como fonte canonica deste repositorio. Este arquivo existe apenas para deltas especificos do Claude Code.
 
-## Instrucoes
+## Instrucoes Especificas
 
-1. Ler `AGENTS.md` no inicio da sessao.
-2. `.claude/skills/` sao symlinks para `.agents/skills/` — a fonte de verdade e sempre `.agents/skills/`.
-3. `.claude/agents/` sao wrappers leves que delegam para a habilidade canonica.
-4. Em tarefas de execucao, carregar apenas `AGENTS.md`, `agent-governance` e a skill operacional da linguagem ou atividade afetada.
-5. Skills de planejamento (`analyze-project`, `create-prd`, `create-technical-specification`, `create-tasks`) entram apenas quando a tarefa pedir esse fluxo explicitamente.
-6. Carregar referencias adicionais apenas quando a tarefa exigir.
-7. Preservar estilo, arquitetura e fronteiras existentes antes de propor mudancas.
-8. Validar mudancas com comandos proporcionais ao risco.
-
-## Stack
-
-- Projeto com contexto Go detectado: carregar `.agents/skills/go-implementation/SKILL.md` ao alterar codigo Go.
-- Validar a versao declarada em `go.mod` antes de introduzir APIs da linguagem ou novas dependencias.
+- Manter este arquivo curto; mover procedimentos longos para skills ou regras com escopo.
+- Preferir `.agents/skills/` como fonte de verdade das skills.
+- Tratar `.claude/skills/` e `.claude/agents/` como integracoes do Claude, nao como governanca canonica.
+- Carregar referencias adicionais apenas quando a tarefa exigir.
+- Validar mudancas com comandos proporcionais ao risco.

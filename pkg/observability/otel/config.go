@@ -53,8 +53,8 @@ type Config struct {
 	// AVISO: slog.JSONHandler usa sync.Mutex por escrita — causa serialização e spikes de p99 em produção.
 	ConsoleLog bool
 
-	MetricExportInterval   int64    // segundos, padrão 60
-	MetricNamespace        string   // prefixo opcional para nomes de métricas
+	MetricExportInterval   int64  // segundos, padrão 60
+	MetricNamespace        string // prefixo opcional para nomes de métricas
 	EnableCardinalityCheck bool
 	CustomBlockedLabels    []string
 
@@ -347,8 +347,8 @@ func (p *Provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 	return otlploggrpc.New(ctx, opts...)
 }
 
-func (p *Provider) Tracer() observability.Tracer  { return p.tracer }
-func (p *Provider) Logger() observability.Logger  { return p.logger }
+func (p *Provider) Tracer() observability.Tracer   { return p.tracer }
+func (p *Provider) Logger() observability.Logger   { return p.logger }
 func (p *Provider) Metrics() observability.Metrics { return p.metrics }
 
 func (p *Provider) HTTP() HTTPInstrumentation {

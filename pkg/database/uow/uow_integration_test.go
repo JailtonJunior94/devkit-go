@@ -191,7 +191,7 @@ func TestIntegration_UoW_SerializableIsolation(t *testing.T) {
 			_ = rows.Close()
 
 			tx1Ready <- struct{}{} // sinaliza que a tx1 leu a linha
-			<-tx1Commit    // aguarda o sinal para proceder com o commit
+			<-tx1Commit            // aguarda o sinal para proceder com o commit
 
 			_, wErr := tx.ExecContext(ctx, `UPDATE items SET value = 'tx1' WHERE value = 'seed'`)
 			return struct{}{}, wErr

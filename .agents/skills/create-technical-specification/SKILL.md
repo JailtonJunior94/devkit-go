@@ -1,6 +1,6 @@
 ---
 name: create-technical-specification
-version: 1.2.0
+version: 1.3.0
 description: Cria especificações técnicas prontas para implementação a partir de um PRD aprovado e do contexto do repositório. Registra spec-hash do PRD consumido no cabeçalho da techspec para rastreabilidade e detecção de drift downstream. Use quando arquitetura, interfaces, riscos, ADRs e estratégia de testes precisarem ser definidos antes da codificação. Não use para descoberta de produto, execução de tarefa ou revisão de código.
 ---
 
@@ -27,6 +27,7 @@ description: Cria especificações técnicas prontas para implementação a part
    - falhas esperadas e idempotência
    - estratégia de testes
 2. Limitar o esclarecimento a duas rodadas.
+   - **Trade-off de arquitetura/interface material** (caminhos com consequências divergentes): aplicar `.agents/skills/agent-governance/references/multiple-choice-protocol.md` (2–5 opções, "(Recomendado)", uma pergunta por turno).
 3. Se a arquitetura continuar bloqueada após duas rodadas, retornar `needs_input` com as decisões faltantes.
 
 **Etapa 4: Verificar conformidade com as regras do repositório**

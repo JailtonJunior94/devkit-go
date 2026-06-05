@@ -12,7 +12,6 @@ import (
 // HealthCheckFunc is an alias for common.HealthCheckFunc for backward compatibility.
 type HealthCheckFunc = common.HealthCheckFunc
 
-
 // healthHandler returns a handler for the /health endpoint with detailed check results.
 func healthHandler(
 	config common.Config,

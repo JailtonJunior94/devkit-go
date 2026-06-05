@@ -153,9 +153,9 @@ func (s *FakeSpan) Context() observability.SpanContext {
 	}
 }
 
-func (s *FakeSpan) TraceID() string  { return "fake-trace-id" }
-func (s *FakeSpan) SpanID() string   { return "fake-span-id" }
-func (s *FakeSpan) IsSampled() bool  { return true }
+func (s *FakeSpan) TraceID() string { return "fake-trace-id" }
+func (s *FakeSpan) SpanID() string  { return "fake-span-id" }
+func (s *FakeSpan) IsSampled() bool { return true }
 
 type FakeEvent struct {
 	Name      string
@@ -169,9 +169,9 @@ type FakeSpanContext struct {
 	sampled bool
 }
 
-func (c *FakeSpanContext) TraceID() string  { return c.traceID }
-func (c *FakeSpanContext) SpanID() string   { return c.spanID }
-func (c *FakeSpanContext) IsSampled() bool  { return c.sampled }
+func (c *FakeSpanContext) TraceID() string { return c.traceID }
+func (c *FakeSpanContext) SpanID() string  { return c.spanID }
+func (c *FakeSpanContext) IsSampled() bool { return c.sampled }
 
 type FakeLogger struct {
 	mu      *sync.RWMutex

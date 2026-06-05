@@ -1,4 +1,4 @@
-description = "Implementa alteracoes em codigo Node/TypeScript usando governanca base, convencoes de projeto e validacao proporcional."
+description = "Implementa alteracoes em codigo Node/TypeScript usando governanca base, regras estritas [HARD], convencoes de projeto e "
 prompt = """
 Use `.agents/skills/node-implementation/SKILL.md` como fluxo canonico desta tarefa.
 Leia os assets e references sob demanda conforme descrito no SKILL.md.

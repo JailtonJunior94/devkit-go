@@ -31,17 +31,17 @@ const (
 // (string, int, int64, float64, bool). Layout: 64 bytes (uma cache line).
 type Field struct {
 	Key    string
-	numVal uint64    // armazena int, int64, bits de float64 e bool — sem boxing
+	numVal uint64 // armazena int, int64, bits de float64 e bool — sem boxing
 	strVal string
-	anyVal any       // usado apenas para error e any — boxing inevitável
+	anyVal any // usado apenas para error e any — boxing inevitável
 	kind   FieldKind
 }
 
-func (f Field) Kind() FieldKind         { return f.kind }
-func (f Field) StringValue() string     { return f.strVal }
-func (f Field) Int64Value() int64       { return int64(f.numVal) }
-func (f Field) Float64Value() float64   { return math.Float64frombits(f.numVal) }
-func (f Field) BoolValue() bool         { return f.numVal != 0 }
+func (f Field) Kind() FieldKind       { return f.kind }
+func (f Field) StringValue() string   { return f.strVal }
+func (f Field) Int64Value() int64     { return int64(f.numVal) }
+func (f Field) Float64Value() float64 { return math.Float64frombits(f.numVal) }
+func (f Field) BoolValue() bool       { return f.numVal != 0 }
 
 // AnyValue retorna o valor como interface{} para inspeção e testes.
 // Para campos tipados use os acessores específicos em hot paths (evitam boxing).

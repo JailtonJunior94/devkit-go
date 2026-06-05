@@ -636,7 +636,6 @@ func TestWithRetryValidation(t *testing.T) {
 	}
 }
 
-
 func TestClassifyError(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -43,7 +43,7 @@ func (m *benchManager) DBTX(_ context.Context) database.DBTX {
 func (m *benchManager) BeginTx(_ context.Context, _ database.TxOptions) (database.Tx, error) {
 	return m.tx, nil
 }
-func (m *benchManager) Ping(_ context.Context) error    { return nil }
+func (m *benchManager) Ping(_ context.Context) error     { return nil }
 func (m *benchManager) Shutdown(_ context.Context) error { return nil }
 
 var benchResult string
