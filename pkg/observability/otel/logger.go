@@ -16,8 +16,8 @@ import (
 
 const (
 	redactedValue       = "[REDACTED]"
-	maxFields           = 50   // máximo de fields por entrada de log
-	maxFieldValueLength = 2048 // tamanho máximo de um valor de field
+	maxFields           = 50
+	maxFieldValueLength = 2048
 )
 
 var defaultSensitiveKeys = []string{
@@ -27,7 +27,6 @@ var defaultSensitiveKeys = []string{
 	"access_token", "refresh_token", "bearer", "session", "cookie",
 }
 
-// sensitiveKeysLower é pré-computado na inicialização para evitar ToLower() por chamada.
 var sensitiveKeysLower = initSensitiveKeysLower()
 
 func initSensitiveKeysLower() []string {
@@ -59,8 +58,6 @@ func formatSpanID(id trace.SpanID) string {
 	return string(buf[:])
 }
 
-// asciiContainsFold compara sem alocar — evita strings.ToLower(s) que heap-aloca nova string.
-// substr deve estar em lowercase (como armazenado em sensitiveKeysLower).
 func asciiContainsFold(s, substr string) bool {
 	ls, lsub := len(s), len(substr)
 	if lsub == 0 {
@@ -70,8 +67,8 @@ func asciiContainsFold(s, substr string) bool {
 		return false
 	}
 outer:
-	for i := 0; i <= ls-lsub; i++ {
-		for j := 0; j < lsub; j++ {
+	for i := range ls - lsub + 1 {
+		for j := range lsub {
 			c := s[i+j]
 			if c >= 'A' && c <= 'Z' {
 				c += 'a' - 'A'
@@ -87,8 +84,6 @@ outer:
 
 var slogAttrPool = sync.Pool{New: func() any { s := make([]slog.Attr, 0, 16); return &s }}
 
-// otelLogger usa o bridge oficial slog → OTel Logs.
-// console=true serializa via sync.Mutex (slog.JSONHandler) — não usar em produção sob carga.
 type otelLogger struct {
 	bridgeLogger  *slog.Logger
 	consoleLogger *slog.Logger
@@ -210,8 +205,6 @@ func (l *otelLogger) log(ctx context.Context, level slog.Level, msg string, fiel
 	slogAttrPool.Put(sp)
 }
 
-// logConsole é o caminho de desenvolvimento. Separado de log() para manter o fast path inlinável.
-// AVISO: adquire sync.Mutex do slog.JSONHandler — não usar em produção sob carga concorrente.
 func (l *otelLogger) logConsole(ctx context.Context, level slog.Level, msg string, fields []observability.Field) {
 	sp := slogAttrPool.Get().(*[]slog.Attr)
 	slogAttrs := (*sp)[:0]
@@ -236,7 +229,6 @@ func (l *otelLogger) appendCorrelationAttrs(ctx context.Context, attrs []slog.At
 	if spanCtx := trace.SpanContextFromContext(ctx); spanCtx.IsValid() {
 		correlation.TraceID = formatTraceID(spanCtx.TraceID())
 		correlation.SpanID = formatSpanID(spanCtx.SpanID())
-		correlation.Sampled = spanCtx.IsSampled()
 	}
 
 	return append(attrs,
@@ -332,7 +324,6 @@ func sanitizeFields(fields []observability.Field) []observability.Field {
 	return sanitized
 }
 
-// isSensitiveKey usa asciiContainsFold para comparação case-insensitive sem alocar por chamada.
 func isSensitiveKey(key string) bool {
 	for _, sensitive := range sensitiveKeysLower {
 		if asciiContainsFold(key, sensitive) {

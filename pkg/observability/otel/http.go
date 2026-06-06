@@ -20,12 +20,10 @@ const (
 	httpUnknownRoute = "unknown"
 )
 
-// HTTPInstrumentation é framework-neutral; wrappers de framework adaptam para essa interface.
 type HTTPInstrumentation interface {
 	StartRequest(ctx context.Context, req HTTPRequest) (context.Context, HTTPRequestScope)
 }
 
-// HTTPRequestScope detém o telemetry da requisição até o adapter finalizar.
 type HTTPRequestScope interface {
 	OnError(err error)
 	Finish(resp HTTPResponse)
@@ -128,10 +126,6 @@ type httpRequestScope struct {
 	end bool
 }
 
-// SetRoute updates the route pattern after a framework finishes route
-// matching. This preserves low-cardinality route labels even when the
-// instrumentation span starts in a top-level middleware before the final
-// route is known.
 func (s *httpRequestScope) SetRoute(route string) {
 	normalized := strings.TrimSpace(route)
 	if normalized == "" || normalized == s.req.Route {
@@ -149,8 +143,6 @@ func (s *httpRequestScope) SetRoute(route string) {
 	s.req.Route = normalized
 	s.metricFields = s.req.metricFields()
 
-	// Move the active request gauge from the placeholder route label to the
-	// matched route label so start/finish accounting stays balanced.
 	s.active.Add(s.ctx, -1, oldFields...)
 	s.active.Add(s.ctx, 1, s.metricFields...)
 	s.span.SetAttributes(observability.String("http.route", normalized))

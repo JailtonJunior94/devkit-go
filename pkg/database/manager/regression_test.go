@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -340,4 +341,34 @@ func TestIsNoopObservability_FakeProvider_NotNoop(t *testing.T) {
 // I3: nil deve ser tratado como noop.
 func TestIsNoopObservability_Nil_IsNoop(t *testing.T) {
 	require.True(t, isNoopObservability(nil), "nil observability deve ser tratado como noop")
+}
+
+func TestInstrumentation_QueryRowContext_OrphanRow_SpanClosedByCleanup(t *testing.T) {
+	obs := fake.NewProvider()
+	inst := newInstrumentation(database.DriverPostgres, nil, obs, nil, false)
+	base := &stubDBTXWithRow{row: &stubRowWithErr{}}
+	dbtx := inst.WrapDBTX(base)
+
+	spans := func() []*fake.FakeSpan {
+		return obs.Tracer().(*fake.FakeTracer).GetSpans()
+	}
+
+	orphan := func() {
+		_ = dbtx.QueryRowContext(context.Background(), "SELECT 1")
+	}
+	orphan()
+
+	require.Len(t, spans(), 1)
+	require.False(t, spans()[0].Ended(), "span permanece aberto enquanto wrapper vivo")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		runtime.Gosched()
+		if spans()[0].Ended() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.True(t, spans()[0].Ended(), "cleanup deve encerrar o span quando wrapper é coletado")
 }

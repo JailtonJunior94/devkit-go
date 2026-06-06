@@ -1,6 +1,3 @@
-// O pacote manager expõe a interface Manager e sua Factory para o gerenciamento
-// do ciclo de vida dos pools de conexões de banco de dados. Os consumidores dependem apenas do Manager;
-// os adaptadores específicos dos drivers são resolvidos internamente pelo New.
 package manager
 
 import (
@@ -23,32 +20,23 @@ var (
 	runStartupMigrationsFunc = runStartupMigrations
 )
 
-// Manager é a interface pública para gerenciar um pool de conexões de banco de dados.
 type Manager interface {
 	Driver() database.Driver
-	// DBTX retorna a transação ativa propagada via ctx quando existir,
-	// ou um DBTX baseado no pool caso contrário (Q61 / ADR-004).
+
 	DBTX(ctx context.Context) database.DBTX
-	// BeginTx inicia uma nova transação com as opções fornecidas.
-	// O Tx retornado satisfaz database.DBTX e expõe Commit e Rollback.
+
 	BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error)
 	Ping(ctx context.Context) error
-	// Shutdown fecha o pool graciosamente. É idempotente (sync.Once).
-	// Retorna ErrShutdownTimeout se o ctx expirar antes do Close completar (RF-09).
+
 	Shutdown(ctx context.Context) error
 }
 
-// DriverConfig é a interface de marcação para configurações de driver tipadas.
-// A Factory impõe o conjunto suportado via um type switch; tipos desconhecidos
-// recebem ErrInvalidConfig sem exigir um método não exportado.
 type DriverConfig interface {
 	Validate() error
 }
 
-// Option configura o manager.
 type Option func(*options)
 
-// dbManager é a implementação concreta de Manager.
 type dbManager struct {
 	adapter     driverAdapter
 	opts        options
@@ -57,16 +45,15 @@ type dbManager struct {
 	shutdown    sync.Once
 	shutdownErr error
 	logger      *slog.Logger
-	// activeTx rastreia transações em voo iniciadas via BeginTx.
-	// Shutdown aguarda o drain completo antes de invocar adapter.Close (RF-04).
+
 	activeTx sync.WaitGroup
 	scraper  *internalpool.Scraper
 	inst     instrumentation
+	poolDBTX database.DBTX
 }
 
-// New cria um Manager para a configuração de driver fornecida.
-// Valida a configuração, constrói o adaptador (que inclui o Ping inicial de 5s
-// por Q48) e aplica todas as opções fornecidas.
+var closedDBTXSingleton database.DBTX = &closedDBTX{}
+
 func New(cfg DriverConfig, opts ...Option) (Manager, error) {
 	resolvedCfg, err := resolveConfig(cfg)
 	if err != nil {
@@ -97,15 +84,21 @@ func New(cfg DriverConfig, opts ...Option) (Manager, error) {
 		logger:  fallbackLogger,
 		inst:    newInstrumentation(adapter.Driver(), adapter.Attributes(), o.observability, fallbackLogger, o.sqlLogging),
 	}
+	mgr.poolDBTX = mgr.inst.WrapDBTX(adapter.DBTX())
 	if !isNoopObservability(o.observability) {
 		mgr.scraper = internalpool.NewScraper(adapter.Stats, o.observability.Metrics(), resolvePoolStatsInterval(o), adapter.Attributes()...)
 	}
 	return mgr, nil
 }
 
-// buildAdapter instancia o adaptador de driver concreto para cfg.
-// Drivers ainda não implementados retornam ErrInvalidConfig com uma mensagem descritiva.
 func buildAdapter(cfg DriverConfig, o options) (driverAdapter, error) {
+	if factory, ok := lookupDriverFactory(cfg); ok {
+		adapter, err := factory(cfg, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &externalAdapter{DriverAdapter: adapter}, nil
+	}
 	switch c := cfg.(type) {
 	case postgres.PostgresConfig:
 		return postgres.New(c, nil)
@@ -116,13 +109,37 @@ func buildAdapter(cfg DriverConfig, o options) (driverAdapter, error) {
 	case mssql.MSSQLConfig:
 		return mssql.New(c, nil)
 	default:
-		return nil, fmt.Errorf("%w: unsupported driver config type %T", database.ErrInvalidConfig, cfg)
+		return nil, unsupportedDriverError(cfg)
 	}
 }
 
-// resolveLogger retorna slog.Default() quando o log de SQL está habilitado,
-// ou nil quando desabilitado. O adaptador usa este logger para saída de depuração de consulta.
-// Quando a observabilidade é noop, o slog.Default() fornece saída estruturada (Q56).
+func NewFromAdapter(adapter DriverAdapter, opts ...Option) (Manager, error) {
+	if adapter == nil {
+		return nil, fmt.Errorf("%w: adapter is nil", database.ErrInvalidConfig)
+	}
+	o := defaultOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+	internalAdapter := &externalAdapter{DriverAdapter: adapter}
+	fallbackLogger := resolveLogger(o)
+	mgr := &dbManager{
+		adapter: internalAdapter,
+		opts:    o,
+		logger:  fallbackLogger,
+		inst:    newInstrumentation(adapter.Driver(), adapter.Attributes(), o.observability, fallbackLogger, o.sqlLogging),
+	}
+	mgr.poolDBTX = mgr.inst.WrapDBTX(adapter.DBTX())
+	if !isNoopObservability(o.observability) {
+		mgr.scraper = internalpool.NewScraper(adapter.Stats, o.observability.Metrics(), resolvePoolStatsInterval(o), adapter.Attributes()...)
+	}
+	return mgr, nil
+}
+
+type externalAdapter struct {
+	DriverAdapter
+}
+
 func resolveLogger(o options) *slog.Logger {
 	if !o.sqlLogging || !isNoopObservability(o.observability) {
 		return nil
@@ -141,9 +158,6 @@ func (m *dbManager) Driver() database.Driver {
 	return m.adapter.Driver()
 }
 
-// DBTX respeita a transação ativa no ctx (propagação implícita ADR-004).
-// Quando o ctx não carrega transação, retorna um DBTX baseado no pool.
-// Após o Shutdown, retorna um closedDBTX que reporta ErrManagerClosed em cada operação.
 func (m *dbManager) DBTX(ctx context.Context) database.DBTX {
 	if tx, ok := database.FromContext(ctx); ok {
 		return tx
@@ -151,20 +165,12 @@ func (m *dbManager) DBTX(ctx context.Context) database.DBTX {
 	m.mu.RLock()
 	if m.closed {
 		m.mu.RUnlock()
-		return &closedDBTX{}
+		return closedDBTXSingleton
 	}
 	m.mu.RUnlock()
-	return m.inst.WrapDBTX(m.adapter.DBTX())
+	return m.poolDBTX
 }
 
-// BeginTx inicia uma nova transação com as opções fornecidas.
-// Retorna ErrManagerClosed após o Shutdown.
-//
-// O Add no WaitGroup ocorre dentro do RLock para sequenciá-lo com o Shutdown
-// (que adquire o Lock antes de Wait). Sem isso, há janela em que Shutdown
-// completa Wait com contador zero e BeginTx posteriormente faz Add — gerando
-// panic "WaitGroup is reused before previous Wait has returned" ou tx órfã
-// sobre pool já fechado.
 func (m *dbManager) BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error) {
 	m.mu.RLock()
 	if m.closed {
@@ -187,8 +193,6 @@ func (m *dbManager) BeginTx(ctx context.Context, opts database.TxOptions) (datab
 	return &trackedTx{Tx: m.inst.WrapTx(tx), wg: &m.activeTx}, nil
 }
 
-// trackedTx envolve uma database.Tx para sinalizar drain ao WaitGroup do Manager
-// na primeira chamada de Commit ou Rollback (RF-04).
 type trackedTx struct {
 	database.Tx
 	wg   *sync.WaitGroup
@@ -217,9 +221,6 @@ func (m *dbManager) Ping(ctx context.Context) error {
 	return m.adapter.Ping(ctx)
 }
 
-// Shutdown fecha o pool graciosamente. Idempotente via sync.Once.
-// Se o ctx expirar antes do adapter.Close retornar, o Shutdown retorna ErrShutdownTimeout
-// sem forçar o pool.Close (RF-09); a limpeza é deixada para a terminação do processo.
 func (m *dbManager) Shutdown(ctx context.Context) error {
 	m.shutdown.Do(func() {
 		m.mu.Lock()
@@ -233,9 +234,6 @@ func (m *dbManager) Shutdown(ctx context.Context) error {
 		}
 		defer cancel()
 
-		// Aguarda o drain das transações em voo (RF-04). Se o ctx expirar
-		// antes da drenagem, retorna ErrShutdownTimeout SEM invocar
-		// adapter.Close (RF-09).
 		drained := make(chan struct{})
 		go func() {
 			m.activeTx.Wait()
@@ -253,7 +251,6 @@ func (m *dbManager) Shutdown(ctx context.Context) error {
 			m.scraper.Stop()
 		}
 
-		// Após o drain, fecha o pool respeitando o tempo restante do contexto.
 		done := make(chan error, 1)
 		go func() {
 			done <- m.adapter.Close(shutdownCtx)
@@ -269,7 +266,6 @@ func (m *dbManager) Shutdown(ctx context.Context) error {
 	return m.shutdownErr
 }
 
-// closedDBTX é retornado pelo DBTX após o Shutdown; cada operação retorna ErrManagerClosed.
 type closedDBTX struct{}
 
 func (c *closedDBTX) ExecContext(_ context.Context, _ string, _ ...any) (database.Result, error) {
@@ -284,7 +280,6 @@ func (c *closedDBTX) QueryRowContext(_ context.Context, _ string, _ ...any) data
 	return &closedRow{}
 }
 
-// closedRow retorna ErrManagerClosed no Scan.
 type closedRow struct{}
 
 func (r *closedRow) Scan(_ ...any) error { return database.ErrManagerClosed }

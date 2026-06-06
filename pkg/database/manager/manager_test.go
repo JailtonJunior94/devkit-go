@@ -96,12 +96,14 @@ func newTestManager(adapter driverAdapter, opts ...Option) *dbManager {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return &dbManager{
+	m := &dbManager{
 		adapter: adapter,
 		opts:    o,
 		logger:  resolveLogger(o),
 		inst:    newInstrumentation(adapter.Driver(), adapter.Attributes(), o.observability, resolveLogger(o), o.sqlLogging),
 	}
+	m.poolDBTX = m.inst.WrapDBTX(adapter.DBTX())
+	return m
 }
 
 // --- Testes da Factory ---

@@ -90,7 +90,7 @@ func mergeConfigWithEnvDefaults(cfg DriverConfig) (DriverConfig, error) {
 	case mssql.MSSQLConfig:
 		return mergeMSSQLConfigWithEnv(c)
 	default:
-		return nil, fmt.Errorf("%w: unsupported driver config type %T", database.ErrInvalidConfig, cfg)
+		return cfg, nil
 	}
 }
 

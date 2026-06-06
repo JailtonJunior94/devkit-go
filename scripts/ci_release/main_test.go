@@ -271,10 +271,32 @@ func commitFileCLI(t *testing.T, repoPath string, relativePath string, content s
 func runGitCLI(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gitCommandCLI(dir, args...)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
 	return string(output)
+}
+
+func gitCommandCLI(dir string, args ...string) *exec.Cmd {
+	if isGitDirCLI(dir) {
+		return exec.Command("git", append([]string{"--git-dir", dir}, args...)...)
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd
+}
+
+func isGitDirCLI(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return false
+	}
+	return true
 }

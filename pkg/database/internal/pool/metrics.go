@@ -7,19 +7,13 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// DefaultScrapeInterval is the default interval between pool stats collections.
 const DefaultScrapeInterval = 10 * time.Second
 
-// Scraper periodically collects pool stats and emits OTel metrics.
-// Stop terminates the background goroutine; it blocks until the goroutine exits.
 type Scraper struct {
 	stop chan struct{}
 	done chan struct{}
 }
 
-// NewScraper starts a background goroutine that scrapes stats at the given interval
-// and emits gauges/counters via metrics. Pass nil for metrics to run without emission.
-// attrs are attached to every emitted metric point.
 func NewScraper(
 	statsFunc func() Stats,
 	metrics observability.Metrics,
@@ -37,8 +31,6 @@ func NewScraper(
 	return s
 }
 
-// Stop signals the scraper goroutine to terminate and waits for it to exit.
-// Guaranteed to return within 2× the scrape interval after the last tick.
 func (s *Scraper) Stop() {
 	close(s.stop)
 	<-s.done

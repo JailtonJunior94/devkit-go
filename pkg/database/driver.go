@@ -1,6 +1,5 @@
 package database
 
-// Driver identifica o backend do banco de dados.
 type Driver string
 
 const (

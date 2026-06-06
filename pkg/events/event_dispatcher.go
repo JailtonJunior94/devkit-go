@@ -19,23 +19,24 @@ type eventDispatcher struct {
 	handlers map[string][]EventHandler
 }
 
-type DispatcherOption func(*eventDispatcher)
+type dispatcherOption func(*eventDispatcher)
 
-func WithCapacity(capacity int) DispatcherOption {
+func WithCapacity(capacity int) dispatcherOption {
 	return func(ed *eventDispatcher) {
+		if capacity < 0 {
+			capacity = 0
+		}
 		ed.handlers = make(map[string][]EventHandler, capacity)
 	}
 }
 
-func NewEventDispatcher(opts ...DispatcherOption) EventDispatcher {
+func NewEventDispatcher(opts ...dispatcherOption) EventDispatcher {
 	ed := &eventDispatcher{
 		handlers: make(map[string][]EventHandler),
 	}
-
 	for _, opt := range opts {
 		opt(ed)
 	}
-
 	return ed
 }
 
@@ -61,7 +62,6 @@ func (ed *eventDispatcher) Dispatch(ctx context.Context, event Event) error {
 	ed.mu.RUnlock()
 
 	for _, handler := range handlersCopy {
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -102,12 +102,7 @@ func (ed *eventDispatcher) Has(eventType string, handler EventHandler) bool {
 	ed.mu.RLock()
 	defer ed.mu.RUnlock()
 
-	handlers, ok := ed.handlers[eventType]
-	if !ok {
-		return false
-	}
-
-	return slices.Contains(handlers, handler)
+	return slices.Contains(ed.handlers[eventType], handler)
 }
 
 func (ed *eventDispatcher) Remove(eventType string, handler EventHandler) error {
@@ -123,34 +118,23 @@ func (ed *eventDispatcher) Remove(eventType string, handler EventHandler) error 
 		return nil
 	}
 
-	found := slices.Contains(handlers, handler)
-	if !found {
+	idx := slices.Index(handlers, handler)
+	if idx < 0 {
 		return nil
 	}
 
-	newHandlers := make([]EventHandler, 0, len(handlers)-1)
-	removed := false
-	for _, h := range handlers {
-
-		if h == handler && !removed {
-			removed = true
-			continue
-		}
-		newHandlers = append(newHandlers, h)
-	}
-
-	if len(newHandlers) == 0 {
+	updated := slices.Delete(handlers, idx, idx+1)
+	if len(updated) == 0 {
 		delete(ed.handlers, eventType)
 		return nil
 	}
 
-	ed.handlers[eventType] = newHandlers
+	ed.handlers[eventType] = updated
 	return nil
 }
 
 func (ed *eventDispatcher) Clear() {
 	ed.mu.Lock()
 	defer ed.mu.Unlock()
-
 	clear(ed.handlers)
 }

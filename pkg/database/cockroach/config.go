@@ -8,31 +8,25 @@ import (
 )
 
 const (
-	// DefaultMaxOpenConns is the default maximum number of connections in the pool.
 	DefaultMaxOpenConns = 50
-	// DefaultMaxIdleConns is the default minimum connections kept ready (idle).
+
 	DefaultMaxIdleConns = 10
-	// DefaultConnMaxLife is the default maximum lifetime of a single connection.
+
 	DefaultConnMaxLife = 15 * time.Minute
-	// DefaultConnMaxIdle is the default maximum idle time before a connection is closed.
+
 	DefaultConnMaxIdle = 5 * time.Minute
 
 	defaultPort    = 26257
 	defaultSSLMode = "disable"
 
-	// DefaultPort is the exported default port used by helper integrations.
 	DefaultPort = defaultPort
-	// DefaultSSLMode is the exported default sslmode used by helper integrations.
+
 	DefaultSSLMode = defaultSSLMode
 )
 
-// CockroachConfig holds connection configuration for the CockroachDB adapter.
-// When DSN is non-empty it takes precedence over individual fields.
 type CockroachConfig struct {
-	// DSN is the full connection string. Takes precedence over all other fields when set.
 	DSN string
 
-	// Individual fields — used only when DSN is empty.
 	Host       string
 	Port       int
 	User       string
@@ -41,27 +35,23 @@ type CockroachConfig struct {
 	SSLMode    string
 	SearchPath string
 
-	// Pool configuration — zero values use package defaults (applied by applyDefaults).
 	MaxOpenConns int
 	MaxIdleConns int
 	ConnMaxLife  time.Duration
 	ConnMaxIdle  time.Duration
+
+	PingTimeout time.Duration
 }
 
-// driverConfig mirrors the manager.DriverConfig marker interface.
 type driverConfig interface {
 	driverConfigMarker()
 	Validate() error
 }
 
-// Compile-time assertion that CockroachConfig satisfies driverConfig.
 var _ driverConfig = CockroachConfig{}
 
-// driverConfigMarker satisfies manager.DriverConfig.
 func (CockroachConfig) driverConfigMarker() {}
 
-// Validate returns an aggregated error listing all missing required fields.
-// When DSN is set the individual connection fields are not validated.
 func (c CockroachConfig) Validate() error {
 	if c.DSN != "" {
 		return nil
@@ -80,8 +70,6 @@ func (c CockroachConfig) Validate() error {
 	return errors.Join(errs...)
 }
 
-// ResolveDSN returns the connection string to use.
-// DSN field takes precedence; otherwise one is built from the individual fields.
 func (c CockroachConfig) ResolveDSN() string {
 	if c.DSN != "" {
 		return c.DSN
@@ -111,10 +99,6 @@ func (c CockroachConfig) ResolveDSN() string {
 	return dsn
 }
 
-// quoteLibpqValue escapa um valor para o formato libpq key=value.
-// Valores vazios ou contendo whitespace, aspas simples ou backslash são
-// envolvidos em aspas simples; aspas e backslashes internos são escapados com
-// barra invertida, conforme a especificação do libpq.
 func quoteLibpqValue(v string) string {
 	if v != "" && !strings.ContainsAny(v, " \t\n\r\v\f'\\") {
 		return v

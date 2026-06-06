@@ -6,8 +6,6 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// ConnInfo holds safe connection metadata for use in logs, spans and OTel attributes.
-// Never include DSN, password or other credentials in this struct.
 type ConnInfo struct {
 	Driver   string
 	Host     string
@@ -15,8 +13,6 @@ type ConnInfo struct {
 	Database string
 }
 
-// SafeAttrs returns OTel attributes derived from ConnInfo.
-// Guarantees that no credential (password, DSN) appears in the returned fields.
 func SafeAttrs(info ConnInfo) []observability.Field {
 	return []observability.Field{
 		observability.String("db.system", info.Driver),

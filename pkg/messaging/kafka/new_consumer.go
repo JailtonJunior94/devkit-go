@@ -12,16 +12,13 @@ import (
 )
 
 const (
-	// Error channel configuration.
-	defaultErrorChannelSize    = 1000 // Increased from 100 to reduce dropped errors
-	errorChannelWarnThreshold  = 800  // Warn when 80% full
+	defaultErrorChannelSize    = 1000
+	errorChannelWarnThreshold  = 800
 	errorChannelMonitoringTick = 10 * time.Second
 )
 
-// ConsumerOption is a functional option for configuring consumers.
 type ConsumerOption func(*consumerConfig)
 
-// consumerConfig holds consumer-specific configuration.
 type consumerConfig struct {
 	groupID     string
 	topics      []string
@@ -33,7 +30,6 @@ type consumerConfig struct {
 	dlqTopic    string
 }
 
-// consumer implements the messaging.Consumer interface.
 type consumer struct {
 	reader        *kafka.Reader
 	config        *config
@@ -46,39 +42,33 @@ type consumer struct {
 	dlqStrategy   DLQStrategy
 	retryAttempts sync.Map // map[string]*retryState
 
-	// Error channel monitoring
-	droppedErrors     atomic.Uint64 // Count of errors dropped due to full channel
-	lastDroppedErrLog atomic.Int64  // Unix timestamp of last dropped error log (rate limiting)
+	droppedErrors     atomic.Uint64
+	lastDroppedErrLog atomic.Int64
 
-	// Shutdown coordination
 	shutdownOnce       sync.Once
 	wg                 sync.WaitGroup
+	startMu            sync.Mutex
 	monitoringCancel   context.CancelFunc
 	monitoringShutdown chan struct{}
 }
 
-// WithGroupID sets the consumer group ID.
 func WithGroupID(groupID string) ConsumerOption {
 	return func(c *consumerConfig) {
 		c.groupID = groupID
 	}
 }
 
-// WithTopics sets the topics to consume from.
 func WithTopics(topics ...string) ConsumerOption {
 	return func(c *consumerConfig) {
 		c.topics = topics
 	}
 }
 
-// WithStartOffset sets the starting offset (-1=newest, -2=oldest).
 func WithStartOffset(offset int64) ConsumerOption {
 	return func(c *consumerConfig) {
 		c.startOffset = offset
 	}
 }
-
-// newConsumer creates a new Kafka consumer.
 func newConsumer(cfg *config, dialer *kafka.Dialer, opts ...ConsumerOption) (messaging.Consumer, error) {
 	consumerCfg := &consumerConfig{
 		groupID:     cfg.consumerGroupID,
@@ -118,26 +108,24 @@ func newConsumer(cfg *config, dialer *kafka.Dialer, opts ...ConsumerOption) (mes
 		monitoringShutdown: make(chan struct{}),
 	}
 
-	// Initialize DLQ if enabled
 	if err := c.initializeDLQ(); err != nil {
 		return nil, fmt.Errorf("failed to initialize DLQ: %w", err)
 	}
 
-	// Start error channel monitoring goroutine
-	// This prevents memory leaks by monitoring channel fullness and logging warnings
 	c.startErrorChannelMonitoring()
 
 	return c, nil
 }
 
-// Consume starts consuming messages from Kafka.
 func (c *consumer) Consume(ctx context.Context) error {
+	c.startMu.Lock()
 	if c.closed.Load() {
+		c.startMu.Unlock()
 		return ErrConsumerClosed
 	}
-
-	// Track consumeLoop goroutine in WaitGroup to prevent leak during shutdown
 	c.wg.Add(1)
+	c.startMu.Unlock()
+
 	go func() {
 		defer c.wg.Done()
 		c.consumeLoop(ctx)
@@ -146,34 +134,31 @@ func (c *consumer) Consume(ctx context.Context) error {
 	return nil
 }
 
-// ConsumeBatch consumes messages in batch mode.
 func (c *consumer) ConsumeBatch(ctx context.Context) error {
 	return c.Consume(ctx)
 }
 
-// ConsumeWithWorkerPool consumes messages using a worker pool.
 func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) error {
+	c.startMu.Lock()
 	if c.closed.Load() {
+		c.startMu.Unlock()
 		return ErrConsumerClosed
 	}
+	c.wg.Add(workerCount + 1)
+	c.startMu.Unlock()
 
 	messageCh := make(chan kafka.Message, workerCount*2)
 
-	// Cancelable context for workers
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 
-	// Start workers with WaitGroup
 	for i := range workerCount {
-		c.wg.Add(1)
 		go func(id int) {
 			defer c.wg.Done()
 			c.worker(workerCtx, id, messageCh)
 		}(i)
 	}
 
-	// Fetcher goroutine
-	c.wg.Add(1)
 	fetcherDone := make(chan struct{})
 	go func() {
 		defer c.wg.Done()
@@ -181,7 +166,6 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 		defer close(fetcherDone)
 
 		for {
-			// Check shutdown
 			select {
 			case <-workerCtx.Done():
 				return
@@ -209,12 +193,10 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 		}
 	}()
 
-	// Wait for shutdown signal
 	<-fetcherDone
 
 	c.config.logger.Info(ctx, "fetcher stopped, waiting for workers to finish")
 
-	// Wait for all workers to finish processing
 	c.wg.Wait()
 
 	c.config.logger.Info(ctx, "all workers finished")
@@ -222,33 +204,37 @@ func (c *consumer) ConsumeWithWorkerPool(ctx context.Context, workerCount int) e
 	return workerCtx.Err()
 }
 
-// RegisterHandler registers a handler for a specific event type.
 func (c *consumer) RegisterHandler(eventType string, handler messaging.ConsumeHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.handlers[eventType] = append(c.handlers[eventType], handler)
 }
 
-// Errors returns the error channel.
 func (c *consumer) Errors() <-chan error {
 	return c.errorCh
 }
 
-// Close closes the consumer.
 func (c *consumer) Close() error {
 	var closeErr error
 
 	c.shutdownOnce.Do(func() {
+		c.startMu.Lock()
 		if c.closed.Swap(true) {
-			return // Already closed
+			c.startMu.Unlock()
+			return
 		}
+		c.startMu.Unlock()
 
 		c.config.logger.Info(context.Background(), "closing consumer, waiting for in-flight messages")
 
-		// Stop error channel monitoring
 		c.stopErrorChannelMonitoring()
 
-		// Wait for workers to finish (with timeout)
+		if err := c.reader.Close(); err != nil {
+			c.config.logger.Error(context.Background(), "error closing reader",
+				Field{Key: "error", Value: err})
+			closeErr = err
+		}
+
 		done := make(chan struct{})
 		go func() {
 			c.wg.Wait()
@@ -265,7 +251,6 @@ func (c *consumer) Close() error {
 			c.config.logger.Warn(context.Background(), "timeout waiting for workers, forcing shutdown")
 		}
 
-		// Log final dropped error count if any
 		if dropped := c.droppedErrors.Load(); dropped > 0 {
 			c.config.logger.Warn(context.Background(),
 				"consumer closed with dropped errors - configure error consumption to prevent loss",
@@ -273,15 +258,7 @@ func (c *consumer) Close() error {
 			)
 		}
 
-		// Close error channel
 		close(c.errorCh)
-
-		// Close reader
-		if err := c.reader.Close(); err != nil {
-			c.config.logger.Error(context.Background(), "error closing reader",
-				Field{Key: "error", Value: err})
-			closeErr = err
-		}
 
 		c.config.logger.Info(context.Background(), "consumer closed")
 	})
@@ -289,7 +266,6 @@ func (c *consumer) Close() error {
 	return closeErr
 }
 
-// consumeLoop is the main consumption loop.
 func (c *consumer) consumeLoop(ctx context.Context) {
 	for {
 		if c.closed.Load() {
@@ -309,15 +285,9 @@ func (c *consumer) consumeLoop(ctx context.Context) {
 	}
 }
 
-// worker processes messages from the channel.
 func (c *consumer) worker(ctx context.Context, id int, messageCh <-chan kafka.Message) {
-	c.config.logger.Debug(ctx, "worker started",
-		Field{Key: "worker_id", Value: id})
-
-	defer func() {
-		c.config.logger.Debug(ctx, "worker stopped",
-			Field{Key: "worker_id", Value: id})
-	}()
+	c.config.logger.Debug(ctx, "worker started", Field{Key: "worker_id", Value: id})
+	defer c.config.logger.Debug(ctx, "worker stopped", Field{Key: "worker_id", Value: id})
 
 	for {
 		select {
@@ -328,7 +298,6 @@ func (c *consumer) worker(ctx context.Context, id int, messageCh <-chan kafka.Me
 				return
 			}
 
-			// Panic recovery per message
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -342,8 +311,7 @@ func (c *consumer) worker(ctx context.Context, id int, messageCh <-chan kafka.Me
 	}
 }
 
-// handlePanic handles panics that occur during message processing.
-func (c *consumer) handlePanic(ctx context.Context, workerID int, msg kafka.Message, panicValue interface{}) {
+func (c *consumer) handlePanic(ctx context.Context, workerID int, msg kafka.Message, panicValue any) {
 	c.config.logger.Error(ctx, "PANIC in message handler",
 		Field{Key: "worker_id", Value: workerID},
 		Field{Key: "panic", Value: panicValue},
@@ -373,7 +341,6 @@ func (c *consumer) handlePanic(ctx context.Context, workerID int, msg kafka.Mess
 	c.sendError(fmt.Errorf("panic in handler: %v", panicValue))
 }
 
-// processMessage processes a single message.
 func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 	// Check context before processing
 	select {
@@ -385,8 +352,6 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 	headers := extractHeaders(msg)
 	eventType := headers["event_type"]
 
-	// RACE CONDITION FIX: Make defensive copy of handlers slice while holding lock
-	// This prevents concurrent modification by RegisterHandler() during iteration
 	c.mu.RLock()
 	handlersInMap, ok := c.handlers[eventType]
 	if !ok {
@@ -395,13 +360,10 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 		return
 	}
 
-	// Create a defensive copy to avoid holding lock during message processing
-	// This is critical for performance and prevents potential deadlocks
 	handlersCopy := make([]messaging.ConsumeHandler, len(handlersInMap))
 	copy(handlersCopy, handlersInMap)
 	c.mu.RUnlock()
 
-	// If instrumentation is enabled, wrap the consumption
 	if c.config.instrumentation != nil {
 		_ = c.config.instrumentation.InstrumentConsume(
 			ctx,
@@ -419,28 +381,22 @@ func (c *consumer) processMessage(ctx context.Context, msg kafka.Message) {
 		return
 	}
 
-	// Fallback: execute directly without tracing
 	c.processMessageInternal(ctx, msg, headers, eventType, handlersCopy)
 }
 
-// processMessageInternal contains the core message processing logic without instrumentation.
 func (c *consumer) processMessageInternal(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
-	// Process with DLQ retry logic
 	if c.config.dlqConfig.Enabled {
 		c.processMessageWithDLQ(ctx, msg, headers, eventType, handlers)
 		return
 	}
 
-	// Process without DLQ - execute all handlers first, then commit
 	c.processMessageWithoutDLQ(ctx, msg, headers, eventType, handlers)
 }
 
-// processMessageWithDLQ processes message with DLQ retry logic.
 func (c *consumer) processMessageWithDLQ(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
-	var lastError error
+	dlqFailed := false
 
 	for _, handler := range handlers {
-		// Check context before each handler
 		select {
 		case <-ctx.Done():
 			return
@@ -448,25 +404,25 @@ func (c *consumer) processMessageWithDLQ(ctx context.Context, msg kafka.Message,
 		}
 
 		if err := c.handleMessageWithRetry(ctx, msg, handler); err != nil {
-			lastError = err
+			dlqFailed = true
 			c.sendError(err)
-			// Continue processing other handlers even if one fails
-			// Each handler gets retry logic independently
 		}
 	}
 
-	// Note: When DLQ is enabled, handleMessageWithRetry handles commit internally
-	// on success, so we don't need to commit here
-	_ = lastError
+	if !dlqFailed && c.reader != nil {
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			c.config.logger.Error(ctx, "failed to commit message",
+				Field{Key: "error", Value: err},
+			)
+			c.sendError(err)
+		}
+	}
 }
 
-// processMessageWithoutDLQ processes message without DLQ - all handlers must succeed before commit.
 func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Message, headers map[string]string, eventType string, handlers []messaging.ConsumeHandler) {
-	var allSuccess = true
+	allSuccess := true
 
-	// Execute ALL handlers first
 	for _, handler := range handlers {
-		// Check context before each handler
 		select {
 		case <-ctx.Done():
 			return
@@ -475,7 +431,6 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 
 		var err error
 
-		// If instrumentation is enabled, wrap the handler execution
 		if c.config.instrumentation != nil {
 			err = c.config.instrumentation.InstrumentHandler(ctx, eventType, func(ctx context.Context) error {
 				return handler(ctx, headers, msg.Value)
@@ -491,13 +446,10 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 			)
 			c.sendError(err)
 			allSuccess = false
-			// Continue to try other handlers, but mark as failed
 		}
 	}
 
-	// Only commit if ALL handlers succeeded
 	if allSuccess {
-		// Check if reader is initialized (nil in unit tests)
 		if c.reader != nil {
 			if err := c.reader.CommitMessages(ctx, msg); err != nil {
 				c.config.logger.Error(ctx, "failed to commit message",
@@ -516,19 +468,12 @@ func (c *consumer) processMessageWithoutDLQ(ctx context.Context, msg kafka.Messa
 	}
 }
 
-// sendError sends an error to the error channel (non-blocking).
-// If the channel is full, the error is dropped and logged to prevent memory leaks.
-// This is a fail-safe mechanism when consumers don't read from Errors() channel.
 func (c *consumer) sendError(err error) {
 	select {
 	case c.errorCh <- err:
-		// Successfully sent to channel
 	default:
-		// Channel is full - drop error to prevent goroutine blocking
-		// MEMORY LEAK PREVENTION: Do NOT block here or goroutines will leak
 		dropped := c.droppedErrors.Add(1)
 
-		// Rate-limited logging: only log every 10 seconds to prevent log spam
 		now := time.Now().Unix()
 		lastLog := c.lastDroppedErrLog.Load()
 		if now-lastLog >= 10 {
@@ -544,21 +489,10 @@ func (c *consumer) sendError(err error) {
 	}
 }
 
-// DroppedErrors returns the count of errors dropped due to full channel.
-// This is useful for monitoring and alerting.
 func (c *consumer) DroppedErrors() uint64 {
 	return c.droppedErrors.Load()
 }
 
-// startErrorChannelMonitoring starts a background goroutine that monitors
-// the error channel fullness and logs warnings to prevent silent data loss.
-//
-// Memory Leak Prevention:
-// Without monitoring, if users don't consume from Errors() channel, the buffer
-// fills up and errors are silently dropped. This goroutine:
-// 1. Monitors channel fullness every 10 seconds
-// 2. Warns when channel is 80% full
-// 3. Helps operators detect misconfiguration before errors are lost.
 func (c *consumer) startErrorChannelMonitoring() {
 	monitoringCtx, cancel := context.WithCancel(context.Background())
 	c.monitoringCancel = cancel
@@ -579,39 +513,30 @@ func (c *consumer) startErrorChannelMonitoring() {
 	}()
 }
 
-// stopErrorChannelMonitoring stops the error channel monitoring goroutine.
 func (c *consumer) stopErrorChannelMonitoring() {
 	if c.monitoringCancel != nil {
 		c.monitoringCancel()
-		// Wait for monitoring goroutine to finish (with timeout)
 		select {
 		case <-c.monitoringShutdown:
-			// Monitoring stopped gracefully
 		case <-time.After(5 * time.Second):
-			// Timeout - monitoring goroutine didn't stop, but we continue shutdown
 		}
 	}
 }
 
-// checkErrorChannelHealth checks if the error channel is becoming full
-// and logs warnings to help operators detect issues early.
 func (c *consumer) checkErrorChannelHealth() {
 	channelLen := len(c.errorCh)
 	channelCap := cap(c.errorCh)
 
-	// Warn when channel is 80% full
 	if channelLen >= errorChannelWarnThreshold {
-		droppedCount := c.droppedErrors.Load()
 		c.config.logger.Warn(context.Background(),
 			"error channel approaching capacity - consume from Errors() to prevent data loss",
 			Field{Key: "current_length", Value: channelLen},
 			Field{Key: "capacity", Value: channelCap},
 			Field{Key: "fullness_percent", Value: (channelLen * 100) / channelCap},
-			Field{Key: "dropped_so_far", Value: droppedCount},
+			Field{Key: "dropped_so_far", Value: c.droppedErrors.Load()},
 		)
 	}
 
-	// Info log if channel has items but isn't critical (for debugging)
 	if channelLen > 0 && channelLen < errorChannelWarnThreshold {
 		c.config.logger.Debug(context.Background(),
 			"error channel has buffered errors",
@@ -621,7 +546,6 @@ func (c *consumer) checkErrorChannelHealth() {
 	}
 }
 
-// extractHeaders extracts headers from a Kafka message.
 func extractHeaders(msg kafka.Message) map[string]string {
 	headers := make(map[string]string)
 	for _, h := range msg.Headers {

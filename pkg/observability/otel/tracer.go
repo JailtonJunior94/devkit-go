@@ -10,14 +10,10 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// otelSpanContextKey é a chave própria usada para armazenar *otelSpanImpl no context,
-// permitindo que SpanFromContext recupere o wrapper sem nova alocação.
 type otelSpanContextKey struct{}
 
-// otelSpanPool reutiliza wrappers otelSpanImpl para eliminar alocação por span.
 var otelSpanPool = sync.Pool{New: func() any { return &otelSpanImpl{} }}
 
-// spanOptsPool reutiliza slices de SpanStartOption; cap 2 cobre WithSpanKind + WithAttributes.
 var spanOptsPool = sync.Pool{New: func() any {
 	s := make([]oteltrace.SpanStartOption, 0, 2)
 	return &s
@@ -25,11 +21,10 @@ var spanOptsPool = sync.Pool{New: func() any {
 
 func acquireSpanImpl() *otelSpanImpl {
 	s := otelSpanPool.Get().(*otelSpanImpl)
-	atomic.StoreUint32(&s.ended, 0)
+	s.ended.Store(0)
 	return s
 }
 
-// noopOtelSpan é zero-size: boxing para interface usa runtime.zerobase — sem alocação.
 type noopOtelSpan struct{}
 
 var (
@@ -86,7 +81,6 @@ func (t *otelTracer) Start(ctx context.Context, spanName string, opts ...observa
 
 	ctx, otelSpan := t.tracer.Start(ctx, spanName, otelOpts...)
 
-	// Devolver slice ao pool antes de adquirir o wrapper do span.
 	*p = otelOpts[:0]
 	spanOptsPool.Put(p)
 
@@ -97,7 +91,7 @@ func (t *otelTracer) Start(ctx context.Context, spanName string, opts ...observa
 
 func (t *otelTracer) SpanFromContext(ctx context.Context) observability.Span {
 	if s, ok := ctx.Value(otelSpanContextKey{}).(*otelSpanImpl); ok {
-		if atomic.LoadUint32(&s.ended) == 0 {
+		if s.ended.Load() == 0 {
 			return s
 		}
 	}
@@ -106,7 +100,6 @@ func (t *otelTracer) SpanFromContext(ctx context.Context) observability.Span {
 	if !otelSpan.SpanContext().IsValid() {
 		return globalNoopOtelSpan
 	}
-	// Span externo: wrapping necessário, sem pool (caller não controla lifecycle).
 	return &otelSpanImpl{span: otelSpan}
 }
 
@@ -119,16 +112,13 @@ func (t *otelTracer) ContextWithSpan(ctx context.Context, span observability.Spa
 	return context.WithValue(ctx, otelSpanContextKey{}, otelSpan)
 }
 
-// otelSpanImpl é gerenciado por otelSpanPool; End() é o ponto de release.
-// ended usa sync/atomic para proteger contra double-End sem mutex no hot path.
 type otelSpanImpl struct {
 	span  oteltrace.Span
-	ended uint32 // 0 = ativo, 1 = encerrado; acesso exclusivo via sync/atomic
+	ended atomic.Uint32
 }
 
-// End encerra o span e devolve o wrapper ao pool via CAS — seguro para múltiplas goroutines.
 func (s *otelSpanImpl) End() {
-	if !atomic.CompareAndSwapUint32(&s.ended, 0, 1) {
+	if !s.ended.CompareAndSwap(0, 1) {
 		return
 	}
 	s.span.End()
@@ -179,7 +169,6 @@ func (s *otelSpanImpl) Context() observability.SpanContext {
 	return &otelSpanContext{ctx: s.span.SpanContext()}
 }
 
-// TraceID usa buffer [32]byte na stack: 1 alloc (cópia para string) contra 2 de Context().TraceID().
 func (s *otelSpanImpl) TraceID() string {
 	tid := s.span.SpanContext().TraceID()
 	var buf [32]byte
@@ -187,7 +176,6 @@ func (s *otelSpanImpl) TraceID() string {
 	return string(buf[:])
 }
 
-// SpanID usa buffer [16]byte na stack: 1 alloc contra 2 de Context().SpanID().
 func (s *otelSpanImpl) SpanID() string {
 	sid := s.span.SpanContext().SpanID()
 	var buf [16]byte

@@ -31,6 +31,19 @@ Este toolkit implementa práticas recomendadas de segurança:
 - **Log de SQL Sensível**: O log de consultas SQL é desabilitado por padrão e, quando habilitado, pode ser integrado a provedores de log que suportam sanitização de PII.
 - **Isolamento de Transação**: Suporte nativo a diferentes níveis de isolamento e modo *Read-Only* para segurança de dados.
 - **Panic Recovery**: A Unit of Work garante que pânicos durante a execução de transações resultem em um rollback imediato antes da re-propagação do pânico.
+- **DSN nunca logado**: Adapters substituem mensagens de erro do driver por strings genéricas quando o DSN pode conter credenciais.
+
+## O que este pacote NÃO faz
+
+Para evitar surpresas em produção, o escopo é deliberadamente limitado. As responsabilidades abaixo ficam com o caller:
+
+- **Retry de erros transitórios**: o pacote propaga qualquer erro do driver imediatamente. Aplique política de retry (exponential backoff, jitter) na camada de aplicação ou via biblioteca dedicada (ex.: `cenkalti/backoff/v4`).
+- **Circuit breaker**: nenhum corte automático é feito quando o pool ou o banco entram em degradação. Use um circuit breaker externo quando relevante.
+- **Query builder / ORM**: a interface `DBTX` recebe SQL parametrizado. Não há geração de SQL, mapeamento de structs ou migrations de esquema fora do `pkg/database/migration`.
+- **Cache**: nenhum cache de queries ou de pool é fornecido. Caching deve ser explícito no chamador.
+- **Failover entre réplicas**: nada de leader/replica routing automático. Configure um pool por destino.
+
+Essas decisões evitam comportamento mágico que mascara falhas reais em produção.
 
 ## Contexto
 

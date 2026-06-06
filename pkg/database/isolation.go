@@ -2,8 +2,6 @@ package database
 
 import "strconv"
 
-// IsolationLevel identifica o nível de isolamento transacional aceito pelo
-// contrato público do componente sem depender diretamente de database/sql.
 type IsolationLevel int
 
 const (

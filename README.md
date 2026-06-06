@@ -51,6 +51,7 @@ Acesso a dados robusto e transacional.
 - **[Database](./pkg/database/README.md)**: Manager multi-driver (Postgres, MySQL, MSSQL) com Unit of Work genérico.
 - **[Migration](./pkg/database/migration/)**: Motor de migração de banco de dados integrado ao startup.
 - **[Messaging](./pkg/messaging/)**: Abstrações para mensageria assíncrona (Kafka, RabbitMQ).
+- **[Worker](./pkg/worker/)**: Orquestra jobs agendados e consumers com shutdown gracioso e telemetria integrada.
 
 ### Comunicação e APIs
 

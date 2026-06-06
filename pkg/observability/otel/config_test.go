@@ -121,7 +121,7 @@ func TestValidateConfig(t *testing.T) {
 				TraceSampleRate: 1.0,
 			},
 			wantErr: true,
-			errMsg:  "ServiceName cannot be empty",
+			errMsg:  "service name cannot be empty",
 		},
 		{
 			name: "empty OTLPEndpoint should fail",
@@ -131,7 +131,7 @@ func TestValidateConfig(t *testing.T) {
 				TraceSampleRate: 1.0,
 			},
 			wantErr: true,
-			errMsg:  "OTLPEndpoint cannot be empty",
+			errMsg:  "OTLP endpoint cannot be empty",
 		},
 		{
 			name: "TraceSampleRate below 0.0 should fail",
@@ -141,7 +141,7 @@ func TestValidateConfig(t *testing.T) {
 				TraceSampleRate: -0.1,
 			},
 			wantErr: true,
-			errMsg:  "TraceSampleRate must be between 0.0 and 1.0",
+			errMsg:  "trace sample rate must be between 0.0 and 1.0",
 		},
 		{
 			name: "TraceSampleRate above 1.0 should fail",
@@ -151,7 +151,7 @@ func TestValidateConfig(t *testing.T) {
 				TraceSampleRate: 1.5,
 			},
 			wantErr: true,
-			errMsg:  "TraceSampleRate must be between 0.0 and 1.0",
+			errMsg:  "trace sample rate must be between 0.0 and 1.0",
 		},
 		{
 			name: "valid config should pass",
@@ -239,5 +239,6 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, "localhost:4317", config.OTLPEndpoint)
 	assert.Equal(t, ProtocolGRPC, config.OTLPProtocol)
 	assert.Equal(t, 1.0, config.TraceSampleRate)
-	assert.False(t, config.Insecure) // Should be secure by default
+	assert.False(t, config.Insecure)
+	assert.True(t, config.RegisterGlobal)
 }

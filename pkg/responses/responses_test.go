@@ -2,280 +2,233 @@ package responses
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+type problemResponse struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail"`
+	Errors any    `json:"errors"`
+}
 
 func TestJSON(t *testing.T) {
 	t.Run("writes valid JSON response", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		data := map[string]string{"message": "success"}
+		JSON(w, http.StatusOK, map[string]string{"message": "success"})
 
-		JSON(w, http.StatusOK, data)
-
-		if w.Code != http.StatusOK {
-			t.Errorf("JSON() status = %v, want %v", w.Code, http.StatusOK)
-		}
-
-		contentType := w.Header().Get("Content-Type")
-		if contentType != "application/json" {
-			t.Errorf("JSON() Content-Type = %v, want application/json", contentType)
-		}
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, contentTypeJSON, w.Header().Get("Content-Type"))
 
 		var response map[string]string
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("JSON() produced invalid JSON: %v", err)
-		}
-
-		if response["message"] != "success" {
-			t.Errorf("JSON() body = %v, want %v", response["message"], "success")
-		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Equal(t, "success", response["message"])
 	})
 
 	t.Run("handles different status codes", func(t *testing.T) {
-		testCases := []int{
+		codes := []int{
 			http.StatusOK,
 			http.StatusCreated,
 			http.StatusBadRequest,
 			http.StatusNotFound,
 			http.StatusInternalServerError,
 		}
-
-		for _, statusCode := range testCases {
+		for _, code := range codes {
 			w := httptest.NewRecorder()
-			JSON(w, statusCode, map[string]string{"status": "test"})
-
-			if w.Code != statusCode {
-				t.Errorf("JSON() status = %v, want %v", w.Code, statusCode)
-			}
+			JSON(w, code, map[string]string{"status": "test"})
+			require.Equal(t, code, w.Code)
 		}
 	})
 
-	t.Run("handles nil data without panic", func(t *testing.T) {
+	t.Run("handles nil data", func(t *testing.T) {
 		w := httptest.NewRecorder()
-
-		// Isso não deve causar panic
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("JSON() panicked with nil data: %v", r)
-			}
-		}()
-
 		JSON(w, http.StatusOK, nil)
 
-		if w.Code != http.StatusOK {
-			t.Errorf("JSON() status = %v, want %v", w.Code, http.StatusOK)
-		}
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, "null", w.Body.String())
 	})
 
 	t.Run("handles complex nested structures", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		data := map[string]interface{}{
-			"user": map[string]interface{}{
+		data := map[string]any{
+			"user": map[string]any{
 				"id":   123,
 				"name": "John",
 				"tags": []string{"admin", "user"},
 			},
-			"metadata": map[string]int{
-				"count": 10,
-			},
+			"metadata": map[string]int{"count": 10},
 		}
 
 		JSON(w, http.StatusOK, data)
 
-		var response map[string]interface{}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("JSON() failed to encode complex structure: %v", err)
-		}
+		var response map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	})
 
-	t.Run("does not panic with unserializable data", func(t *testing.T) {
+	t.Run("returns RFC 7807 500 on unserializable data", func(t *testing.T) {
 		w := httptest.NewRecorder()
-
-		// chan não pode ser serializado para JSON
 		data := struct {
-			Chan chan int `json:"chan"`
-		}{
-			Chan: make(chan int),
-		}
-
-		// Isso não deve causar panic, mesmo com erro de serialização
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("JSON() panicked with unserializable data: %v", r)
-			}
-		}()
+			Ch chan int `json:"ch"`
+		}{Ch: make(chan int)}
 
 		JSON(w, http.StatusOK, data)
 
-		// Deve ter escrito o status code antes de falhar
-		if w.Code != http.StatusOK {
-			t.Errorf("JSON() status = %v, want %v", w.Code, http.StatusOK)
-		}
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		require.Equal(t, contentTypeProblem, w.Header().Get("Content-Type"))
+
+		var response problemResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Equal(t, problemTypeBlank, response.Type)
+		require.Equal(t, "Internal Server Error", response.Title)
+		require.Equal(t, http.StatusInternalServerError, response.Status)
+		require.Equal(t, "internal server error", response.Detail)
 	})
 }
 
 func TestError(t *testing.T) {
-	t.Run("writes error response", func(t *testing.T) {
+	t.Run("writes RFC 7807 error response", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		message := "something went wrong"
+		Error(w, http.StatusBadRequest, "something went wrong")
 
-		Error(w, http.StatusBadRequest, message)
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Equal(t, contentTypeProblem, w.Header().Get("Content-Type"))
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("Error() status = %v, want %v", w.Code, http.StatusBadRequest)
-		}
-
-		var response struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("Error() produced invalid JSON: %v", err)
-		}
-
-		if response.Message != message {
-			t.Errorf("Error() message = %v, want %v", response.Message, message)
-		}
+		var response problemResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Equal(t, problemTypeBlank, response.Type)
+		require.Equal(t, "Bad Request", response.Title)
+		require.Equal(t, http.StatusBadRequest, response.Status)
+		require.Equal(t, "something went wrong", response.Detail)
 	})
 
-	t.Run("handles empty message", func(t *testing.T) {
+	t.Run("omits detail when message is empty", func(t *testing.T) {
 		w := httptest.NewRecorder()
-
 		Error(w, http.StatusBadRequest, "")
 
-		var response struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("Error() produced invalid JSON: %v", err)
-		}
-
-		if response.Message != "" {
-			t.Errorf("Error() message = %v, want empty string", response.Message)
-		}
+		var response map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.NotContains(t, response, "detail")
 	})
 }
 
 func TestErrorWithDetails(t *testing.T) {
-	t.Run("writes error with details", func(t *testing.T) {
+	t.Run("writes RFC 7807 error with errors extension", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		message := "validation failed"
-		details := map[string]string{
-			"field": "email",
-			"error": "invalid format",
-		}
+		details := map[string]string{"field": "email", "error": "invalid format"}
 
-		ErrorWithDetails(w, http.StatusUnprocessableEntity, message, details)
+		ErrorWithDetails(w, http.StatusUnprocessableEntity, "validation failed", details)
 
-		if w.Code != http.StatusUnprocessableEntity {
-			t.Errorf("ErrorWithDetails() status = %v, want %v", w.Code, http.StatusUnprocessableEntity)
-		}
+		require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+		require.Equal(t, contentTypeProblem, w.Header().Get("Content-Type"))
 
 		var response struct {
-			Message string                 `json:"message"`
-			Details map[string]interface{} `json:"details"`
+			Type   string         `json:"type"`
+			Title  string         `json:"title"`
+			Status int            `json:"status"`
+			Detail string         `json:"detail"`
+			Errors map[string]any `json:"errors"`
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("ErrorWithDetails() produced invalid JSON: %v", err)
-		}
-
-		if response.Message != message {
-			t.Errorf("ErrorWithDetails() message = %v, want %v", response.Message, message)
-		}
-
-		if response.Details == nil {
-			t.Error("ErrorWithDetails() details = nil, want non-nil")
-		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Equal(t, problemTypeBlank, response.Type)
+		require.Equal(t, "Unprocessable Entity", response.Title)
+		require.Equal(t, http.StatusUnprocessableEntity, response.Status)
+		require.Equal(t, "validation failed", response.Detail)
+		require.NotNil(t, response.Errors)
 	})
 
-	t.Run("handles nil details", func(t *testing.T) {
+	t.Run("omits errors field when nil", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		message := "error occurred"
+		ErrorWithDetails(w, http.StatusInternalServerError, "error occurred", nil)
 
-		ErrorWithDetails(w, http.StatusInternalServerError, message, nil)
+		require.Equal(t, http.StatusInternalServerError, w.Code)
 
-		if w.Code != http.StatusInternalServerError {
-			t.Errorf("ErrorWithDetails() status = %v, want %v", w.Code, http.StatusInternalServerError)
-		}
-
-		body, _ := io.ReadAll(w.Body)
-		var response map[string]interface{}
-		if err := json.Unmarshal(body, &response); err != nil {
-			t.Fatalf("ErrorWithDetails() produced invalid JSON: %v", err)
-		}
-
-		// Details pode estar presente como null ou ausente
-		if msg, ok := response["message"].(string); !ok || msg != message {
-			t.Errorf("ErrorWithDetails() message = %v, want %v", response["message"], message)
-		}
+		var response map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.NotContains(t, response, "errors")
 	})
 
-	t.Run("handles complex details", func(t *testing.T) {
+	t.Run("handles complex errors extension", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		message := "multiple errors"
 		details := []map[string]string{
 			{"field": "email", "error": "required"},
 			{"field": "password", "error": "too short"},
 		}
 
-		ErrorWithDetails(w, http.StatusBadRequest, message, details)
+		ErrorWithDetails(w, http.StatusBadRequest, "multiple errors", details)
 
 		var response struct {
-			Message string                   `json:"message"`
-			Details []map[string]interface{} `json:"details"`
+			Errors []map[string]any `json:"errors"`
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("ErrorWithDetails() produced invalid JSON: %v", err)
-		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Len(t, response.Errors, 2)
+	})
 
-		if len(response.Details) != 2 {
-			t.Errorf("ErrorWithDetails() details count = %v, want 2", len(response.Details))
-		}
+	t.Run("returns RFC 7807 500 on unserializable errors extension", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ErrorWithDetails(w, http.StatusBadRequest, "error", struct {
+			Ch chan int `json:"ch"`
+		}{Ch: make(chan int)})
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		require.Equal(t, contentTypeProblem, w.Header().Get("Content-Type"))
+
+		var response problemResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.Equal(t, problemTypeBlank, response.Type)
+		require.Equal(t, http.StatusInternalServerError, response.Status)
 	})
 }
 
-// Test concurrent usage.
 func TestConcurrentUsage(t *testing.T) {
 	t.Run("handles concurrent JSON writes", func(t *testing.T) {
 		const goroutines = 100
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
 
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
+				defer wg.Done()
 				w := httptest.NewRecorder()
-				data := map[string]int{"id": id}
-				JSON(w, http.StatusOK, data)
+				JSON(w, http.StatusOK, map[string]int{"id": id})
+				require.Equal(t, http.StatusOK, w.Code)
 			}(i)
 		}
+		wg.Wait()
 	})
 
 	t.Run("handles concurrent Error writes", func(t *testing.T) {
 		const goroutines = 100
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
 
-		for i := 0; i < goroutines; i++ {
-			go func(id int) {
+		for range goroutines {
+			go func() {
+				defer wg.Done()
 				w := httptest.NewRecorder()
 				Error(w, http.StatusBadRequest, "error")
-			}(i)
+				require.Equal(t, http.StatusBadRequest, w.Code)
+			}()
 		}
+		wg.Wait()
 	})
 }
 
-// Benchmarks.
 func BenchmarkJSON(b *testing.B) {
 	data := map[string]string{"message": "success", "status": "ok"}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w := httptest.NewRecorder()
 		JSON(w, http.StatusOK, data)
 	}
 }
 
 func BenchmarkError(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w := httptest.NewRecorder()
 		Error(w, http.StatusBadRequest, "error message")
 	}
@@ -283,9 +236,7 @@ func BenchmarkError(b *testing.B) {
 
 func BenchmarkErrorWithDetails(b *testing.B) {
 	details := map[string]string{"field": "email", "error": "invalid"}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w := httptest.NewRecorder()
 		ErrorWithDetails(w, http.StatusBadRequest, "validation failed", details)
 	}

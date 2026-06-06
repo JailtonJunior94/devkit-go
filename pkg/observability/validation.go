@@ -258,7 +258,6 @@ func NewBenchmarkRegressionError(name string, regressionPercent float64) error {
 	}
 }
 
-// HighCardinalityLabels lista labels que causam explosão de cardinalidade no Prometheus/OTel.
 var HighCardinalityLabels = []string{
 	"user_id",
 	"session_id",
@@ -274,7 +273,6 @@ var HighCardinalityLabels = []string{
 	"guid",
 }
 
-// CardinalityValidator valida labels de métricas. É seguro para uso concorrente.
 type CardinalityValidator struct {
 	mu            sync.RWMutex
 	blockedLabels map[string]bool
@@ -309,7 +307,6 @@ func NewCardinalityValidatorWithCustomLabels(enabled bool, customBlockedLabels [
 	}
 }
 
-// Validate usa strings.EqualFold para comparação case-insensitive sem alocar string normalizada.
 func (v *CardinalityValidator) Validate(fields []Field) error {
 	if !v.enabled {
 		return nil
@@ -361,7 +358,7 @@ func isValidHeaderName(name string) bool {
 		return false
 	}
 
-	for i := 0; i < len(name); i++ {
+	for i := range len(name) {
 		c := name[i]
 		if isAlphaNumeric(c) {
 			continue

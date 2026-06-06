@@ -5,7 +5,6 @@ import "context"
 type Metrics interface {
 	Counter(name, description, unit string) Counter
 	Histogram(name, description, unit string) Histogram
-	// HistogramWithBuckets usa buckets explícitos; se o provider não suportar, usa buckets padrão.
 	HistogramWithBuckets(name, description, unit string, buckets []float64) Histogram
 	UpDownCounter(name, description, unit string) UpDownCounter
 	Gauge(name, description, unit string, callback GaugeCallback) error

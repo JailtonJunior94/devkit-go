@@ -27,41 +27,30 @@ import (
 type OTLPProtocol string
 
 const (
-	ProtocolGRPC OTLPProtocol = "grpc" // porta padrão 4317
-	ProtocolHTTP OTLPProtocol = "http" // porta padrão 4318
+	ProtocolGRPC OTLPProtocol = "grpc"
+	ProtocolHTTP OTLPProtocol = "http"
 )
 
 type Config struct {
-	ServiceName    string
-	ServiceVersion string
-	Environment    string
-	OTLPEndpoint   string
-	OTLPProtocol   OTLPProtocol
-
-	// Insecure permite conexões sem TLS. Bloqueado em ambientes production/prod.
-	Insecure  bool
-	TLSConfig *tls.Config // nil usa os padrões do sistema
-
-	TraceSampleRate float64 // 0.0–1.0, padrão 1.0
-
-	LogLevel  observability.LogLevel
-	LogFormat observability.LogFormat
-	// Sanitize habilita redaction de campos sensíveis (password, token, etc.) e truncamento de valores longos.
-	// Desabilitado por padrão por custo O(n×m); habilite quando PII puder aparecer nos campos.
-	Sanitize bool
-	// ConsoleLog escreve JSON no stdout via slog além do OTLP. Apenas para desenvolvimento.
-	// AVISO: slog.JSONHandler usa sync.Mutex por escrita — causa serialização e spikes de p99 em produção.
-	ConsoleLog bool
-
-	MetricExportInterval   int64  // segundos, padrão 60
-	MetricNamespace        string // prefixo opcional para nomes de métricas
+	ServiceName            string
+	ServiceVersion         string
+	Environment            string
+	OTLPEndpoint           string
+	OTLPProtocol           OTLPProtocol
+	Insecure               bool
+	TLSConfig              *tls.Config
+	TraceSampleRate        float64
+	LogLevel               observability.LogLevel
+	LogFormat              observability.LogFormat
+	Sanitize               bool
+	ConsoleLog             bool
+	MetricExportInterval   int64
+	MetricNamespace        string
 	EnableCardinalityCheck bool
 	CustomBlockedLabels    []string
-
-	ResourceAttributes map[string]string
-
-	// PropagationHeaders com zero value usa observability.DefaultPropagationHeaders().
-	PropagationHeaders observability.PropagationHeaders
+	ResourceAttributes     map[string]string
+	PropagationHeaders     observability.PropagationHeaders
+	RegisterGlobal         bool
 }
 
 func DefaultConfig(serviceName string) *Config {
@@ -76,6 +65,7 @@ func DefaultConfig(serviceName string) *Config {
 		LogFormat:              observability.LogFormatJSON,
 		MetricExportInterval:   60,
 		EnableCardinalityCheck: false,
+		RegisterGlobal:         true,
 	}
 }
 
@@ -102,14 +92,14 @@ type Provider struct {
 }
 
 func validateConfig(config *Config) error {
-	if config.ServiceName == "" {
-		return fmt.Errorf("ServiceName cannot be empty")
+	if strings.TrimSpace(config.ServiceName) == "" {
+		return observability.NewInvalidConfigError("service name cannot be empty")
 	}
 	if config.OTLPEndpoint == "" {
-		return fmt.Errorf("OTLPEndpoint cannot be empty")
+		return observability.NewInvalidConfigError("OTLP endpoint cannot be empty")
 	}
 	if config.TraceSampleRate < 0.0 || config.TraceSampleRate > 1.0 {
-		return fmt.Errorf("TraceSampleRate must be between 0.0 and 1.0, got %f", config.TraceSampleRate)
+		return observability.NewInvalidConfigError(fmt.Sprintf("trace sample rate must be between 0.0 and 1.0, got %f", config.TraceSampleRate))
 	}
 	return nil
 }
@@ -118,12 +108,12 @@ func validateSecurityConfig(config *Config) error {
 	if config.Insecure {
 		env := strings.ToLower(config.Environment)
 		if env == "production" || env == "prod" {
-			return fmt.Errorf("insecure connections are not allowed in production environment")
+			return observability.NewInvalidConfigError("insecure connections are not allowed in production environment")
 		}
 	}
 	if config.TLSConfig != nil {
 		if config.TLSConfig.MinVersion > 0 && config.TLSConfig.MinVersion < tls.VersionTLS12 {
-			return fmt.Errorf("minimum TLS version must be 1.2 or higher for security compliance")
+			return observability.NewInvalidConfigError("minimum TLS version must be 1.2 or higher for security compliance")
 		}
 	}
 	return nil
@@ -131,8 +121,9 @@ func validateSecurityConfig(config *Config) error {
 
 func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config cannot be nil")
+		return nil, observability.NewInvalidConfigError("config cannot be nil")
 	}
+	config.ServiceName = strings.TrimSpace(config.ServiceName)
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
@@ -140,11 +131,11 @@ func NewProvider(ctx context.Context, config *Config) (*Provider, error) {
 		return nil, err
 	}
 	config.OTLPProtocol = normalizeProtocol(string(config.OTLPProtocol))
-	runtime, err := newRuntime(ctx, config)
+	rt, err := newRuntime(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	return runtime.observability(), nil
+	return rt.observability(), nil
 }
 
 func (p *Provider) createResource(ctx context.Context) (*resource.Resource, error) {
@@ -164,10 +155,7 @@ func (p *Provider) createResource(ctx context.Context) (*resource.Resource, erro
 		attrs = append(attrs, resource.WithAttributes(customAttrs...))
 	}
 
-	return resource.New(
-		ctx,
-		attrs...,
-	)
+	return resource.New(ctx, attrs...)
 }
 
 func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resource) error {
@@ -177,14 +165,16 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 	}
 
 	sampler := p.createTraceSampler()
-
 	p.tracerProvider = sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sampler),
 		sdktrace.WithBatcher(exporter),
 	)
 
-	otel.SetTracerProvider(p.tracerProvider)
+	if p.config.RegisterGlobal {
+		otel.SetTracerProvider(p.tracerProvider)
+	}
+
 	p.runtime.shutdown.register(shutdownStep{
 		name:       "tracer_provider",
 		forceFlush: p.tracerProvider.ForceFlush,
@@ -257,7 +247,10 @@ func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource
 		sdkmetric.WithReader(reader),
 	)
 
-	otel.SetMeterProvider(p.meterProvider)
+	if p.config.RegisterGlobal {
+		otel.SetMeterProvider(p.meterProvider)
+	}
+
 	p.runtime.shutdown.register(shutdownStep{
 		name:       "meter_provider",
 		forceFlush: p.meterProvider.ForceFlush,
@@ -358,7 +351,6 @@ func (p *Provider) HTTP() HTTPInstrumentation {
 	return p.runtime.http
 }
 
-// Shutdown é idempotente: chamadas concorrentes ou repetidas são seguras.
 func (p *Provider) Shutdown(ctx context.Context) error {
 	if p.runtime == nil {
 		return nil

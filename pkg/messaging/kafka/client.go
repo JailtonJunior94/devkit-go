@@ -318,13 +318,13 @@ func (c *client) reconnectWorker(ctx context.Context) {
 				continue
 			}
 
-			// Perform health check with timeout
 			healthCtx, cancel := context.WithTimeout(context.Background(), c.config.healthCheckTimeout)
 			if err := c.HealthCheck(healthCtx); err != nil {
 				c.config.logger.Warn(healthCtx, "health check failed, attempting reconnect",
 					Field{Key: "error", Value: err},
 				)
 				cancel()
+				c.connected.Store(false)
 				c.attemptReconnect()
 			} else {
 				cancel()

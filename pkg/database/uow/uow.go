@@ -1,6 +1,3 @@
-// O pacote uow fornece uma Unit of Work genérica e atômica para operações transacionais.
-// As transações são confirmadas (committed) automaticamente em caso de sucesso, revertidas (rolled back) em caso de erro,
-// e revertidas com re-propagação em caso de pânico (RF-03, RF-26, RF-32).
 package uow
 
 import (
@@ -15,24 +12,16 @@ import (
 	"github.com/petermattis/goid"
 )
 
-// rollbackOnPanicTimeout limita o rollback emergencial após panic para evitar
-// que a goroutine fique presa caso o ctx do caller já tenha sido cancelado e o
-// driver não respeite contextos sem deadline.
 const rollbackOnPanicTimeout = 5 * time.Second
 
-// UnitOfWork[T] executa uma função transacional e retorna um resultado tipado.
 type UnitOfWork[T any] interface {
 	Do(ctx context.Context, fn func(ctx context.Context, tx database.DBTX) (T, error), opts ...Option) (T, error)
 }
 
-// txBeginner é o subconjunto de manager.Manager usado pela unitOfWork.
-// Definido aqui para que os testes possam fornecer um fake leve sem depender da
-// implementação completa do manager.
 type txBeginner interface {
 	BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error)
 }
 
-// unitOfWork é a implementação concreta de UnitOfWork[T].
 type unitOfWork[T any] struct {
 	mgr        txBeginner
 	opts       options
@@ -43,7 +32,6 @@ type unitOfWork[T any] struct {
 	txRollback observability.Counter
 }
 
-// New cria uma UnitOfWork[T] apoiada pelo Manager fornecido.
 func New[T any](mgr manager.Manager, opts ...Option) UnitOfWork[T] {
 	o := defaultOptions()
 	for _, opt := range opts {
@@ -60,13 +48,6 @@ func New[T any](mgr manager.Manager, opts ...Option) UnitOfWork[T] {
 	}
 }
 
-// Do executa a fn dentro de uma transação.
-//
-// Caminho de Commit: fn retorna (valor, nil) → Commit → retorna (valor, nil).
-// Caminho de Rollback: fn retorna (_, err) → Rollback → retorna (zero, err).
-// Caminho de Pânico: fn entra em pânico → recover → Rollback → panic(original).
-// Aninhamento: reentrada na mesma goroutine ou tx carregada no ctx →
-// ErrNestedTransaction (RF-32).
 func (u *unitOfWork[T]) Do(ctx context.Context, fn func(ctx context.Context, tx database.DBTX) (T, error), opts ...Option) (result T, err error) {
 	var zero T
 
@@ -111,12 +92,8 @@ func (u *unitOfWork[T]) Do(ctx context.Context, fn func(ctx context.Context, tx 
 		return zero, fmt.Errorf("uow: begin tx: %w", txErr)
 	}
 
-	// Injeta a tx no ctx para propagação implícita (ADR-004).
 	txCtx := database.WithTx(ctx, tx)
 
-	// Segurança contra pânico: recover → rollback → re-panic (RF-26).
-	// Usa o ctx do caller (com timeout máximo) para preservar o deadline e
-	// registra falhas de rollback via observability antes de re-propagar o panic.
 	defer func() {
 		if r := recover(); r != nil {
 			if rbErr := u.rollbackWithFreshContext(ctx, tx, "uow.rollback_on_panic", "uow: rollback after panic failed"); rbErr != nil {
@@ -149,8 +126,7 @@ func (u *unitOfWork[T]) Do(ctx context.Context, fn func(ctx context.Context, tx 
 	}
 
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		// Rollback defensivo: alguns drivers deixam a tx em estado indefinido
-		// quando Commit falha. Rollback após Commit é seguro (no-op no driver).
+
 		if rbErr := u.rollbackWithFreshContext(ctx, tx, "uow.rollback_on_commit_failure", "uow: rollback after commit failure"); rbErr != nil {
 			span.RecordError(rbErr)
 		}

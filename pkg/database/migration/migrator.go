@@ -1,5 +1,3 @@
-// O pacote migration envolve o golang-migrate/v4 para fornecer operações Up, Down, Force e
-// Version com fontes FSPath e EmbedFS e spans do OpenTelemetry.
 package migration
 
 import (
@@ -10,10 +8,10 @@ import (
 
 	migratelib "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/mysql"
-	// Registra o driver de banco de dados pgx5 (esquema de URL pgx5://).
+
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/database/sqlserver"
-	// Registra o driver de fonte file:// (usado pelo FSPath).
+
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/database"
@@ -21,7 +19,6 @@ import (
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// Migrator executa migrações de esquema de banco de dados via golang-migrate.
 type Migrator interface {
 	Up(ctx context.Context) error
 	Down(ctx context.Context, steps int) error
@@ -36,9 +33,6 @@ type migrator struct {
 	drv  database.Driver
 }
 
-// New cria um Migrator para o manager e a fonte de migração fornecidos.
-// WithDSN é obrigatório; New retorna database.ErrInvalidConfig quando ausente.
-// O manager fornece o tipo de driver e observabilidade opcional via WithObservability.
 func New(mgr manager.Manager, src Source, opts ...Option) (Migrator, error) {
 	o := defaultOptions()
 	for _, opt := range opts {
@@ -86,8 +80,6 @@ func New(mgr manager.Manager, src Source, opts ...Option) (Migrator, error) {
 	}, nil
 }
 
-// normalizeDSN converte URLs padrão do postgres para o esquema pgx5:// esperado pelo
-// driver pgx/v5 do golang-migrate. URLs pgx5:// são passadas sem alteração.
 func normalizeDSN(dsn string) string {
 	switch {
 	case strings.HasPrefix(dsn, "postgres://"):
@@ -106,7 +98,6 @@ func (m *migrator) withTimeout(ctx context.Context) (context.Context, context.Ca
 	return ctx, func() {}
 }
 
-// Up aplica todas as migrações pendentes. Retorna ErrNoChange quando já estiver atualizado.
 func (m *migrator) Up(ctx context.Context) error {
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
@@ -126,7 +117,6 @@ func (m *migrator) Up(ctx context.Context) error {
 	return nil
 }
 
-// Down reverte o número de migrações informado.
 func (m *migrator) Down(ctx context.Context, steps int) error {
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
@@ -144,7 +134,6 @@ func (m *migrator) Down(ctx context.Context, steps int) error {
 	return nil
 }
 
-// Force define a versão da migração sem executar o SQL. Use para resolver um estado sujo (dirty state).
 func (m *migrator) Force(ctx context.Context, version int) error {
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
@@ -162,7 +151,6 @@ func (m *migrator) Force(ctx context.Context, version int) error {
 	return nil
 }
 
-// Version retorna a versão atual da migração e a flag dirty.
 func (m *migrator) Version(_ context.Context) (uint, bool, error) {
 	mm, err := m.open()
 	if err != nil {

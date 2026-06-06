@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// otelAttrPool reutiliza slices de atributos; cap 16 alinhado com slogAttrPool.
 var otelAttrPool = sync.Pool{
 	New: func() any {
 		s := make([]attribute.KeyValue, 0, 16)
@@ -20,7 +19,6 @@ func acquireAttrs() *[]attribute.KeyValue {
 	return otelAttrPool.Get().(*[]attribute.KeyValue)
 }
 
-// releaseAttrs devolve o slice ao pool. Atribua *p = attrs antes de chamar para preservar realocações.
 func releaseAttrs(p *[]attribute.KeyValue) {
 	*p = (*p)[:0]
 	otelAttrPool.Put(p)
@@ -55,7 +53,6 @@ func appendFieldAttrs(dst []attribute.KeyValue, fields []observability.Field) []
 	return dst
 }
 
-// convertFieldsToAttributes aloca. Em hot paths use acquireAttrs/appendFieldAttrs/releaseAttrs.
 func convertFieldsToAttributes(fields []observability.Field) []attribute.KeyValue {
 	if len(fields) == 0 {
 		return nil

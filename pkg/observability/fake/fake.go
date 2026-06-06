@@ -20,7 +20,6 @@ var (
 	_ observability.UpDownCounter = (*FakeUpDownCounter)(nil)
 )
 
-// Provider é um fake de observabilidade para testes; captura operações para inspeção.
 type Provider struct {
 	tracer  *FakeTracer
 	logger  *FakeLogger
@@ -113,6 +112,12 @@ func (s *FakeSpan) End() {
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.EndTime = &now
+}
+
+func (s *FakeSpan) Ended() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.EndTime != nil
 }
 
 func (s *FakeSpan) SetAttributes(fields ...observability.Field) {
@@ -332,7 +337,7 @@ func (m *FakeMetrics) Histogram(name, description, unit string) observability.Hi
 	return h
 }
 
-func (m *FakeMetrics) HistogramWithBuckets(name, description, unit string, buckets []float64) observability.Histogram {
+func (m *FakeMetrics) HistogramWithBuckets(name, description, unit string, _ []float64) observability.Histogram {
 	return m.Histogram(name, description, unit)
 }
 
@@ -354,7 +359,7 @@ func (m *FakeMetrics) UpDownCounter(name, description, unit string) observabilit
 	return u
 }
 
-func (m *FakeMetrics) Gauge(name, description, unit string, callback observability.GaugeCallback) error {
+func (m *FakeMetrics) Gauge(_ string, _ string, _ string, _ observability.GaugeCallback) error {
 	return nil
 }
 

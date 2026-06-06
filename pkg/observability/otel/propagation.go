@@ -9,10 +9,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// TextMapCarrier é o contrato de carrier para propagação W3C.
 type TextMapCarrier = propagation.TextMapCarrier
 
-// CorrelationContext carrega IDs de trace e operação propagados entre fronteiras.
 type CorrelationContext struct {
 	TraceID       string
 	SpanID        string
@@ -97,7 +95,6 @@ func normalizeHeaderValue(value string) string {
 	return strings.TrimSpace(value)
 }
 
-// Extract propaga W3C trace context, baggage e headers de correlação configurados.
 func (p *Provider) Extract(ctx context.Context, carrier TextMapCarrier) (context.Context, CorrelationContext) {
 	if p == nil || p.runtime == nil || p.runtime.propagation == nil {
 		correlation := CorrelationContext{}
@@ -106,7 +103,6 @@ func (p *Provider) Extract(ctx context.Context, carrier TextMapCarrier) (context
 	return p.runtime.propagation.Extract(ctx, carrier)
 }
 
-// Inject escreve W3C trace context, baggage e headers de correlação no carrier.
 func (p *Provider) Inject(ctx context.Context, carrier TextMapCarrier) error {
 	if p == nil || p.runtime == nil || p.runtime.propagation == nil {
 		return nil

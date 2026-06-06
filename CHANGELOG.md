@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Adicionado
+
+- `pkg/worker`: manager para orquestrar jobs agendados e consumers com shutdown gracioso, validação de nomes duplicados, métricas/traces e adapters de registro de handlers.
+- `pkg/database/manager`: registro extensível de factories para adapters, permitindo integrar novos drivers sem alterar o core do manager.
+
+### Alterado
+
+- `pkg/httpclient`: a instrumentação observável foi isolada em `pkg/httpclient/observable`, mantendo o cliente base focado em transporte, timeout e retry.
+- `pkg/database`: adapters de Postgres, CockroachDB, MySQL e MSSQL passaram a compartilhar infraestrutura interna de configuração e pool para reduzir duplicação sem mudar o contrato público do toolkit.
+
+### Corrigido
+
+- `pkg/messaging/kafka` e `pkg/messaging/rabbitmq`: regressões de concorrência em shutdown, monitoramento de erros, fluxo de DLQ/commit e coordenação de workers agora têm cobertura de regressão dedicada.
+- `pkg/database/mysql` e `pkg/database/mssql`: regressões contra vazamento de credenciais em mensagens de erro receberam testes específicos.
+
 ## [v0.4.0] - 2026-05-08
 
 ### Corrigido

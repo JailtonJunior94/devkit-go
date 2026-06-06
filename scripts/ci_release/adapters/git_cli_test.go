@@ -113,10 +113,32 @@ func gitCommitFile(t *testing.T, repoPath string, relativePath string, content s
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gitCommand(dir, args...)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
 	return string(output)
+}
+
+func gitCommand(dir string, args ...string) *exec.Cmd {
+	if isGitDir(dir) {
+		return exec.Command("git", append([]string{"--git-dir", dir}, args...)...)
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd
+}
+
+func isGitDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return false
+	}
+	return true
 }

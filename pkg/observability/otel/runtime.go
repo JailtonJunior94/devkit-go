@@ -3,6 +3,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/JailtonJunior94/devkit-go/pkg/observability"
@@ -20,7 +21,6 @@ const (
 	runtimeStateStopped
 )
 
-// runtime gerencia os providers OTel concretos e o ciclo de vida do adapter.
 type runtime struct {
 	config      *Config
 	provider    *Provider
@@ -79,7 +79,9 @@ func (r *runtime) initializePropagation() {
 		propagation.Baggage{},
 	)
 	r.propagation = newPropagationRuntime(r.propagator, configuredPropagationHeaders(r.config))
-	otel.SetTextMapPropagator(r.propagator)
+	if r.config.RegisterGlobal {
+		otel.SetTextMapPropagator(r.propagator)
+	}
 }
 
 func (r *runtime) initializeComponents() {
@@ -97,8 +99,24 @@ func (r *runtime) initializeComponents() {
 	r.provider.metrics = newOtelMetrics(
 		r.provider.meterProvider.Meter(cfg.ServiceName),
 		cfg.MetricNamespace,
+		buildCardinalityValidator(cfg),
+		_defaultMetricsErrorHandler,
 	)
 	r.http = newHTTPInstrumentation(r.provider.tracer, r.provider.metrics)
+}
+
+func buildCardinalityValidator(cfg *Config) *observability.CardinalityValidator {
+	if !cfg.EnableCardinalityCheck {
+		return nil
+	}
+	if len(cfg.CustomBlockedLabels) > 0 {
+		return observability.NewCardinalityValidatorWithCustomLabels(true, cfg.CustomBlockedLabels)
+	}
+	return observability.NewCardinalityValidator(true)
+}
+
+var _defaultMetricsErrorHandler = func(op string, err error) {
+	slog.Default().Error("observability metrics error", "operation", op, "error", err)
 }
 
 func (r *runtime) observability() *Provider {

@@ -8,46 +8,54 @@ import (
 	"math/rand"
 	"net/http"
 	"time"
-
-	"github.com/JailtonJunior94/devkit-go/pkg/observability"
 )
 
-// retryTransport wraps requests with retry logic.
-// Only active when WithRetry() is configured for a specific request.
-//
-// This transport:
-// - Buffers request body for replay (up to maxBodySize)
-// - Implements exponential backoff with full jitter
-// - Updates span attributes with retry information
-// - Drains response bodies before retry to prevent connection leaks
-//
-// Span attributes added:
-// - retry.enabled: true
-// - retry.max_attempts: Maximum number of retry attempts
-// - retry.attempt: Current attempt number (1-indexed)
-//
-// Span events added:
-// - retry_attempt: Logged before each retry with attempt number and reason.
-type retryTransport struct {
-	base            http.RoundTripper
-	maxAttempts     int
-	backoff         time.Duration
-	policy          NewRetryPolicy
-	maxBodySize     int64
-	instrumentation *instrumentation
-	rng             *rand.Rand
+// RetryHook is called by retryTransport on each retry event.
+// attempt=0 signals retry is configured (called once at start).
+// attempt>0 signals the attempt number being retried, with the failure reason.
+type RetryHook func(attempt, maxAttempts int, reason string)
+
+type retryHookContextKey struct{}
+
+// WithRetryHook returns a context carrying hook for use by retryTransport.
+func WithRetryHook(ctx context.Context, hook RetryHook) context.Context {
+	return context.WithValue(ctx, retryHookContextKey{}, hook)
 }
 
-// RoundTrip implements http.RoundTripper with retry logic.
-// Respects the http.RoundTripper contract by not mutating the original request.
+func retryHookFromContext(ctx context.Context) RetryHook {
+	h, _ := ctx.Value(retryHookContextKey{}).(RetryHook)
+	return h
+}
+
+// NewRetryTransport wraps base with retry logic configured by cfg.
+func NewRetryTransport(base http.RoundTripper, cfg *RequestConfig, maxBodySize int64) (http.RoundTripper, error) {
+	if err := ValidateRetryConfig(cfg); err != nil {
+		return nil, err
+	}
+	return &retryTransport{
+		base:        base,
+		maxAttempts: cfg.RetryMaxAttempts,
+		backoff:     cfg.RetryBackoff,
+		policy:      cfg.RetryPolicy,
+		maxBodySize: maxBodySize,
+	}, nil
+}
+
+type retryTransport struct {
+	base        http.RoundTripper
+	maxAttempts int
+	backoff     time.Duration
+	policy      RetryPolicy
+	maxBodySize int64
+}
+
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
+	hook := retryHookFromContext(ctx)
 
-	span := t.instrumentation.tracer.SpanFromContext(ctx)
-	span.SetAttributes(
-		observability.Bool("retry.enabled", true),
-		observability.Int("retry.max_attempts", t.maxAttempts),
-	)
+	if hook != nil {
+		hook(0, t.maxAttempts, "")
+	}
 
 	bodyBytes, err := t.bufferBody(req)
 	if err != nil {
@@ -56,9 +64,6 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	attempt := 1
 	for {
-		span.SetAttributes(observability.Int("retry.attempt", attempt))
-
-		// Clone request with fresh body for each attempt to avoid mutating original
 		retryReq := req
 		if bodyBytes != nil {
 			retryReq = cloneRequest(req, bodyBytes)
@@ -66,14 +71,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err := t.base.RoundTrip(retryReq)
 
-		shouldRetry := t.policy(err, resp)
-
-		if !shouldRetry {
+		if !t.policy(err, resp) {
 			return resp, err
 		}
 
 		if attempt >= t.maxAttempts {
-			t.drainBody(resp)
 			return resp, err
 		}
 
@@ -84,13 +86,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		t.drainBody(resp)
 
-		span.AddEvent("retry_attempt",
-			observability.Int("attempt", attempt),
-			observability.String("reason", t.retryReason(err, resp)),
-		)
+		if hook != nil {
+			hook(attempt, t.maxAttempts, t.retryReason(err, resp))
+		}
 
-		backoffDuration := t.calculateBackoff(attempt)
-		if !t.sleepWithContext(ctx, backoffDuration) {
+		if !t.sleepWithContext(ctx, t.calculateBackoff(attempt)) {
 			return nil, ctx.Err()
 		}
 
@@ -98,56 +98,30 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// calculateBackoff implements exponential backoff with full jitter.
-// Formula: random(0, min(maxBackoff, baseBackoff * 2^(attempt-1)))
-// This prevents thundering herd by randomizing retry times.
-//
-// Examples with baseBackoff=1s:
-//   - attempt=1: random(0, 1s)
-//   - attempt=2: random(0, 2s)
-//   - attempt=3: random(0, 4s)
-//   - attempt=4: random(0, 8s)
 func (t *retryTransport) calculateBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
 		return 0
 	}
 
-	// Exponential: backoff * 2^(attempt-1)
-	exponential := t.backoff * (1 << (attempt - 1))
-
-	// Cap at maximum backoff to prevent overflow and excessive wait
 	const maxBackoff = 30 * time.Second
-	if exponential > maxBackoff {
-		exponential = maxBackoff
-	}
 
-	// Full jitter: random between 0 and exponential
-	// Spreads retry attempts across time window to avoid thundering herd
+	exponential := min(t.backoff*(1<<(attempt-1)), maxBackoff)
 	if exponential <= 0 {
 		return 0
 	}
 
-	jitter := time.Duration(t.rng.Int63n(int64(exponential)))
-	return jitter
+	return time.Duration(rand.Int63n(int64(exponential)))
 }
 
-// cloneRequest creates a shallow copy of the request with a fresh body.
-// This ensures we don't mutate the original request, respecting http.RoundTripper contract.
 func cloneRequest(req *http.Request, bodyBytes []byte) *http.Request {
-	// Shallow copy of request
 	cloned := *req
-
-	// Replace body with fresh reader
 	cloned.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	cloned.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
 	}
-
 	return &cloned
 }
 
-// sleepWithContext sleeps for the specified duration or until context is canceled.
-// Returns true if sleep completed, false if context was canceled.
 func (t *retryTransport) sleepWithContext(ctx context.Context, duration time.Duration) bool {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
@@ -160,20 +134,21 @@ func (t *retryTransport) sleepWithContext(ctx context.Context, duration time.Dur
 	}
 }
 
-// bufferBody buffers request body for retry.
-// Returns error if body exceeds maxBodySize.
-// Closes the original body after reading.
-func (t *retryTransport) bufferBody(req *http.Request) ([]byte, error) {
+func (t *retryTransport) bufferBody(req *http.Request) (bodyBytes []byte, err error) {
 	if req.Body == nil {
 		return nil, nil
 	}
 
-	defer func() { _ = req.Body.Close() }()
+	defer func() {
+		if closeErr := req.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close request body: %w", closeErr)
+		}
+	}()
 
 	limitedReader := io.LimitReader(req.Body, t.maxBodySize+1)
-	bodyBytes, err := io.ReadAll(limitedReader)
+	bodyBytes, err = io.ReadAll(limitedReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read request body: %w", err)
+		return nil, fmt.Errorf("read request body: %w", err)
 	}
 
 	if int64(len(bodyBytes)) > t.maxBodySize {
@@ -183,13 +158,8 @@ func (t *retryTransport) bufferBody(req *http.Request) ([]byte, error) {
 	return bodyBytes, nil
 }
 
-// drainBody drains and closes response body to prevent connection leaks.
 func (t *retryTransport) drainBody(resp *http.Response) {
-	if resp == nil {
-		return
-	}
-
-	if resp.Body == nil {
+	if resp == nil || resp.Body == nil {
 		return
 	}
 
@@ -197,7 +167,6 @@ func (t *retryTransport) drainBody(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-// retryReason returns human-readable retry reason for logging.
 func (t *retryTransport) retryReason(err error, resp *http.Response) string {
 	if err != nil {
 		return "network_error"

@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
@@ -135,17 +136,10 @@ func (d *instrumentedDBTX) QueryContext(ctx context.Context, query string, args 
 	}, nil
 }
 
-// QueryRowContext starts a span for the query and returns an instrumentedRow
-// that closes the span exactly once when Scan is called (via sync.Once).
-// If the caller discards the returned Row without calling Scan, the span is
-// never closed — a known limitation of the single-row API. Callers must always
-// call Scan (even when only checking for sql.ErrNoRows / pgx.ErrNoRows) to
-// ensure spans are properly closed.
 func (d *instrumentedDBTX) QueryRowContext(ctx context.Context, query string, args ...any) database.Row {
 	ctx, span, start := d.inst.start(ctx, "query_row")
 	row := d.base.QueryRowContext(ctx, query, args...)
-	return &instrumentedRow{
-		base:  row,
+	state := &rowSpanState{
 		ctx:   ctx,
 		query: query,
 		args:  append([]any(nil), args...),
@@ -153,7 +147,11 @@ func (d *instrumentedDBTX) QueryRowContext(ctx context.Context, query string, ar
 		start: start,
 		span:  span,
 		inst:  d.inst,
+		once:  &sync.Once{},
 	}
+	r := &instrumentedRow{base: row, state: state}
+	r.cleanup = runtime.AddCleanup(r, finishOrphanRowSpan, state)
+	return r
 }
 
 type instrumentedTx struct {
@@ -231,10 +229,7 @@ func (r *instrumentedRows) finish(err error) {
 	})
 }
 
-// instrumentedRow wraps a database.Row and closes the OTel span on the first
-// Scan call. If Scan is never called the span leaks; see QueryRowContext.
-type instrumentedRow struct {
-	base  database.Row
+type rowSpanState struct {
 	ctx   context.Context
 	query string
 	args  []any
@@ -242,15 +237,28 @@ type instrumentedRow struct {
 	start time.Time
 	span  observability.Span
 	inst  instrumentation
-	once  sync.Once
+	once  *sync.Once
+}
+
+type instrumentedRow struct {
+	base    database.Row
+	state   *rowSpanState
+	cleanup runtime.Cleanup
 }
 
 func (r *instrumentedRow) Scan(dest ...any) error {
 	err := r.base.Scan(dest...)
-	r.once.Do(func() {
-		r.inst.finish(r.ctx, r.span, r.op, r.query, r.args, r.start, err)
+	r.state.once.Do(func() {
+		r.state.inst.finish(r.state.ctx, r.state.span, r.state.op, r.state.query, r.state.args, r.state.start, err)
 	})
+	r.cleanup.Stop()
 	return err
+}
+
+func finishOrphanRowSpan(state *rowSpanState) {
+	state.once.Do(func() {
+		state.inst.finish(state.ctx, state.span, state.op, state.query, state.args, state.start, nil)
+	})
 }
 
 func redactedArgs(args []any) []string {
@@ -278,10 +286,6 @@ func slogFields(fields []observability.Field) []any {
 	return attrs
 }
 
-// noopMarker é a interface de marcação implementada por noop.Provider e por
-// qualquer wrapper que queira se declarar semanticamente noop. Usar interface
-// em vez de type assertion concreta permite detectar noop mesmo quando o
-// Provider está envolvido em um decorator (I-3).
 type noopMarker interface {
 	IsNoop() bool
 }

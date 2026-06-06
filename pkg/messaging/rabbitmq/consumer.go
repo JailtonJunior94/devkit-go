@@ -12,14 +12,11 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// MessageHandler processa uma mensagem recebida.
-// Retorna nil para ACK, erro para NACK.
 type MessageHandler func(ctx context.Context, msg Message) error
 
-// Message representa uma mensagem recebida do RabbitMQ.
 type Message struct {
 	Body        []byte
-	Headers     map[string]interface{}
+	Headers     map[string]any
 	RoutingKey  string
 	Exchange    string
 	ContentType string
@@ -28,8 +25,6 @@ type Message struct {
 	Delivery    amqp.Delivery
 }
 
-// Consumer representa um consumidor de mensagens RabbitMQ.
-// Thread-safe e integrado com o sistema de observability do projeto.
 type Consumer struct {
 	client        *Client
 	observability observability.Observability
@@ -44,56 +39,38 @@ type Consumer struct {
 	closed   bool
 }
 
-// ConsumerOption configura opções do consumer.
 type ConsumerOption func(*Consumer)
 
-// WithQueue define a queue a ser consumida.
 func WithQueue(name string) ConsumerOption {
 	return func(c *Consumer) {
 		c.queue = name
 	}
 }
 
-// WithPrefetchCount define quantas mensagens buscar antecipadamente.
 func WithPrefetchCount(count int) ConsumerOption {
 	return func(c *Consumer) {
 		c.prefetchCount = count
 	}
 }
 
-// WithAutoAck habilita/desabilita auto-ack.
-// Recomendado: false para produção (ACK manual após processamento).
 func WithAutoAck(autoAck bool) ConsumerOption {
 	return func(c *Consumer) {
 		c.autoAck = autoAck
 	}
 }
 
-// WithExclusive define se a queue é exclusiva desta conexão.
 func WithExclusive(exclusive bool) ConsumerOption {
 	return func(c *Consumer) {
 		c.exclusive = exclusive
 	}
 }
 
-// WithWorkerPool define número de workers concorrentes.
-// Padrão: 1 (sem concorrência).
 func WithWorkerPool(workers int) ConsumerOption {
 	return func(c *Consumer) {
 		c.workers = workers
 	}
 }
 
-// NewConsumer cria um novo Consumer a partir do Client.
-//
-// Exemplo:
-//
-//	consumer := rabbitmq.NewConsumer(
-//	    client,
-//	    rabbitmq.WithQueue("my-queue"),
-//	    rabbitmq.WithPrefetchCount(10),
-//	    rabbitmq.WithWorkerPool(5),
-//	)
 func NewConsumer(client *Client, opts ...ConsumerOption) *Consumer {
 	c := &Consumer{
 		client:        client,
@@ -103,7 +80,6 @@ func NewConsumer(client *Client, opts ...ConsumerOption) *Consumer {
 		exclusive:     false,
 		handlers:      make(map[string]MessageHandler),
 		workers:       1,
-		closed:        false,
 	}
 
 	for _, opt := range opts {
@@ -113,11 +89,24 @@ func NewConsumer(client *Client, opts ...ConsumerOption) *Consumer {
 	return c
 }
 
-// RegisterHandler registra handler para routing key específica.
-// Routing key pode ser:
-//   - Exata: "user.created"
-//   - Pattern: "user.*"
-//   - Catch-all: "*" (processa todas as mensagens)
+func NewConsumerChecked(client *Client, opts ...ConsumerOption) (*Consumer, error) {
+	c := NewConsumer(client, opts...)
+
+	if c.queue == "" {
+		return nil, fmt.Errorf("rabbitmq: queue name is required")
+	}
+
+	if c.workers < 1 {
+		c.workers = 1
+	}
+
+	if c.prefetchCount < 0 {
+		return nil, fmt.Errorf("rabbitmq: prefetch count must be non-negative")
+	}
+
+	return c, nil
+}
+
 func (c *Consumer) RegisterHandler(routingKey string, handler MessageHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -130,18 +119,6 @@ func (c *Consumer) RegisterHandler(routingKey string, handler MessageHandler) {
 	)
 }
 
-// Start inicia o consumer com auto-recovery.
-// Loop infinito que tenta consumir mensagens e se recupera automaticamente de falhas.
-//
-// Comportamento:
-//   - Tenta iniciar consumo
-//   - Se falhar, aguarda backoff e tenta novamente
-//   - Se conexão cair, reconecta automaticamente
-//   - Respeita contexto para shutdown gracioso
-//
-// Retorna erro se:
-//   - Contexto for cancelado
-//   - Consumer estiver fechado
 func (c *Consumer) Start(ctx context.Context) error {
 	c.observability.Logger().Info(ctx, "starting consumer with auto-recovery",
 		observability.String("queue", c.queue),
@@ -157,24 +134,20 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		// Guard clause: consumer fechado
 		if c.isClosed() {
 			return ErrClientClosed
 		}
 
 		err := c.consume(ctx)
 
-		// Guard clause: contexto cancelado
 		if err == ctx.Err() {
 			return err
 		}
 
-		// Guard clause: sucesso (não deveria chegar aqui normalmente)
 		if err == nil {
 			return nil
 		}
 
-		// Log e backoff
 		c.observability.Logger().Warn(ctx, "consumer failed, retrying",
 			observability.String("queue", c.queue),
 			observability.Error(err),
@@ -183,7 +156,6 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		c.waitBeforeRetry(ctx, backoffInterval)
 
-		// Aumentar backoff exponencialmente
 		backoffInterval *= 2
 		if backoffInterval > maxBackoff {
 			backoffInterval = maxBackoff
@@ -191,25 +163,19 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 }
 
-// Consume inicia consumo de mensagens da queue.
-//
-// Deprecated: Use Start() para auto-recovery. Consume será removido em v2.0.0.
 func (c *Consumer) Consume(ctx context.Context) error {
 	return c.Start(ctx)
 }
 
-// consume é a implementação interna de consumo (sem auto-recovery).
 func (c *Consumer) consume(ctx context.Context) error {
 	c.mu.RLock()
 
-	// Guard clause: consumer fechado
 	if c.closed {
 		c.mu.RUnlock()
 		return ErrClientClosed
 	}
 	c.mu.RUnlock()
 
-	// Obter channel dedicado do pool
 	pool, err := c.client.connMgr.getChannelPool()
 	if err != nil {
 		return fmt.Errorf("failed to get channel pool: %w", err)
@@ -230,15 +196,7 @@ func (c *Consumer) consume(ctx context.Context) error {
 		return fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	deliveries, err := ch.Consume(
-		c.queue,
-		"",
-		c.autoAck,
-		c.exclusive,
-		false,
-		false,
-		nil,
-	)
+	deliveries, err := ch.Consume(c.queue, "", c.autoAck, c.exclusive, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start consuming: %w", err)
 	}
@@ -250,7 +208,6 @@ func (c *Consumer) consume(ctx context.Context) error {
 		observability.Bool("auto_ack", c.autoAck),
 	)
 
-	// Guard clause: usar worker pool
 	if c.workers > 1 {
 		return c.consumeWithWorkerPool(ctx, deliveries)
 	}
@@ -258,27 +215,22 @@ func (c *Consumer) consume(ctx context.Context) error {
 	return c.consumeSingleWorker(ctx, deliveries)
 }
 
-// waitBeforeRetry aguarda antes de tentar novamente, respeitando o contexto.
 func (c *Consumer) waitBeforeRetry(ctx context.Context, interval time.Duration) {
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
-		return
 	case <-timer.C:
-		return
 	}
 }
 
-// isClosed verifica se o consumer está fechado.
 func (c *Consumer) isClosed() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.closed
 }
 
-// consumeSingleWorker processa mensagens sequencialmente.
 func (c *Consumer) consumeSingleWorker(ctx context.Context, deliveries <-chan amqp.Delivery) error {
 	for {
 		select {
@@ -301,13 +253,11 @@ func (c *Consumer) consumeSingleWorker(ctx context.Context, deliveries <-chan am
 	}
 }
 
-// consumeWithWorkerPool processa mensagens com pool de workers.
 func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan amqp.Delivery) error {
 	messageChan := make(chan amqp.Delivery, c.workers*2)
 	var wg sync.WaitGroup
 
-	// Start workers
-	for i := 0; i < c.workers; i++ {
+	for i := range c.workers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -315,8 +265,6 @@ func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan 
 		}(i)
 	}
 
-	// Goroutine dedicada para distribuir mensagens
-	// Isso previne race condition ao fechar o canal
 	distributorDone := make(chan struct{})
 	go func() {
 		defer close(messageChan)
@@ -328,11 +276,9 @@ func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan 
 				return
 			case delivery, ok := <-deliveries:
 				if !ok {
-					// Canal de deliveries fechado
 					return
 				}
 
-				// Tentar enviar mensagem ou cancelar se contexto cancelado
 				select {
 				case <-ctx.Done():
 					return
@@ -342,16 +288,12 @@ func (c *Consumer) consumeWithWorkerPool(ctx context.Context, deliveries <-chan 
 		}
 	}()
 
-	// Aguardar distribuidor terminar
 	<-distributorDone
-
-	// Aguardar todos os workers finalizarem
 	wg.Wait()
 
 	return ctx.Err()
 }
 
-// worker processa mensagens do canal de trabalho.
 func (c *Consumer) worker(ctx context.Context, workerID int, messageChan <-chan amqp.Delivery) {
 	c.observability.Logger().Debug(ctx, "worker started",
 		observability.String("queue", c.queue),
@@ -371,7 +313,6 @@ func (c *Consumer) worker(ctx context.Context, workerID int, messageChan <-chan 
 	}
 }
 
-// processMessage processa uma mensagem recebida com panic recovery.
 func (c *Consumer) processMessage(ctx context.Context, delivery amqp.Delivery) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -382,8 +323,7 @@ func (c *Consumer) processMessage(ctx context.Context, delivery amqp.Delivery) {
 	c.processMessageLogic(ctx, delivery)
 }
 
-// handlePanic trata panics ocorridos durante processamento de mensagem.
-func (c *Consumer) handlePanic(ctx context.Context, delivery amqp.Delivery, panicValue interface{}) {
+func (c *Consumer) handlePanic(ctx context.Context, delivery amqp.Delivery, panicValue any) {
 	c.observability.Logger().Error(ctx, "PANIC in message handler",
 		observability.String("queue", c.queue),
 		observability.String("routing_key", delivery.RoutingKey),
@@ -391,12 +331,10 @@ func (c *Consumer) handlePanic(ctx context.Context, delivery amqp.Delivery, pani
 		observability.String("stack", string(debug.Stack())),
 	)
 
-	// Guard clause: auto-ack habilitado
 	if c.autoAck {
 		return
 	}
 
-	// NACK sem requeue em caso de panic (vai para DLQ se configurado)
 	if err := delivery.Nack(false, false); err != nil {
 		c.observability.Logger().Error(ctx, "failed to nack after panic",
 			observability.Error(err),
@@ -404,19 +342,16 @@ func (c *Consumer) handlePanic(ctx context.Context, delivery amqp.Delivery, pani
 	}
 }
 
-// processMessageLogic contém a lógica de processamento de mensagem.
 func (c *Consumer) processMessageLogic(ctx context.Context, delivery amqp.Delivery) {
 	msg := c.buildMessage(delivery)
 	retryCount := getRetryCount(delivery)
 	handler := c.findHandler(delivery.RoutingKey)
 
-	// Guard clause: sem handler registrado
 	if handler == nil {
 		c.handleNoHandler(ctx, delivery)
 		return
 	}
 
-	// If instrumentation is enabled, wrap the consumption
 	if c.client.instrumentation != nil {
 		_ = c.client.instrumentation.InstrumentConsume(
 			ctx,
@@ -431,19 +366,15 @@ func (c *Consumer) processMessageLogic(ctx context.Context, delivery amqp.Delive
 		return
 	}
 
-	// Fallback: execute directly without tracing
 	_ = c.processMessageWithHandler(ctx, msg, delivery, handler, retryCount)
 }
 
-// processMessageWithHandler executes the handler and handles success/error.
 func (c *Consumer) processMessageWithHandler(ctx context.Context, msg Message, delivery amqp.Delivery, handler MessageHandler, retryCount int) error {
-	// Timeout no handler
 	handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var err error
 
-	// If instrumentation is enabled, wrap the handler execution
 	if c.client.instrumentation != nil {
 		err = c.client.instrumentation.InstrumentHandler(handlerCtx, delivery.RoutingKey, func(ctx context.Context) error {
 			return handler(ctx, msg)
@@ -452,22 +383,22 @@ func (c *Consumer) processMessageWithHandler(ctx context.Context, msg Message, d
 		err = handler(handlerCtx, msg)
 	}
 
-	// Guard clause: sucesso
 	if err == nil {
 		c.handleSuccess(ctx, delivery)
 		return nil
 	}
 
-	// Tratamento de erro com retry logic
 	c.handleError(ctx, delivery, err, retryCount)
 	return err
 }
 
-// buildMessage constrói Message a partir de Delivery.
 func (c *Consumer) buildMessage(delivery amqp.Delivery) Message {
-	msg := Message{
+	headers := make(map[string]any, len(delivery.Headers))
+	maps.Copy(headers, delivery.Headers)
+
+	return Message{
 		Body:        delivery.Body,
-		Headers:     make(map[string]interface{}),
+		Headers:     headers,
 		RoutingKey:  delivery.RoutingKey,
 		Exchange:    delivery.Exchange,
 		ContentType: delivery.ContentType,
@@ -475,44 +406,33 @@ func (c *Consumer) buildMessage(delivery amqp.Delivery) Message {
 		Timestamp:   delivery.Timestamp.Unix(),
 		Delivery:    delivery,
 	}
-
-	maps.Copy(msg.Headers, delivery.Headers)
-
-	return msg
 }
 
-// findHandler encontra handler para routing key.
 func (c *Consumer) findHandler(routingKey string) MessageHandler {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	handler, exists := c.handlers[routingKey]
-	if exists {
+	if handler, ok := c.handlers[routingKey]; ok {
 		return handler
 	}
 
-	// Fallback para catch-all
-	handler, exists = c.handlers["*"]
-	if exists {
+	if handler, ok := c.handlers["*"]; ok {
 		return handler
 	}
 
 	return nil
 }
 
-// handleNoHandler trata mensagens sem handler registrado.
 func (c *Consumer) handleNoHandler(ctx context.Context, delivery amqp.Delivery) {
 	c.observability.Logger().Warn(ctx, "no handler for routing key",
 		observability.String("queue", c.queue),
 		observability.String("routing_key", delivery.RoutingKey),
 	)
 
-	// Guard clause: auto-ack habilitado
 	if c.autoAck {
 		return
 	}
 
-	// NACK sem requeue (vai para DLQ se configurado)
 	if err := delivery.Nack(false, false); err != nil {
 		c.observability.Logger().Error(ctx, "failed to nack unhandled message",
 			observability.Error(err),
@@ -520,9 +440,7 @@ func (c *Consumer) handleNoHandler(ctx context.Context, delivery amqp.Delivery) 
 	}
 }
 
-// handleSuccess trata processamento bem-sucedido.
 func (c *Consumer) handleSuccess(ctx context.Context, delivery amqp.Delivery) {
-	// Guard clause: auto-ack habilitado
 	if c.autoAck {
 		return
 	}
@@ -534,7 +452,6 @@ func (c *Consumer) handleSuccess(ctx context.Context, delivery amqp.Delivery) {
 	}
 }
 
-// handleError trata erros de processamento com retry logic.
 func (c *Consumer) handleError(ctx context.Context, delivery amqp.Delivery, err error, retryCount int) {
 	c.observability.Logger().Error(ctx, "handler error",
 		observability.String("queue", c.queue),
@@ -543,24 +460,20 @@ func (c *Consumer) handleError(ctx context.Context, delivery amqp.Delivery, err 
 		observability.Error(err),
 	)
 
-	// Guard clause: auto-ack habilitado
 	if c.autoAck {
 		return
 	}
 
 	maxRetries := c.getMaxRetries()
 
-	// Guard clause: excedeu max retries
 	if retryCount >= maxRetries {
 		c.sendToDLQ(ctx, delivery, retryCount)
 		return
 	}
 
-	// Requeue para retry
 	c.requeueMessage(ctx, delivery, retryCount)
 }
 
-// sendToDLQ envia mensagem para Dead Letter Queue.
 func (c *Consumer) sendToDLQ(ctx context.Context, delivery amqp.Delivery, retryCount int) {
 	c.observability.Logger().Warn(ctx, "max retries exceeded, sending to DLQ",
 		observability.String("queue", c.queue),
@@ -569,14 +482,11 @@ func (c *Consumer) sendToDLQ(ctx context.Context, delivery amqp.Delivery, retryC
 		observability.Int("max_retries", c.getMaxRetries()),
 	)
 
-	// Record DLQ metric if instrumentation is enabled
 	if c.client.instrumentation != nil {
-		// Extract DLQ queue name from x-dead-letter-exchange header if available
-		dlqQueue := c.queue + ".dlq" // Default DLQ naming convention
+		dlqQueue := c.queue + ".dlq"
 		c.client.instrumentation.RecordDLQPublish(ctx, c.queue, dlqQueue)
 	}
 
-	// NACK sem requeue (vai para DLQ se configurado)
 	if err := delivery.Nack(false, false); err != nil {
 		c.observability.Logger().Error(ctx, "failed to nack to DLQ",
 			observability.Error(err),
@@ -584,83 +494,137 @@ func (c *Consumer) sendToDLQ(ctx context.Context, delivery amqp.Delivery, retryC
 	}
 }
 
-// requeueMessage recoloca mensagem na fila para retry com backoff exponencial.
-// Implementa delay antes do requeue para evitar retry storm.
 func (c *Consumer) requeueMessage(ctx context.Context, delivery amqp.Delivery, retryCount int) {
-	// Calculate exponential backoff to prevent retry storm
 	backoff := c.calculateRetryBackoff(retryCount)
 
-	c.observability.Logger().Debug(ctx, "requeuing message for retry with backoff",
+	c.observability.Logger().Debug(ctx, "requeuing message for retry",
 		observability.String("queue", c.queue),
 		observability.String("routing_key", delivery.RoutingKey),
 		observability.Int("retry_count", retryCount),
 		observability.String("backoff", backoff.String()),
 	)
 
-	// Record retry metric if instrumentation is enabled
 	if c.client.instrumentation != nil {
 		c.client.instrumentation.RecordRetryAttempt(ctx, c.queue, retryCount)
 	}
 
-	// Wait before requeue to prevent retry storm
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
-		// Context cancelled - NACK without requeue to avoid blocking
 		if err := delivery.Nack(false, false); err != nil {
-			c.observability.Logger().Error(ctx, "failed to nack message on context cancellation",
+			c.observability.Logger().Error(ctx, "failed to nack on context cancellation",
 				observability.Error(err),
 			)
 		}
 		return
 	case <-timer.C:
-		// Backoff completed - proceed with requeue
 	}
 
-	// NACK com requeue após backoff
-	if err := delivery.Nack(false, true); err != nil {
-		c.observability.Logger().Error(ctx, "failed to nack message",
+	headers := make(amqp.Table, len(delivery.Headers)+1)
+	maps.Copy(headers, delivery.Headers)
+	headers["x-retry-count"] = int32(retryCount + 1)
+
+	republish := amqp.Publishing{
+		Headers:       headers,
+		ContentType:   delivery.ContentType,
+		Body:          delivery.Body,
+		DeliveryMode:  delivery.DeliveryMode,
+		Priority:      delivery.Priority,
+		CorrelationId: delivery.CorrelationId,
+		ReplyTo:       delivery.ReplyTo,
+		MessageId:     delivery.MessageId,
+		Timestamp:     delivery.Timestamp,
+		Type:          delivery.Type,
+		AppId:         delivery.AppId,
+	}
+
+	pool, err := c.client.connMgr.getChannelPool()
+	if err != nil {
+		c.observability.Logger().Error(ctx, "failed to get channel pool for retry",
+			observability.Error(err),
+		)
+		if nackErr := delivery.Nack(false, false); nackErr != nil {
+			c.observability.Logger().Error(ctx, "failed to nack after pool error", observability.Error(nackErr))
+		}
+		return
+	}
+
+	pubCh, err := pool.GetPublisherChannel()
+	if err != nil {
+		c.observability.Logger().Error(ctx, "failed to get publisher channel for retry",
+			observability.Error(err),
+		)
+		if nackErr := delivery.Nack(false, false); nackErr != nil {
+			c.observability.Logger().Error(ctx, "failed to nack after channel error", observability.Error(nackErr))
+		}
+		return
+	}
+
+	republishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var publishErr error
+	if c.client.config.EnablePublisherConfirms {
+		publishErr = pubCh.PublishWithConfirm(republishCtx, delivery.Exchange, delivery.RoutingKey, republish)
+	} else {
+		publishErr = pubCh.PublishWithoutConfirm(republishCtx, delivery.Exchange, delivery.RoutingKey, republish)
+	}
+
+	if publishErr != nil {
+		c.observability.Logger().Error(ctx, "failed to republish for retry",
+			observability.Error(publishErr),
+		)
+		if nackErr := delivery.Nack(false, false); nackErr != nil {
+			c.observability.Logger().Error(ctx, "failed to nack after republish error", observability.Error(nackErr))
+		}
+		return
+	}
+
+	if err := delivery.Ack(false); err != nil {
+		c.observability.Logger().Error(ctx, "failed to ack after successful republish",
 			observability.Error(err),
 		)
 	}
 }
 
-// calculateRetryBackoff calcula o backoff exponencial para retries.
-// Previne retry storm implementando atraso crescente entre tentativas.
 func (c *Consumer) calculateRetryBackoff(retryCount int) time.Duration {
-	// Base backoff: 100ms
-	baseBackoff := 100 * time.Millisecond
-	// Max backoff: 30s
-	maxBackoff := 30 * time.Second
+	const (
+		_baseBackoff = 100 * time.Millisecond
+		_maxBackoff  = 30 * time.Second
+	)
 
-	// Exponential backoff: baseBackoff * 2^retryCount
-	backoff := baseBackoff * (1 << uint(retryCount))
+	backoff := _baseBackoff * (1 << uint(retryCount))
 
-	if backoff > maxBackoff {
-		return maxBackoff
+	if backoff > _maxBackoff {
+		return _maxBackoff
 	}
 
 	return backoff
 }
 
-// getMaxRetries retorna o número máximo de retries configurado.
 func (c *Consumer) getMaxRetries() int {
 	return c.client.config.MaxRetries
 }
 
-// getRetryCount extrai a contagem de retries dos headers da mensagem.
-// RabbitMQ incrementa x-death quando mensagem é reentregue via DLQ.
 func getRetryCount(delivery amqp.Delivery) int {
-	xDeath, ok := delivery.Headers["x-death"].([]interface{})
+	v, ok := delivery.Headers["x-retry-count"]
 	if !ok {
 		return 0
 	}
-	return len(xDeath)
+	switch count := v.(type) {
+	case int32:
+		return int(count)
+	case int64:
+		return int(count)
+	case int:
+		return count
+	default:
+		return 0
+	}
 }
 
-// Close encerra o consumer.
 func (c *Consumer) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
