@@ -82,19 +82,33 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 		switch rj.policy {
 		case OverlapAllow:
-			s.cron.AddFunc(rj.schedule, func() {
+			if _, err := s.cron.AddFunc(rj.schedule, func() {
 				s.allowWg.Go(func() {
 					s.executeJob(ctx, rj)
 				})
-			})
+			}); err != nil {
+				s.obs.Logger().Error(ctx, "job schedule registration failed",
+					observability.String("operation", "worker.job.schedule.register"),
+					observability.String("name", rj.name),
+					observability.Error(fmt.Errorf("worker: register schedule for %s: %w", rj.name, err)),
+				)
+				continue
+			}
 		default:
-			s.cron.AddFunc(rj.schedule, func() {
+			if _, err := s.cron.AddFunc(rj.schedule, func() {
 				if !inFlight.CompareAndSwap(false, true) {
 					return
 				}
 				defer inFlight.Store(false)
 				s.executeJob(ctx, rj)
-			})
+			}); err != nil {
+				s.obs.Logger().Error(ctx, "job schedule registration failed",
+					observability.String("operation", "worker.job.schedule.register"),
+					observability.String("name", rj.name),
+					observability.Error(fmt.Errorf("worker: register schedule for %s: %w", rj.name, err)),
+				)
+				continue
+			}
 		}
 	}
 
