@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-06-05
+
 ### Adicionado
 
 - `pkg/worker`: manager para orquestrar jobs agendados e consumers com shutdown gracioso, validação de nomes duplicados, métricas/traces e adapters de registro de handlers.
@@ -135,6 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pkg/logger`: preferir o logger exposto por `pkg/observability`
 
 [v0.4.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.3.0...v0.4.0
+[v0.5.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.4.0...v0.5.0
 [v0.3.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/JailtonJunior94/devkit-go/releases/tag/v0.1.0
