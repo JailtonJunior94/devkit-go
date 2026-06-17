@@ -37,7 +37,10 @@ func setupMSSQL(t *testing.T) (manager.Manager, mssql.MSSQLConfig) {
 			"SA_PASSWORD": mssqlPassword,
 			"MSSQL_PID":   "Developer",
 		},
-		WaitingFor: wait.ForListeningPort("1433/tcp").WithStartupTimeout(120 * time.Second),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("1433/tcp").WithStartupTimeout(120*time.Second),
+			wait.ForLog("SQL Server is now ready for client connections").WithStartupTimeout(120*time.Second),
+		),
 	}
 
 	container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
@@ -68,9 +71,6 @@ func setupMSSQL(t *testing.T) (manager.Manager, mssql.MSSQLConfig) {
 		Password: mssqlPassword,
 		Database: "master",
 	}
-
-	// MSSQL needs a brief moment after the port is open before accepting logins.
-	time.Sleep(5 * time.Second)
 
 	mgr, err := manager.New(cfg)
 	require.NoError(t, err)
