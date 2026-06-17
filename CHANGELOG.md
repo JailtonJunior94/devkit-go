@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.3] - 2026-06-17
+
+### Corrigido
+
+- `pkg/database/mssql`: testes de integração adicionaram `wait.ForExec` com `sqlcmd SELECT 1` autenticado ao conjunto de espera do container. O `wait.ForLog("SQL Server is now ready for client connections")` introduzido em v0.5.2 não era suficiente: o `SA_PASSWORD` é aplicado por script de inicialização que roda após o log de prontidão, causando `Login failed for user 'sa'` intermitente no CI.
+
 ## [v0.5.2] - 2026-06-17
 
 ### Corrigido
 
-- `pkg/database/mssql`: testes de integração substituíram `wait.ForListeningPort` por `wait.ForAll(port + log + exec)` para aguardar que o login `sa` funcione de fato antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria ou quando o log "ready" era emitido, mas o subsistema de autenticação do MSSQL ainda inicializava em paralelo, causando falhas intermitentes (`mssql: ping failed: EOF` / `Login failed for user 'sa'`) no CI.
+- `pkg/database/mssql`: testes de integração substituíram `wait.ForListeningPort` por `wait.ForAll(port + log)` para aguardar `"SQL Server is now ready for client connections"` antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria, mas o subsistema de autenticação do MSSQL ainda estava inicializando, causando `mssql: ping failed: EOF` intermitente no CI.
 
 ## [v0.5.1] - 2026-06-17
 
@@ -152,6 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [v0.5.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.4.0...v0.5.0
 [v0.5.1]: https://github.com/JailtonJunior94/devkit-go/compare/v0.5.0...v0.5.1
 [v0.5.2]: https://github.com/JailtonJunior94/devkit-go/compare/v0.5.1...v0.5.2
+[v0.5.3]: https://github.com/JailtonJunior94/devkit-go/compare/v0.5.2...v0.5.3
 [v0.3.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/JailtonJunior94/devkit-go/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/JailtonJunior94/devkit-go/releases/tag/v0.1.0
