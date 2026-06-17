@@ -16,22 +16,20 @@ func TestValidateSecurityConfig(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "production with insecure should fail",
+			name: "production with insecure is allowed",
 			config: &Config{
 				Environment: "production",
 				Insecure:    true,
 			},
-			wantErr: true,
-			errMsg:  "insecure connections are not allowed in production environment",
+			wantErr: false,
 		},
 		{
-			name: "prod with insecure should fail",
+			name: "prod with insecure is allowed",
 			config: &Config{
 				Environment: "prod",
 				Insecure:    true,
 			},
-			wantErr: true,
-			errMsg:  "insecure connections are not allowed in production environment",
+			wantErr: false,
 		},
 		{
 			name: "development with insecure is ok",

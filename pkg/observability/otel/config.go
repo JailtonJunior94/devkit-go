@@ -105,12 +105,6 @@ func validateConfig(config *Config) error {
 }
 
 func validateSecurityConfig(config *Config) error {
-	if config.Insecure {
-		env := strings.ToLower(config.Environment)
-		if env == "production" || env == "prod" {
-			return observability.NewInvalidConfigError("insecure connections are not allowed in production environment")
-		}
-	}
 	if config.TLSConfig != nil {
 		if config.TLSConfig.MinVersion > 0 && config.TLSConfig.MinVersion < tls.VersionTLS12 {
 			return observability.NewInvalidConfigError("minimum TLS version must be 1.2 or higher for security compliance")

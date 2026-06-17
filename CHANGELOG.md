@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.1] - 2026-06-17
+
+### Alterado
+
+- `pkg/observability/otel`: a validação de configuração não rejeita mais conexões OTLP `Insecure` quando `Environment` é `production`/`prod`. O transporte plaintext passa a ser uma escolha explícita do operador (ex.: aplicação e collector na mesma rede interna/privada, com TLS terminado na borda). A checagem de versão mínima de TLS quando `TLSConfig` é fornecido foi mantida.
+
 ## [v0.5.0] - 2026-06-05
 
 ### Adicionado
