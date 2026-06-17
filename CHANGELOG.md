@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Corrigido
 
-- `pkg/database/mssql`: testes de integração substituíram `wait.ForListeningPort` por `wait.ForAll(port + log)` para aguardar `"SQL Server is now ready for client connections"` antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria, mas o subsistema de autenticação do MSSQL ainda estava inicializando, causando falhas intermitentes (`mssql: ping failed: EOF`) no CI.
+- `pkg/database/mssql`: testes de integração substituíram `wait.ForListeningPort` por `wait.ForAll(port + log + exec)` para aguardar que o login `sa` funcione de fato antes de conectar. A estratégia anterior marcava o container como pronto quando o TCP abria ou quando o log "ready" era emitido, mas o subsistema de autenticação do MSSQL ainda inicializava em paralelo, causando falhas intermitentes (`mssql: ping failed: EOF` / `Login failed for user 'sa'`) no CI.
 
 ## [v0.5.1] - 2026-06-17
 

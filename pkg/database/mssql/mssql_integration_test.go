@@ -40,7 +40,15 @@ func setupMSSQL(t *testing.T) (manager.Manager, mssql.MSSQLConfig) {
 		WaitingFor: wait.ForAll(
 			wait.ForListeningPort("1433/tcp").WithStartupTimeout(120*time.Second),
 			wait.ForLog("SQL Server is now ready for client connections").WithStartupTimeout(120*time.Second),
-		),
+			wait.ForExec([]string{
+				"/opt/mssql-tools18/bin/sqlcmd",
+				"-S", "localhost",
+				"-U", "sa",
+				"-P", mssqlPassword,
+				"-Q", "SELECT 1",
+				"-No",
+			}).WithStartupTimeout(120*time.Second),
+		).WithDeadline(120 * time.Second),
 	}
 
 	container, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
