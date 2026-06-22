@@ -42,7 +42,12 @@ func New[T any](mgr manager.Manager, opts ...Option) UnitOfWork[T] {
 		mgr:        mgr,
 		opts:       o,
 		driver:     driver,
-		txTimer:    o.observability.Metrics().Histogram("database.tx.duration_ms", "Transaction duration by outcome", "ms"),
+		txTimer: o.observability.Metrics().HistogramWithBuckets(
+			"database.tx.duration_ms",
+			"Transaction duration by outcome",
+			"ms",
+			[]float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000},
+		),
 		txCommit:   o.observability.Metrics().Counter("database.tx.committed", "Committed transactions", "{transactions}"),
 		txRollback: o.observability.Metrics().Counter("database.tx.rolledback", "Rolled back transactions", "{transactions}"),
 	}

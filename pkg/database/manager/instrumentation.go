@@ -38,7 +38,12 @@ func newInstrumentation(
 		obs:           obs,
 		fallback:      fallback,
 		sqlLogging:    sqlLogging,
-		queryDuration: obs.Metrics().Histogram("database.query.duration_ms", "Query latency by operation", "ms"),
+		queryDuration: obs.Metrics().HistogramWithBuckets(
+			"database.query.duration_ms",
+			"Query latency by operation",
+			"ms",
+			[]float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+		),
 	}
 }
 
