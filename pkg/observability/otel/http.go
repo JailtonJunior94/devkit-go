@@ -60,10 +60,11 @@ func newHTTPInstrumentation(tracer observability.Tracer, metrics observability.M
 
 	return &httpInstrumentation{
 		tracer: tracer,
-		duration: metrics.Histogram(
+		duration: metrics.HistogramWithBuckets(
 			httpRequestDurationMetric,
 			"HTTP server request duration",
 			"s",
+			[]float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0},
 		),
 		count: metrics.Counter(
 			httpRequestCountMetric,
