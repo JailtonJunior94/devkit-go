@@ -47,7 +47,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if parent == nil {
 		parent = context.Background()
 	}
-	shutdownCtx, cancel := context.WithTimeout(parent, s.config.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), s.config.ShutdownTimeout)
 	defer cancel()
 
 	return s.Shutdown(shutdownCtx)

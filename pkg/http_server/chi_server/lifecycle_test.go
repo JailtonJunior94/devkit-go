@@ -99,6 +99,46 @@ func TestChiServer_Shutdown_RespectsParentDeadline(t *testing.T) {
 	}
 }
 
+type observabilityShutdownRecorder struct {
+	*fake.Provider
+	shutdownCtxErr error
+	shutdownCalled bool
+}
+
+func (r *observabilityShutdownRecorder) Shutdown(ctx context.Context) error {
+	r.shutdownCalled = true
+	r.shutdownCtxErr = ctx.Err()
+	return nil
+}
+
+func TestChiServer_Start_ObservabilityShutdownContextIsNotPreCancelled(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	recorder := &observabilityShutdownRecorder{Provider: fake.NewProvider()}
+
+	srv, err := New(recorder,
+		withRawAddress(addr),
+		WithServiceName("test"),
+		WithServiceVersion("0.0.0"),
+		WithEnvironment("test"),
+		WithShutdownTimeout(2*time.Second),
+	)
+	require.NoError(t, err)
+
+	triggerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, srv.Start(triggerCtx))
+	require.True(t, recorder.shutdownCalled)
+	assert.NoError(t, recorder.shutdownCtxErr,
+		"the context handed to the observability provider's Shutdown must not inherit the cancellation of the trigger context that started the shutdown, or graceful telemetry flush never gets a real chance to run")
+}
+
 func TestChiServer_Shutdown_UsesConfiguredTimeoutWhenParentHasNone(t *testing.T) {
 	t.Parallel()
 
